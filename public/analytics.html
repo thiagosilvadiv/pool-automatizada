@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orca Liquidity Bot - Análises</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Análises</h1>
+        <p class="subtitle">Resumo de performance e histórico filtrado por data.</p>
+        <nav class="nav">
+          <a href="/">Painel</a>
+        </nav>
+      </header>
+
+      <section class="panel">
+        <div class="row wrap">
+          <div class="field">
+            <label for="poolSelect">Pool</label>
+            <select id="poolSelect"></select>
+          </div>
+          <div class="field">
+            <label for="startDate">Data inicial</label>
+            <input id="startDate" type="datetime-local" />
+          </div>
+          <div class="field">
+            <label for="endDate">Data final</label>
+            <input id="endDate" type="datetime-local" />
+          </div>
+          <button id="applyFilter" class="primary">Aplicar</button>
+        </div>
+        <div id="analyticsError" class="error hidden"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Resumo</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Período</h3>
+            <div class="kv"><span>Eventos</span><span id="summaryEvents">-</span></div>
+            <div class="kv"><span>Aberturas</span><span id="summaryOpens">-</span></div>
+            <div class="kv"><span>Rebalances</span><span id="summaryRebalances">-</span></div>
+            <div class="kv"><span>Fechamentos</span><span id="summaryCloses">-</span></div>
+          </div>
+          <div class="card">
+            <h3>PnL estimado</h3>
+            <div class="kv"><span>Δ PnL (SOL)</span><span id="summaryPnlSol">-</span></div>
+            <div class="kv"><span>Δ PnL (USD)</span><span id="summaryPnlUsd">-</span></div>
+            <div class="kv"><span>PnL líquido (SOL)</span><span id="summaryNetSol">-</span></div>
+            <div class="kv"><span>PnL líquido (USD)</span><span id="summaryNetUsd">-</span></div>
+          </div>
+          <div class="card">
+            <h3>Entradas/Saídas</h3>
+            <div class="kv"><span>Entrada A</span><span id="summaryInA">-</span></div>
+            <div class="kv"><span>Entrada B</span><span id="summaryInB">-</span></div>
+            <div class="kv"><span>Saída A</span><span id="summaryOutA">-</span></div>
+            <div class="kv"><span>Saída B</span><span id="summaryOutB">-</span></div>
+          </div>
+          <div class="card">
+            <h3>Notas</h3>
+            <p class="subtitle">
+              Taxas/IL não são isoladas. Os números são estimativas com base nos eventos registrados.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Histórico filtrado</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Data/Hora</th>
+                <th>Ação</th>
+                <th>Preço</th>
+                <th>Faixa alvo</th>
+                <th>Mint posição</th>
+                <th>Entrada A</th>
+                <th>Entrada B</th>
+                <th>Saída A</th>
+                <th>Saída B</th>
+                <th>Valor (SOL)</th>
+                <th>PnL (SOL)</th>
+                <th>PnL Δ (USD)</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody">
+              <tr><td colspan="12">Sem eventos ainda</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="analytics.js"></script>
+  </body>
+</html>

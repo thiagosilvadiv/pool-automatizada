@@ -1,0 +1,273 @@
+:root {
+  --bg: #0f1419;
+  --panel: #151b22;
+  --card: #1b2430;
+  --text: #f5f7fa;
+  --muted: #9aa7b5;
+  --accent: #36d399;
+  --danger: #ff6b6b;
+  --warn: #f6c343;
+}
+
+* {
+  box-sizing: border-box;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at top, #1b2430 0%, #0f1419 60%);
+  color: var(--text);
+}
+
+.container {
+  max-width: 1100px;
+  margin: 40px auto;
+  padding: 0 20px 40px;
+}
+
+header h1 {
+  margin: 0 0 6px;
+  font-size: 32px;
+  letter-spacing: 0.5px;
+}
+
+.subtitle {
+  color: var(--muted);
+  margin: 0 0 24px;
+}
+
+.nav {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.nav a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.nav a:hover {
+  text-decoration: underline;
+}
+
+.panel {
+  background: var(--panel);
+  padding: 20px;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+}
+
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.row.wrap {
+  flex-wrap: wrap;
+}
+
+.row.row-between {
+  justify-content: space-between;
+}
+
+.row.tight {
+  margin-bottom: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.field.grow {
+  flex: 1;
+  min-width: 260px;
+}
+
+.field label {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.field input {
+  background: #0f1419;
+  border: 1px solid #2c3a4a;
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+}
+
+.field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(54, 211, 153, 0.15);
+}
+
+.error {
+  background: rgba(255, 107, 107, 0.12);
+  border: 1px solid rgba(255, 107, 107, 0.4);
+  color: var(--danger);
+  padding: 10px 12px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.hidden {
+  display: none;
+}
+
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.table-actions button {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+button {
+  border: none;
+  padding: 10px 18px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  color: #0b1116;
+}
+
+button.ghost {
+  background: transparent;
+  border: 1px solid #2c3a4a;
+  color: var(--text);
+}
+
+button.ghost.danger {
+  background: transparent;
+  border-color: rgba(255, 107, 107, 0.6);
+  color: var(--danger);
+}
+
+button.ghost.danger:hover {
+  background: rgba(255, 107, 107, 0.12);
+}
+
+button.danger:not(.ghost) {
+  background: var(--danger);
+  color: #0b1116;
+}
+
+button.danger:not(.ghost):hover {
+  filter: brightness(0.9);
+}
+
+.badge {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #2c3a4a;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.badge.running {
+  background: rgba(54, 211, 153, 0.15);
+  color: var(--accent);
+}
+
+.badge.stopped {
+  background: rgba(255, 107, 107, 0.15);
+  color: var(--danger);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.card {
+  background: var(--card);
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid #243142;
+}
+
+.card h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.kv span:last-child {
+  color: var(--text);
+  font-weight: 600;
+  max-width: 160px;
+  text-align: right;
+  word-break: break-all;
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+  letter-spacing: 0.03em;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+th,
+td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #243142;
+  text-align: left;
+}
+
+tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+@media (max-width: 720px) {
+  .row {
+    flex-wrap: wrap;
+  }
+  button {
+    width: 100%;
+  }
+  .field,
+  .field.grow {
+    width: 100%;
+  }
+}
