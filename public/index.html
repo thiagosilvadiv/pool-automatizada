@@ -43,6 +43,7 @@
             <thead>
               <tr>
                 <th>Pool</th>
+                <th>Criada em</th>
                 <th>Whirlpool</th>
                 <th>Range %</th>
                 <th>Budget USD</th>
@@ -54,7 +55,7 @@
               </tr>
             </thead>
             <tbody id="poolsBody">
-              <tr><td colspan="9">Sem pools cadastradas</td></tr>
+              <tr><td colspan="10">Sem pools cadastradas</td></tr>
             </tbody>
           </table>
         </div>
@@ -146,6 +147,7 @@
           <h2>Histórico da pool selecionada</h2>
           <div class="row tight">
             <button id="exportHistoryBtn" class="ghost">Exportar CSV</button>
+            <button id="deleteHistoryBtn" class="ghost danger">Excluir selecionados</button>
             <button id="clearHistoryBtn" class="ghost danger">Limpar histórico</button>
           </div>
         </div>
@@ -153,7 +155,9 @@
           <table>
             <thead>
               <tr>
+                <th><input id="selectAllHistory" type="checkbox" aria-label="Selecionar todos" /></th>
                 <th>Data/Hora</th>
+                <th>Fechamento</th>
                 <th>Ação</th>
                 <th>Preço</th>
                 <th>Faixa alvo</th>
@@ -165,7 +169,7 @@
               </tr>
             </thead>
             <tbody id="historyBody">
-              <tr><td colspan="9">Sem eventos ainda</td></tr>
+              <tr><td colspan="11">Sem eventos ainda</td></tr>
             </tbody>
           </table>
         </div>

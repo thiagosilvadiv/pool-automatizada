@@ -35,10 +35,23 @@ function formatRange(range) {
   return `${Number(range.lower).toFixed(6)} / ${Number(range.upper).toFixed(6)}`;
 }
 
+const numberFormatters = {};
+
 function formatNumber(value, digits = 6) {
   if (value === null || value === undefined) return "-";
-  if (Number.isNaN(value)) return "-";
-  return Number(value).toFixed(digits);
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "-";
+  const key = String(digits);
+  let formatter = numberFormatters[key];
+  if (!formatter) {
+    formatter = new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+      useGrouping: false
+    });
+    numberFormatters[key] = formatter;
+  }
+  return formatter.format(num);
 }
 
 function formatTimestamp(value) {
@@ -62,6 +75,12 @@ function formatTimestamp(value) {
   return `${day}/${month}/${year} ${hour}:${minute}`;
 }
 
+function formatCloseTimestamp(item) {
+  if (!item) return "-";
+  if (item.action !== "close-position") return "-";
+  return formatTimestamp(item.timestamp);
+}
+
 function toDateInputValue(date) {
   const tzOffset = date.getTimezoneOffset() * 60000;
   const local = new Date(date.getTime() - tzOffset);
@@ -83,7 +102,7 @@ async function fetchHistory(poolId) {
 
 function renderHistory(items) {
   if (!items || items.length === 0) {
-    historyBody.innerHTML = "<tr><td colspan=\"9\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"10\">Sem eventos ainda</td></tr>";
     return;
   }
   const rows = items.slice(0, 100).map((item) => {
@@ -91,6 +110,7 @@ function renderHistory(items) {
     return `
       <tr>
         <td>${formatTimestamp(item.timestamp)}</td>
+        <td>${formatCloseTimestamp(item)}</td>
         <td>${actionLabel}</td>
         <td>${formatNumber(item.price, 8)}</td>
         <td>${formatRange(item.targetRange)}</td>

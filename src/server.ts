@@ -220,6 +220,27 @@ export async function startServer(config: Config): Promise<void> {
     res.json(poolManager.getHistory(id));
   });
 
+  app.post("/api/history/delete", async (req: Request, res: Response) => {
+    try {
+      if (!poolManager.getSelectedPoolId()) {
+        res.status(400).json({ ok: false, error: "No pool selected" });
+        return;
+      }
+      const ids: string[] = Array.isArray(req.body?.ids)
+        ? (req.body.ids as unknown[]).map((id) => String(id))
+        : [];
+      const filtered = ids.filter((id) => id.trim().length > 0);
+      if (!filtered.length) {
+        res.status(400).json({ ok: false, error: "ids is required" });
+        return;
+      }
+      await poolManager.deleteSelectedHistoryEvents(filtered);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   app.post("/api/history/clear", async (_req: Request, res: Response) => {
     await poolManager.clearSelectedHistory();
     res.json({ ok: true });

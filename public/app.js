@@ -48,6 +48,10 @@ const closeBtn = document.getElementById("closeBtn");
 const topupBtn = document.getElementById("topupBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 const exportHistoryBtn = document.getElementById("exportHistoryBtn");
+const deleteHistoryBtn = document.getElementById("deleteHistoryBtn");
+const selectAllHistory = document.getElementById("selectAllHistory");
+
+let selectedHistoryIds = new Set();
 
 const actionLabels = {
   "open-position": "abertura",
@@ -67,10 +71,23 @@ function formatRange(range) {
   return `${Number(range.lower).toFixed(6)} / ${Number(range.upper).toFixed(6)}`;
 }
 
+const numberFormatters = {};
+
 function formatNumber(value, digits = 6) {
   if (value === null || value === undefined) return "-";
-  if (Number.isNaN(value)) return "-";
-  return Number(value).toFixed(digits);
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "-";
+  const key = String(digits);
+  let formatter = numberFormatters[key];
+  if (!formatter) {
+    formatter = new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+      useGrouping: false
+    });
+    numberFormatters[key] = formatter;
+  }
+  return formatter.format(num);
 }
 
 function formatTimestamp(value) {
@@ -94,6 +111,12 @@ function formatTimestamp(value) {
   return `${day}/${month}/${year} ${hour}:${minute}`;
 }
 
+function formatCloseTimestamp(item) {
+  if (!item) return "-";
+  if (item.action !== "close-position") return "-";
+  return formatTimestamp(item.timestamp);
+}
+
 function toCsvValue(value) {
   if (value === null || value === undefined) return "";
   const text = String(value).replace(/"/g, "\"\"");
@@ -103,6 +126,7 @@ function toCsvValue(value) {
 function buildHistoryCsv(items) {
   const header = [
     "Data/Hora",
+    "Data fechamento",
     "Ação",
     "Preço",
     "Faixa alvo",
@@ -116,6 +140,7 @@ function buildHistoryCsv(items) {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
     return [
       formatTimestamp(item.timestamp),
+      formatCloseTimestamp(item),
       actionLabel,
       formatNumber(item.price, 8),
       formatRange(item.targetRange),
@@ -171,14 +196,22 @@ function parseOptionalNumber(value) {
 
 function renderHistory(items) {
   if (!items || items.length === 0) {
-    historyBody.innerHTML = "<tr><td colspan=\"9\">Sem eventos ainda</td></tr>";
+    selectedHistoryIds.clear();
+    historyBody.innerHTML = "<tr><td colspan=\"11\">Sem eventos ainda</td></tr>";
+    updateHistorySelectionState();
     return;
   }
-  const rows = items.slice(0, 50).map((item) => {
+  const currentIds = new Set();
+  const rows = items.slice(0, 50).map((item, index) => {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
+    const eventId = item.id ?? `legacy-${index}`;
+    currentIds.add(eventId);
+    const checked = selectedHistoryIds.has(eventId) ? "checked" : "";
     return `
       <tr>
+        <td><input type="checkbox" class="history-select" data-id="${eventId}" ${checked}></td>
         <td>${formatTimestamp(item.timestamp)}</td>
+        <td>${formatCloseTimestamp(item)}</td>
         <td>${actionLabel}</td>
         <td>${formatNumber(item.price, 8)}</td>
         <td>${formatRange(item.targetRange)}</td>
@@ -191,6 +224,8 @@ function renderHistory(items) {
     `;
   });
   historyBody.innerHTML = rows.join("");
+  selectedHistoryIds = new Set(Array.from(selectedHistoryIds).filter((id) => currentIds.has(id)));
+  updateHistorySelectionState();
 }
 
 function renderPools(data, config) {
@@ -198,7 +233,7 @@ function renderPools(data, config) {
   cachedPools = pools;
   cachedConfig = config;
   if (!pools.length) {
-    poolsBody.innerHTML = "<tr><td colspan=\"9\">Sem pools cadastradas</td></tr>";
+    poolsBody.innerHTML = "<tr><td colspan=\"10\">Sem pools cadastradas</td></tr>";
     return;
   }
   const rows = pools.map((pool) => {
@@ -210,9 +245,11 @@ function renderPools(data, config) {
     const defaultBudget = config?.budgetUsd ?? "-";
     const rangeLabel = rangeDisplay == null ? `Padrão (${defaultRange})` : Number(rangeDisplay).toFixed(2);
     const budgetLabel = budgetDisplay == null ? `Padrão (${defaultBudget})` : Number(budgetDisplay).toFixed(2);
+    const createdAt = formatTimestamp(pool.createdAt);
     return `
       <tr>
         <td>${pool.name}</td>
+        <td>${createdAt}</td>
         <td>${pool.whirlpoolAddress}</td>
         <td>${rangeLabel}</td>
         <td>${budgetLabel}</td>
@@ -458,12 +495,75 @@ poolsBody.addEventListener("click", async (event) => {
   }
 });
 
+function updateHistorySelectionState() {
+  if (!selectAllHistory) return;
+  const total = historyBody.querySelectorAll("input.history-select").length;
+  const selected = selectedHistoryIds.size;
+  selectAllHistory.checked = total > 0 && selected === total;
+  selectAllHistory.indeterminate = selected > 0 && selected < total;
+}
+
+historyBody.addEventListener("change", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  if (!target.classList.contains("history-select")) return;
+  const id = target.getAttribute("data-id");
+  if (!id) return;
+  if (target.checked) {
+    selectedHistoryIds.add(id);
+  } else {
+    selectedHistoryIds.delete(id);
+  }
+  updateHistorySelectionState();
+});
+
+if (selectAllHistory) {
+  selectAllHistory.addEventListener("change", () => {
+    const shouldSelectAll = selectAllHistory.checked;
+    selectedHistoryIds.clear();
+    historyBody.querySelectorAll("input.history-select").forEach((input) => {
+      if (!(input instanceof HTMLInputElement)) return;
+      input.checked = shouldSelectAll;
+      const id = input.getAttribute("data-id");
+      if (shouldSelectAll && id) {
+        selectedHistoryIds.add(id);
+      }
+    });
+    updateHistorySelectionState();
+  });
+}
+
 clearHistoryBtn.addEventListener("click", async () => {
   const ok = window.confirm("Limpar o histórico? Essa ação não pode ser desfeita.");
   if (!ok) return;
   await fetch("/api/history/clear", { method: "POST" });
   updateUI();
 });
+
+if (deleteHistoryBtn) {
+  deleteHistoryBtn.addEventListener("click", async () => {
+    if (selectedHistoryIds.size === 0) {
+      window.alert("Selecione pelo menos um registro.");
+      return;
+    }
+    const count = selectedHistoryIds.size;
+    const ok = window.confirm(`Excluir ${count} registro(s) selecionado(s)?`);
+    if (!ok) return;
+    const res = await fetch("/api/history/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: Array.from(selectedHistoryIds) })
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      const msg = data?.error ?? "Falha ao excluir registros.";
+      window.alert(msg);
+      return;
+    }
+    selectedHistoryIds.clear();
+    updateUI();
+  });
+}
 
 if (exportHistoryBtn) {
   exportHistoryBtn.addEventListener("click", async () => {
