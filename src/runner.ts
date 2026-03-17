@@ -299,7 +299,7 @@ export class BotRunner {
     if (event.action === "resume-position" && this.history.length > 0) {
       const last = this.history[this.history.length - 1];
       if (last?.action === "resume-position" && last?.positionMint === event.positionMint) {
-        this.history[this.history.length - 1] = { ...event, id: last.id };
+        this.history[this.history.length - 1] = { ...event, id: last.id, timestamp: last.timestamp };
         if (event.portfolioValue != null) {
           this.lastEventPortfolioValue = event.portfolioValue;
         }
