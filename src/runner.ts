@@ -27,6 +27,10 @@ export type HistoryEvent = {
   openTokenB: number | null;
   closeTokenA: number | null;
   closeTokenB: number | null;
+  positionEntryUsd: number | null;
+  positionFeesUsd: number | null;
+  positionPnlUsd: number | null;
+  positionExitUsd: number | null;
   portfolioValue: number | null;
   pnl: number | null;
   portfolioUsd: number | null;
@@ -47,7 +51,6 @@ export class BotRunner {
   private lastEventPortfolioValue: number | null = null;
   private lastEventPortfolioUsd: number | null = null;
   private historyLoaded = false;
-  private resumeRecorded = false;
 
   constructor(bot: OrcaBot, config: Config, options: { historyStore: HistoryStore }) {
     this.bot = bot;
@@ -93,6 +96,25 @@ export class BotRunner {
       this.inFlight = false;
     }
     return this.getStatus();
+  }
+
+  async topUpSolNow(): Promise<{ ok: boolean; reason?: string; status: RunnerStatus }> {
+    if (this.inFlight) {
+      return { ok: false, reason: "busy", status: this.getStatus() };
+    }
+    this.inFlight = true;
+    try {
+      const result = await this.bot.topUpSolNow();
+      this.lastTickAt = new Date().toISOString();
+      this.recordEvent(this.bot.getStatus());
+      return { ok: result.ok, reason: result.reason, status: this.getStatus() };
+    } catch (err) {
+      logger.error({ err }, "topup-sol failed");
+      this.bot.setError(err);
+      return { ok: false, reason: err instanceof Error ? err.message : String(err), status: this.getStatus() };
+    } finally {
+      this.inFlight = false;
+    }
   }
 
   getStatus(): RunnerStatus {
@@ -156,9 +178,20 @@ export class BotRunner {
   }
 
   private recordEvent(status: BotStatus): void {
+    const eventPositionMint = status.eventPositionMint ?? null;
+    const eventPositionEntryUsd = status.eventPositionEntryUsd ?? null;
+    const eventPositionFeesUsd = status.eventPositionFeesUsd ?? null;
+    const eventPositionExitUsd = status.eventPositionExitUsd ?? null;
+    const mergedPositionMint = eventPositionMint ?? status.positionMint ?? null;
+    const mergedPositionEntryUsd = eventPositionEntryUsd ?? status.positionEntryUsd ?? null;
+    const mergedPositionFeesUsd = eventPositionFeesUsd ?? status.positionFeesUsd ?? null;
+    let mergedPositionPnlUsd = status.positionPnlUsd ?? null;
+    if (eventPositionExitUsd != null && mergedPositionEntryUsd != null) {
+      mergedPositionPnlUsd = eventPositionExitUsd - mergedPositionEntryUsd;
+    }
+
     if (!status.lastAction || status.lastAction === "no-action") {
-      if (!this.resumeRecorded && status.positionMint) {
-        this.resumeRecorded = true;
+      if (status.positionMint) {
         this.pushEvent({
           timestamp: new Date().toISOString(),
           action: "resume-position",
@@ -168,7 +201,7 @@ export class BotRunner {
           budgetSol: status.budgetSol,
           targetRange: status.targetRange,
           positionRange: status.positionRange,
-          positionMint: status.positionMint,
+          positionMint: mergedPositionMint,
           tokenABalance: status.tokenABalance,
           tokenBBalance: status.tokenBBalance,
           positionTokenA: status.positionTokenA,
@@ -177,6 +210,10 @@ export class BotRunner {
           openTokenB: null,
           closeTokenA: null,
           closeTokenB: null,
+          positionEntryUsd: mergedPositionEntryUsd,
+          positionFeesUsd: mergedPositionFeesUsd,
+          positionPnlUsd: mergedPositionPnlUsd,
+          positionExitUsd: null,
           portfolioValue: status.portfolioValue,
           pnl: status.pnl,
           portfolioUsd: status.portfolioUsd,
@@ -215,7 +252,7 @@ export class BotRunner {
       budgetSol: status.budgetSol,
       targetRange: status.targetRange,
       positionRange: status.positionRange,
-      positionMint: status.positionMint,
+      positionMint: mergedPositionMint,
       tokenABalance: status.tokenABalance,
       tokenBBalance: status.tokenBBalance,
       positionTokenA: status.positionTokenA,
@@ -224,6 +261,10 @@ export class BotRunner {
       openTokenB: status.lastOpenTokenB,
       closeTokenA: status.lastCloseTokenA,
       closeTokenB: status.lastCloseTokenB,
+      positionEntryUsd: mergedPositionEntryUsd,
+      positionFeesUsd: mergedPositionFeesUsd,
+      positionPnlUsd: mergedPositionPnlUsd,
+      positionExitUsd: eventPositionExitUsd,
       portfolioValue: status.portfolioValue,
       pnl: status.pnl,
       portfolioUsd: status.portfolioUsd,
@@ -235,6 +276,21 @@ export class BotRunner {
   }
 
   private pushEvent(event: HistoryEvent): void {
+    if (event.action === "resume-position" && this.history.length > 0) {
+      const last = this.history[this.history.length - 1];
+      if (last?.action === "resume-position" && last?.positionMint === event.positionMint) {
+        this.history[this.history.length - 1] = event;
+        if (event.portfolioValue != null) {
+          this.lastEventPortfolioValue = event.portfolioValue;
+        }
+        if (event.portfolioUsd != null) {
+          this.lastEventPortfolioUsd = event.portfolioUsd;
+        }
+        void this.saveHistory();
+        return;
+      }
+    }
+
     this.history.push(event);
     if (this.history.length > 200) {
       this.history.shift();
@@ -266,6 +322,17 @@ export class BotRunner {
       }
     } catch {
       // ignore missing or invalid history
+    }
+
+    const status = this.bot.getStatus();
+    if (status.positionMint && this.history.length > 0) {
+      for (let i = this.history.length - 1; i >= 0; i -= 1) {
+        const item = this.history[i];
+        if (item?.positionMint === status.positionMint && Number.isFinite(item.positionEntryUsd ?? NaN)) {
+          this.bot.setPositionEntryUsd(item.positionEntryUsd ?? null);
+          break;
+        }
+      }
     }
   }
 

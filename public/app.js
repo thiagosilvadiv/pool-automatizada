@@ -40,16 +40,21 @@ const poolError = document.getElementById("poolError");
 const resultsBody = document.getElementById("resultsBody");
 let cachedPools = [];
 let cachedConfig = null;
+let cachedHistory = [];
 
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const closeBtn = document.getElementById("closeBtn");
+const topupBtn = document.getElementById("topupBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
+const exportHistoryBtn = document.getElementById("exportHistoryBtn");
 
 const actionLabels = {
   "open-position": "abertura",
   "rebalanced": "re-range",
   "close-position": "fechamento",
+  "auto-sol-topup": "top-up SOL",
+  "manual-sol-topup": "top-up SOL (manual)",
   "resume-position": "monitorando posição existente",
   "reload-position": "recarregar posição",
   "out-of-range-wait": "aguardando confirmação fora da faixa",
@@ -89,6 +94,53 @@ function formatTimestamp(value) {
   return `${day}/${month}/${year} ${hour}:${minute}`;
 }
 
+function toCsvValue(value) {
+  if (value === null || value === undefined) return "";
+  const text = String(value).replace(/"/g, "\"\"");
+  return `"${text}"`;
+}
+
+function buildHistoryCsv(items) {
+  const header = [
+    "Data/Hora",
+    "Ação",
+    "Preço",
+    "Faixa alvo",
+    "Mint posição",
+    "Entrada (USD)",
+    "Taxas (USD)",
+    "Saída (USD)",
+    "PnL (USD)"
+  ];
+  const rows = items.map((item) => {
+    const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
+    return [
+      formatTimestamp(item.timestamp),
+      actionLabel,
+      formatNumber(item.price, 8),
+      formatRange(item.targetRange),
+      item.positionMint ?? "-",
+      formatNumber(item.positionEntryUsd, 2),
+      formatNumber(item.positionFeesUsd, 2),
+      formatNumber(item.positionExitUsd, 2),
+      formatNumber(item.positionPnlUsd, 2)
+    ].map(toCsvValue).join(";");
+  });
+  return `\ufeff${header.map(toCsvValue).join(";")}\r\n${rows.join("\r\n")}`;
+}
+
+function downloadCsv(content, filename) {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 async function fetchStatus() {
   const res = await fetch("/api/status");
   return res.json();
@@ -119,7 +171,7 @@ function parseOptionalNumber(value) {
 
 function renderHistory(items) {
   if (!items || items.length === 0) {
-    historyBody.innerHTML = "<tr><td colspan=\"12\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"9\">Sem eventos ainda</td></tr>";
     return;
   }
   const rows = items.slice(0, 50).map((item) => {
@@ -131,13 +183,10 @@ function renderHistory(items) {
         <td>${formatNumber(item.price, 8)}</td>
         <td>${formatRange(item.targetRange)}</td>
         <td>${item.positionMint ?? "-"}</td>
-        <td>${formatNumber(item.openTokenA, 6)}</td>
-        <td>${formatNumber(item.openTokenB, 6)}</td>
-        <td>${formatNumber(item.closeTokenA, 6)}</td>
-        <td>${formatNumber(item.closeTokenB, 6)}</td>
-        <td>${formatNumber(item.portfolioValue, 6)}</td>
-        <td>${formatNumber(item.pnl, 6)}</td>
-        <td>${formatNumber(item.pnlDeltaUsd, 2)}</td>
+        <td>${formatNumber(item.positionEntryUsd, 2)}</td>
+        <td>${formatNumber(item.positionFeesUsd, 2)}</td>
+        <td>${formatNumber(item.positionExitUsd, 2)}</td>
+        <td>${formatNumber(item.positionPnlUsd, 2)}</td>
       </tr>
     `;
   });
@@ -218,6 +267,7 @@ async function updateUI() {
       fetchHistory(),
       fetchPools()
     ]);
+    cachedHistory = Array.isArray(history) ? history : [];
 
     runningEl.textContent = status.running ? "Sim" : "Não";
     lastTickEl.textContent = formatTimestamp(status.lastTickAt);
@@ -280,6 +330,16 @@ closeBtn.addEventListener("click", async () => {
   const ok = window.confirm("Fechar a posição agora? Isso remove toda a liquidez.");
   if (!ok) return;
   await fetch("/api/close-position", { method: "POST" });
+  updateUI();
+});
+
+topupBtn.addEventListener("click", async () => {
+  const res = await fetch("/api/sol-topup", { method: "POST" });
+  const data = await res.json();
+  if (!data.ok) {
+    const msg = data.error ?? data.reason ?? "Top-up falhou";
+    window.alert(msg);
+  }
   updateUI();
 });
 
@@ -404,6 +464,20 @@ clearHistoryBtn.addEventListener("click", async () => {
   await fetch("/api/history/clear", { method: "POST" });
   updateUI();
 });
+
+if (exportHistoryBtn) {
+  exportHistoryBtn.addEventListener("click", async () => {
+    const history = cachedHistory?.length ? cachedHistory : await fetchHistory();
+    if (!history || history.length === 0) {
+      window.alert("Sem eventos para exportar.");
+      return;
+    }
+    const poolName = poolNameLabel?.textContent?.trim() || "pool";
+    const date = new Date().toISOString().slice(0, 10);
+    const csv = buildHistoryCsv(history);
+    downloadCsv(csv, `historico-${poolName}-${date}.csv`);
+  });
+}
 
 updateUI();
 setInterval(updateUI, 5000);

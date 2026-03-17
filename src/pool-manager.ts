@@ -246,6 +246,15 @@ export class PoolManager {
     await this.closePool(this.selectedPoolId);
   }
 
+  async topUpSolSelected(): Promise<{ ok: boolean; reason?: string }> {
+    if (!this.selectedPoolId) {
+      throw new Error("No pool selected");
+    }
+    const record = this.getRecord(this.selectedPoolId);
+    const result = await record.runner.topUpSolNow();
+    return { ok: result.ok, reason: result.reason };
+  }
+
   getSelectedStatus(): ReturnType<BotRunner["getStatus"]> | null {
     if (!this.selectedPoolId) {
       return null;

@@ -10,6 +10,15 @@ export type Config = {
   pollIntervalMs: number;
   outOfRangeConfirmSec: number;
   rebalanceCooldownSec: number;
+  autoSolTopupEnabled: boolean;
+  autoSolAllowAll: boolean;
+  autoSolSwapMints: string[];
+  autoSolMaxInputPct: number;
+  autoSolSlippageBps: number;
+  autoSolCooldownSec: number;
+  autoSolTargetBufferPct: number;
+  jupiterApiKey: string | null;
+  jupiterApiUrl: string;
   dryRun: boolean;
   minSolBalance: number;
   maxTokenA: number | null;
@@ -30,6 +39,11 @@ function parseEnvNumber(value: string | undefined): number | undefined {
 function parseEnvBool(value: string | undefined): boolean | undefined {
   if (value == null || value.trim() === "") return undefined;
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+function parseEnvList(value: string | undefined): string[] | undefined {
+  if (value == null || value.trim() === "") return undefined;
+  return value.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
 }
 
 function readConfigFile(configPath: string): Partial<Config> {
@@ -60,6 +74,22 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     pollIntervalMs: parseEnvNumber(process.env.POLL_INTERVAL_MS) ?? Number(data.pollIntervalMs ?? 30000),
     outOfRangeConfirmSec: parseEnvNumber(process.env.OUT_OF_RANGE_CONFIRM_SEC) ?? Number(data.outOfRangeConfirmSec ?? 0),
     rebalanceCooldownSec: parseEnvNumber(process.env.REBALANCE_COOLDOWN_SEC) ?? Number(data.rebalanceCooldownSec ?? 300),
+    autoSolTopupEnabled: parseEnvBool(process.env.AUTO_SOL_TOPUP_ENABLED) ?? Boolean(data.autoSolTopupEnabled ?? false),
+    autoSolAllowAll: parseEnvBool(process.env.AUTO_SOL_ALLOW_ALL) ?? Boolean(data.autoSolAllowAll ?? false),
+    autoSolSwapMints: parseEnvList(process.env.AUTO_SOL_SWAP_MINTS)
+      ?? (Array.isArray(data.autoSolSwapMints)
+        ? data.autoSolSwapMints.map((item) => String(item))
+        : (typeof data.autoSolSwapMints === "string" ? parseEnvList(data.autoSolSwapMints) : null))
+      ?? [],
+    autoSolMaxInputPct: parseEnvNumber(process.env.AUTO_SOL_MAX_INPUT_PCT) ?? Number(data.autoSolMaxInputPct ?? 0.5),
+    autoSolSlippageBps: parseEnvNumber(process.env.AUTO_SOL_SLIPPAGE_BPS)
+      ?? (data.autoSolSlippageBps == null ? undefined : Number(data.autoSolSlippageBps))
+      ?? (parseEnvNumber(process.env.SLIPPAGE_BPS) ?? Number(data.slippageBps ?? 50)),
+    autoSolCooldownSec: parseEnvNumber(process.env.AUTO_SOL_COOLDOWN_SEC) ?? Number(data.autoSolCooldownSec ?? 60),
+    autoSolTargetBufferPct: parseEnvNumber(process.env.AUTO_SOL_TARGET_BUFFER_PCT)
+      ?? (data.autoSolTargetBufferPct == null ? 0 : Number(data.autoSolTargetBufferPct)),
+    jupiterApiKey: process.env.JUPITER_API_KEY ?? data.jupiterApiKey ?? null,
+    jupiterApiUrl: process.env.JUPITER_API_URL ?? data.jupiterApiUrl ?? "https://api.jup.ag",
     dryRun: parseEnvBool(process.env.DRY_RUN) ?? Boolean(data.dryRun ?? false),
     minSolBalance: parseEnvNumber(process.env.MIN_SOL_BALANCE) ?? Number(data.minSolBalance ?? 0.02),
     maxTokenA: parseEnvNumber(process.env.MAX_TOKEN_A) ?? data.maxTokenA ?? null,
@@ -95,6 +125,18 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.rebalanceCooldownSec) || config.rebalanceCooldownSec < 0) {
     throw new Error("rebalanceCooldownSec must be >= 0");
+  }
+  if (!Number.isFinite(config.autoSolMaxInputPct) || config.autoSolMaxInputPct < 0 || config.autoSolMaxInputPct > 1) {
+    throw new Error("autoSolMaxInputPct must be between 0 and 1");
+  }
+  if (!Number.isFinite(config.autoSolSlippageBps) || config.autoSolSlippageBps < 0) {
+    throw new Error("autoSolSlippageBps must be >= 0");
+  }
+  if (!Number.isFinite(config.autoSolCooldownSec) || config.autoSolCooldownSec < 0) {
+    throw new Error("autoSolCooldownSec must be >= 0");
+  }
+  if (!Number.isFinite(config.autoSolTargetBufferPct) || config.autoSolTargetBufferPct < 0 || config.autoSolTargetBufferPct > 1) {
+    throw new Error("autoSolTargetBufferPct must be between 0 and 1");
   }
   if (!Number.isFinite(config.minSolBalance) || config.minSolBalance < 0) {
     throw new Error("minSolBalance must be >= 0");
