@@ -1,0 +1,17 @@
+{
+  "selectedPoolId": "pool_mmtkznlp_j86hb0",
+  "pools": [
+    {
+      "id": "pool_mmtkznlp_j86hb0",
+      "name": "Pool principal",
+      "whirlpoolAddress": "HktfL7iwGKT5QHjywQkcDnZXScoh811k7akrMZJkCcEF",
+      "createdAt": "2026-03-16T19:33:16.477Z"
+    },
+    {
+      "id": "pool_mmtlh6x2_vn7md2",
+      "name": "JLP/SOL",
+      "whirlpoolAddress": "6a3m2EgFFKfsFuQtP4LJJXPcAe3TQYXNyHUjjZpUxYgd",
+      "createdAt": "2026-03-16T19:46:54.662Z"
+    }
+  ]
+}

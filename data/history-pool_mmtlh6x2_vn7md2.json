@@ -1,0 +1,65 @@
+{
+  "history": [
+    {
+      "timestamp": "2026-03-16T20:01:06.747Z",
+      "action": "open-position",
+      "price": 23.777720805810645,
+      "solUsdPrice": 95.17397511,
+      "budgetUsd": 1.5,
+      "budgetSol": 0.015760611010166726,
+      "targetRange": {
+        "lower": 23.53994359775254,
+        "upper": 24.01549801386875
+      },
+      "positionRange": null,
+      "positionMint": "21RAAuLJRv7WBr1RoEMorvmDrHhDrbLEpm7MmDHyLCVB",
+      "tokenABalance": 0,
+      "tokenBBalance": 0.035132,
+      "positionTokenA": 0.007059339,
+      "positionTokenB": 0.144175,
+      "openTokenA": 0.007216983,
+      "openTokenB": 0.147396,
+      "closeTokenA": null,
+      "closeTokenB": null,
+      "portfolioValue": 0.014600305666417502,
+      "pnl": -0.015239127312542532,
+      "portfolioUsd": 1.3895691280940112,
+      "pnlUsd": -1.4503683235420441,
+      "pnlDelta": null,
+      "pnlDeltaUsd": null
+    },
+    {
+      "timestamp": "2026-03-16T20:12:33.464Z",
+      "action": "resume-position",
+      "price": 23.774599110785456,
+      "solUsdPrice": 95.28268812,
+      "budgetUsd": 1.5,
+      "budgetSol": 0.01574262890348858,
+      "targetRange": {
+        "lower": 23.536853119677602,
+        "upper": 24.01234510189331
+      },
+      "positionRange": {
+        "lower": 23.54097986473911,
+        "upper": 24.0165151886235
+      },
+      "positionMint": "21RAAuLJRv7WBr1RoEMorvmDrHhDrbLEpm7MmDHyLCVB",
+      "tokenABalance": 0.004368635000000003,
+      "tokenBBalance": 0.035132,
+      "positionTokenA": 0.006643223,
+      "positionTokenB": 0.154065,
+      "openTokenA": null,
+      "openTokenB": null,
+      "closeTokenA": null,
+      "closeTokenB": null,
+      "portfolioValue": 0.018969805013885503,
+      "pnl": 0,
+      "portfolioUsd": 1.8074940148352647,
+      "pnlUsd": 0,
+      "pnlDelta": null,
+      "pnlDeltaUsd": null
+    }
+  ],
+  "lastEventPortfolioValue": 0.018969805013885503,
+  "lastEventPortfolioUsd": 1.8074940148352647
+}

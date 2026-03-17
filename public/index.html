@@ -1,0 +1,175 @@
+﻿<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orca Liquidity Bot</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Orca Liquidity Bot</h1>
+        <p class="subtitle">Painel local para iniciar, parar e monitorar o bot.</p>
+        <nav class="nav">
+          <a href="/analytics.html">Análises</a>
+        </nav>
+      </header>
+
+      <section class="panel">
+        <h2>Pools</h2>
+        <div class="row wrap">
+          <div class="field">
+            <label for="poolName">Nome</label>
+            <input id="poolName" type="text" placeholder="Ex: WETH/SOL" />
+          </div>
+          <div class="field grow">
+            <label for="poolAddress">Whirlpool</label>
+            <input id="poolAddress" type="text" placeholder="Endereço do Whirlpool" />
+          </div>
+          <div class="field">
+            <label for="poolRange">Range % (opcional)</label>
+            <input id="poolRange" type="number" min="0" step="0.01" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="poolBudget">Budget USD (opcional)</label>
+            <input id="poolBudget" type="number" min="0" step="0.01" placeholder="Padrão" />
+          </div>
+          <button id="addPoolBtn" class="primary">Adicionar</button>
+        </div>
+        <div id="poolError" class="error hidden"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Pool</th>
+                <th>Whirlpool</th>
+                <th>Range %</th>
+                <th>Budget USD</th>
+                <th>Status</th>
+                <th>Ação</th>
+                <th>PnL (USD)</th>
+                <th>Selecionada</th>
+                <th>Ações</th>
+              </tr>
+            </thead>
+            <tbody id="poolsBody">
+              <tr><td colspan="9">Sem pools cadastradas</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="row">
+          <button id="startBtn" class="primary">Iniciar</button>
+          <button id="stopBtn" class="ghost">Parar</button>
+          <button id="closeBtn" class="danger">Fechar posição</button>
+          <span id="statusBadge" class="badge">Desconhecido</span>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <h3>Status</h3>
+            <div class="kv"><span>Rodando</span><span id="running">-</span></div>
+            <div class="kv"><span>Última execução</span><span id="lastTick">-</span></div>
+            <div class="kv"><span>Ação</span><span id="lastAction">-</span></div>
+            <div class="kv"><span>Erro</span><span id="lastError">-</span></div>
+          </div>
+          <div class="card">
+            <h3>Preço & Faixa</h3>
+            <div class="kv"><span>Preço atual</span><span id="price">-</span></div>
+            <div class="kv"><span>Faixa alvo</span><span id="targetRange">-</span></div>
+            <div class="kv"><span>Faixa posição</span><span id="positionRange">-</span></div>
+          </div>
+          <div class="card">
+            <h3>Conta</h3>
+            <div class="kv"><span>Mint posição</span><span id="positionMint">-</span></div>
+            <div class="kv"><span>SOL</span><span id="solBalance">-</span></div>
+          </div>
+          <div class="card">
+            <h3>Saldos & PnL (SOL)</h3>
+            <div class="kv"><span>Wallet Token A</span><span id="walletA">-</span></div>
+            <div class="kv"><span>Wallet Token B</span><span id="walletB">-</span></div>
+            <div class="kv"><span>Posição Token A</span><span id="positionA">-</span></div>
+            <div class="kv"><span>Posição Token B</span><span id="positionB">-</span></div>
+            <div class="kv"><span>Valor total (SOL)</span><span id="portfolio">-</span></div>
+            <div class="kv"><span>PnL (SOL)</span><span id="pnl">-</span></div>
+          </div>
+          <div class="card">
+            <h3>USD</h3>
+            <div class="kv"><span>Preço SOL/USD</span><span id="solUsd">-</span></div>
+            <div class="kv"><span>Budget USD</span><span id="budgetUsd">-</span></div>
+            <div class="kv"><span>Budget SOL</span><span id="budgetSol">-</span></div>
+            <div class="kv"><span>Valor total (USD)</span><span id="portfolioUsd">-</span></div>
+            <div class="kv"><span>PnL (USD)</span><span id="pnlUsd">-</span></div>
+          </div>
+          <div class="card">
+            <h3>Config</h3>
+            <div class="kv"><span>Pool selecionada</span><span id="poolNameLabel">-</span></div>
+            <div class="kv"><span>Network</span><span id="network">-</span></div>
+            <div class="kv"><span>Whirlpool</span><span id="whirlpool">-</span></div>
+            <div class="kv"><span>Range %</span><span id="rangePct">-</span></div>
+            <div class="kv"><span>Slippage bps</span><span id="slippage">-</span></div>
+            <div class="kv"><span>Polling ms</span><span id="poll">-</span></div>
+            <div class="kv"><span>Confirmação fora da faixa (s)</span><span id="confirmSec">-</span></div>
+            <div class="kv"><span>Cooldown re-range (s)</span><span id="cooldownSec">-</span></div>
+            <div class="kv"><span>Dry-run</span><span id="dryRun">-</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Resultados</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Pool</th>
+                <th>Status</th>
+                <th>Última ação</th>
+                <th>Preço</th>
+                <th>Valor posição (USD)</th>
+                <th>PnL posição (USD)</th>
+                <th>PnL posição (SOL)</th>
+              </tr>
+            </thead>
+            <tbody id="resultsBody">
+              <tr><td colspan="7">Sem dados ainda</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="row row-between tight">
+          <h2>Histórico da pool selecionada</h2>
+          <button id="clearHistoryBtn" class="ghost danger">Limpar histórico</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Data/Hora</th>
+                <th>Ação</th>
+                <th>Preço</th>
+                <th>Faixa alvo</th>
+                <th>Mint posição</th>
+                <th>Entrada A</th>
+                <th>Entrada B</th>
+                <th>Saída A</th>
+                <th>Saída B</th>
+                <th>Valor (SOL)</th>
+                <th>PnL (SOL)</th>
+                <th>PnL Δ (USD)</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody">
+              <tr><td colspan="12">Sem eventos ainda</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

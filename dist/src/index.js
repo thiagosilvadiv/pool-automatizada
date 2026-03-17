@@ -1,0 +1,37 @@
+import "dotenv/config";
+import { loadConfig } from "./config.js";
+import { logger } from "./logger.js";
+import { buildConnection, buildWallet, loadKeypair } from "./solana.js";
+import { OrcaBot } from "./orca.js";
+import { withRetry } from "./retry.js";
+import { startServer } from "./server.js";
+function parseArgs(argv) {
+    const args = argv.slice(2);
+    const idx = args.findIndex((arg) => arg === "--config");
+    if (idx === -1 || !args[idx + 1]) {
+        throw new Error("Usage: node dist/index.js --config <path>");
+    }
+    const ui = args.includes("--ui");
+    return { configPath: args[idx + 1], ui };
+}
+async function main() {
+    const { configPath, ui } = parseArgs(process.argv);
+    const config = loadConfig(configPath, { allowMissingWhirlpool: ui });
+    if (ui) {
+        await startServer(config);
+        return;
+    }
+    const connection = buildConnection(config.rpcUrl);
+    const keypair = loadKeypair();
+    const wallet = buildWallet(keypair);
+    logger.info({ wallet: wallet.publicKey.toBase58(), network: config.network }, "bot starting");
+    const bot = await OrcaBot.create({ connection, wallet, config });
+    while (true) {
+        await withRetry(() => bot.tick(), { retries: 3, baseDelayMs: 1000 });
+        await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
+    }
+}
+main().catch((err) => {
+    logger.error({ err }, "fatal error");
+    process.exit(1);
+});

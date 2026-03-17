@@ -1,0 +1,18 @@
+{
+  "network": "mainnet-beta",
+  "rpcUrl": "https://mainnet.helius-rpc.com/?api-key=1116127a-e06e-460e-8ae4-aac7a1ca1baa",
+  "whirlpoolAddress": "HktfL7iwGKT5QHjywQkcDnZXScoh811k7akrMZJkCcEF",
+  "rangeWidthPct": 1.0,
+  "slippageBps": 200,
+  "pollIntervalMs": 1200000,
+  "dryRun": false,
+  "minSolBalance": 0.03,
+  "maxTokenA": null,
+  "maxTokenB": null,
+  "rebalanceSwapPct": 1.0,
+  "positionMint": null,
+  "budgetUsd": 1.5,
+  "pythSolUsdFeedId": "0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
+  "priceStaleMaxSec": 120,
+  "outOfRangeConfirmSec": 240
+}

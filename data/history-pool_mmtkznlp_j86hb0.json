@@ -1,0 +1,65 @@
+{
+  "history": [
+    {
+      "timestamp": "2026-03-16T20:00:55.811Z",
+      "action": "open-position",
+      "price": 0.040861235632963115,
+      "solUsdPrice": 95.17397511,
+      "budgetUsd": 1.5,
+      "budgetSol": 0.015760611010166726,
+      "targetRange": {
+        "lower": 0.04045262327663349,
+        "upper": 0.04126984798929274
+      },
+      "positionRange": null,
+      "positionMint": "3KLAKoegxpV6bxL8YLrgy2XFNTYrCmBi3sFjCwy5FqJK",
+      "tokenABalance": 0.005074312000000004,
+      "tokenBBalance": 0.00048027,
+      "positionTokenA": 0.007678794,
+      "positionTokenB": 0.00031167,
+      "openTokenA": 0.00774854,
+      "openTokenB": 0.0003145,
+      "closeTokenA": null,
+      "closeTokenB": null,
+      "portfolioValue": 0.03213431138286256,
+      "pnl": 0.0038080721155193745,
+      "portfolioUsd": 3.058350151729551,
+      "pnlUsd": 0.362429360739526,
+      "pnlDelta": null,
+      "pnlDeltaUsd": null
+    },
+    {
+      "timestamp": "2026-03-16T20:12:44.781Z",
+      "action": "resume-position",
+      "price": 0.04102363760671471,
+      "solUsdPrice": 95.28268812,
+      "budgetUsd": 1.5,
+      "budgetSol": 0.01574262890348858,
+      "targetRange": {
+        "lower": 0.040613401230647564,
+        "upper": 0.04143387398278185
+      },
+      "positionRange": {
+        "lower": 0.040456036808175215,
+        "upper": 0.041273261693341126
+      },
+      "positionMint": "3KLAKoegxpV6bxL8YLrgy2XFNTYrCmBi3sFjCwy5FqJK",
+      "tokenABalance": 0.004368635000000003,
+      "tokenBBalance": 0,
+      "positionTokenA": 0.004638352,
+      "positionTokenB": 0.00043615,
+      "openTokenA": null,
+      "openTokenB": null,
+      "closeTokenA": null,
+      "closeTokenB": null,
+      "portfolioValue": 0.019638662430182023,
+      "pnl": 0,
+      "portfolioUsd": 1.871224547428995,
+      "pnlUsd": 0,
+      "pnlDelta": null,
+      "pnlDeltaUsd": null
+    }
+  ],
+  "lastEventPortfolioValue": 0.019638662430182023,
+  "lastEventPortfolioUsd": 1.871224547428995
+}
