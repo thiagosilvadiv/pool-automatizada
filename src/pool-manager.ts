@@ -27,6 +27,7 @@ export type PoolSummary = {
   id: string;
   name: string;
   whirlpoolAddress: string;
+  createdAt: string;
   selected: boolean;
   running: boolean;
   lastAction: string | null;
@@ -81,6 +82,7 @@ export class PoolManager {
         id: entry.id,
         name: entry.name,
         whirlpoolAddress: entry.whirlpoolAddress,
+        createdAt: entry.createdAt,
         selected: entry.id === this.selectedPoolId,
         running: status?.running ?? false,
         lastAction: status?.lastAction ?? null,
@@ -225,6 +227,11 @@ export class PoolManager {
     await record.runner.clearHistory();
   }
 
+  async deleteHistoryEvents(id: string, ids: string[]): Promise<void> {
+    const record = this.getRecord(id);
+    await record.runner.deleteHistoryEvents(ids);
+  }
+
   async startSelected(): Promise<void> {
     if (!this.selectedPoolId) {
       throw new Error("No pool selected");
@@ -276,6 +283,13 @@ export class PoolManager {
     await this.clearHistory(this.selectedPoolId);
   }
 
+  async deleteSelectedHistoryEvents(ids: string[]): Promise<void> {
+    if (!this.selectedPoolId) {
+      return;
+    }
+    await this.deleteHistoryEvents(this.selectedPoolId, ids);
+  }
+
   private getRecord(id: string): PoolRecord {
     const record = this.pools.get(id);
     if (!record) {
@@ -300,7 +314,12 @@ export class PoolManager {
     if (deduped.length !== pools.length) {
       logger.warn({ before: pools.length, after: deduped.length }, "duplicate pools detected; keeping most recent");
     }
-    pools = deduped;
+    pools = deduped.map((entry) => {
+      if (typeof entry.createdAt === "string" && entry.createdAt.trim()) {
+        return entry;
+      }
+      return { ...entry, createdAt: new Date().toISOString() };
+    });
 
     if (pools.length === 0 && this.baseConfig.whirlpoolAddress) {
       const entry: PoolEntry = {

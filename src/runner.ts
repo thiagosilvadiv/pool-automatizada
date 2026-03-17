@@ -10,6 +10,7 @@ export type RunnerStatus = BotStatus & {
 };
 
 export type HistoryEvent = {
+  id: string;
   timestamp: string;
   action: string | null;
   price: number | null;
@@ -51,6 +52,7 @@ export class BotRunner {
   private lastEventPortfolioValue: number | null = null;
   private lastEventPortfolioUsd: number | null = null;
   private historyLoaded = false;
+  private eventIdSeed = Math.floor(Math.random() * 1_000_000);
 
   constructor(bot: OrcaBot, config: Config, options: { historyStore: HistoryStore }) {
     this.bot = bot;
@@ -150,6 +152,20 @@ export class BotRunner {
     await this.historyStore.clear();
   }
 
+  async deleteHistoryEvents(ids: string[]): Promise<void> {
+    if (!ids.length) {
+      return;
+    }
+    const toDelete = new Set(ids);
+    const next = this.history.filter((event) => !toDelete.has(event.id));
+    if (next.length === this.history.length) {
+      return;
+    }
+    this.history = next;
+    this.recalculateLastEventValues();
+    await this.saveHistory();
+  }
+
   private schedule(): void {
     if (!this.running) {
       return;
@@ -192,8 +208,10 @@ export class BotRunner {
 
     if (!status.lastAction || status.lastAction === "no-action") {
       if (status.positionMint) {
+        const timestamp = new Date().toISOString();
         this.pushEvent({
-          timestamp: new Date().toISOString(),
+          id: this.createEventId(timestamp),
+          timestamp,
           action: "resume-position",
           price: status.lastPrice,
           solUsdPrice: status.solUsdPrice,
@@ -243,8 +261,10 @@ export class BotRunner {
       ? status.portfolioUsd - this.lastEventPortfolioUsd
       : null;
 
+    const timestamp = new Date().toISOString();
     const event: HistoryEvent = {
-      timestamp: new Date().toISOString(),
+      id: this.createEventId(timestamp),
+      timestamp,
       action: status.lastAction,
       price: status.lastPrice,
       solUsdPrice: status.solUsdPrice,
@@ -279,7 +299,7 @@ export class BotRunner {
     if (event.action === "resume-position" && this.history.length > 0) {
       const last = this.history[this.history.length - 1];
       if (last?.action === "resume-position" && last?.positionMint === event.positionMint) {
-        this.history[this.history.length - 1] = event;
+        this.history[this.history.length - 1] = { ...event, id: last.id };
         if (event.portfolioValue != null) {
           this.lastEventPortfolioValue = event.portfolioValue;
         }
@@ -312,7 +332,27 @@ export class BotRunner {
     try {
       const parsed = await this.historyStore.load();
       if (Array.isArray(parsed?.history)) {
-        this.history = parsed.history as HistoryEvent[];
+        let mutated = false;
+        const normalized: HistoryEvent[] = [];
+        parsed.history.forEach((item, index) => {
+          if (!item || typeof item !== "object") {
+            mutated = true;
+            return;
+          }
+          const raw = item as HistoryEvent;
+          const existingId = (raw as { id?: string }).id;
+          const id = typeof existingId === "string" && existingId.trim().length > 0
+            ? existingId
+            : this.buildLegacyEventId(raw, index);
+          if (id !== existingId) {
+            mutated = true;
+          }
+          normalized.push({ ...raw, id });
+        });
+        this.history = normalized;
+        if (mutated) {
+          await this.saveHistory();
+        }
       }
       if (typeof parsed?.lastEventPortfolioValue === "number") {
         this.lastEventPortfolioValue = parsed.lastEventPortfolioValue;
@@ -347,5 +387,36 @@ export class BotRunner {
     } catch (err) {
       logger.warn({ err }, "failed to save history");
     }
+  }
+
+  private recalculateLastEventValues(): void {
+    this.lastEventPortfolioValue = null;
+    this.lastEventPortfolioUsd = null;
+    for (let i = this.history.length - 1; i >= 0; i -= 1) {
+      const item = this.history[i];
+      if (this.lastEventPortfolioValue == null && item.portfolioValue != null) {
+        this.lastEventPortfolioValue = item.portfolioValue;
+      }
+      if (this.lastEventPortfolioUsd == null && item.portfolioUsd != null) {
+        this.lastEventPortfolioUsd = item.portfolioUsd;
+      }
+      if (this.lastEventPortfolioValue != null && this.lastEventPortfolioUsd != null) {
+        break;
+      }
+    }
+  }
+
+  private createEventId(timestamp: string): string {
+    const parsed = Date.parse(timestamp);
+    const timePart = Number.isFinite(parsed) ? parsed.toString(36) : Date.now().toString(36);
+    const rand = (this.eventIdSeed++ % 1_000_000).toString(36);
+    return `evt_${timePart}_${rand}`;
+  }
+
+  private buildLegacyEventId(event: HistoryEvent, index: number): string {
+    const parsed = Date.parse(event.timestamp);
+    const timePart = Number.isFinite(parsed) ? parsed.toString(36) : "legacy";
+    const indexPart = index.toString(36);
+    return `evt_${timePart}_${indexPart}`;
   }
 }
