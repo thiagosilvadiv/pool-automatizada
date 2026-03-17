@@ -22,6 +22,8 @@ const actionLabels = {
   "open-position": "abertura",
   "rebalanced": "re-range",
   "close-position": "fechamento",
+  "auto-sol-topup": "top-up SOL",
+  "manual-sol-topup": "top-up SOL (manual)",
   "resume-position": "monitorando posição existente",
   "reload-position": "recarregar posição",
   "out-of-range-wait": "aguardando confirmação fora da faixa",
@@ -81,7 +83,7 @@ async function fetchHistory(poolId) {
 
 function renderHistory(items) {
   if (!items || items.length === 0) {
-    historyBody.innerHTML = "<tr><td colspan=\"12\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"9\">Sem eventos ainda</td></tr>";
     return;
   }
   const rows = items.slice(0, 100).map((item) => {
@@ -93,13 +95,10 @@ function renderHistory(items) {
         <td>${formatNumber(item.price, 8)}</td>
         <td>${formatRange(item.targetRange)}</td>
         <td>${item.positionMint ?? "-"}</td>
-        <td>${formatNumber(item.openTokenA, 6)}</td>
-        <td>${formatNumber(item.openTokenB, 6)}</td>
-        <td>${formatNumber(item.closeTokenA, 6)}</td>
-        <td>${formatNumber(item.closeTokenB, 6)}</td>
-        <td>${formatNumber(item.portfolioValue, 6)}</td>
-        <td>${formatNumber(item.pnl, 6)}</td>
-        <td>${formatNumber(item.pnlDeltaUsd, 2)}</td>
+        <td>${formatNumber(item.positionEntryUsd, 2)}</td>
+        <td>${formatNumber(item.positionFeesUsd, 2)}</td>
+        <td>${formatNumber(item.positionExitUsd, 2)}</td>
+        <td>${formatNumber(item.positionPnlUsd, 2)}</td>
       </tr>
     `;
   });

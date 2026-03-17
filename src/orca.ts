@@ -1,4 +1,4 @@
-import { Connection, LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
+import { Connection, LAMPORTS_PER_SOL, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, getMint, TOKEN_PROGRAM_ID, NATIVE_MINT } from "@solana/spl-token";
 import DecimalJs from "decimal.js";
 import * as whirlpoolsSdk from "@orca-so/whirlpools-sdk";
@@ -56,6 +56,13 @@ export type BotStatus = {
   positionPnl: number | null;
   positionValueUsd: number | null;
   positionPnlUsd: number | null;
+  positionEntryUsd: number | null;
+  positionFeesUsd: number | null;
+  positionExitUsd: number | null;
+  eventPositionMint: string | null;
+  eventPositionEntryUsd: number | null;
+  eventPositionFeesUsd: number | null;
+  eventPositionExitUsd: number | null;
   lastOpenTokenA: number | null;
   lastOpenTokenB: number | null;
   lastCloseTokenA: number | null;
@@ -63,6 +70,9 @@ export type BotStatus = {
 };
 
 export class OrcaBot {
+  private static topupInFlight = false;
+  private static lastTopupAt: number | null = null;
+
   private connection: Connection;
   private wallet: WalletLike;
   private config: Config;
@@ -75,8 +85,11 @@ export class OrcaBot {
   private initialPortfolioValueSol: number | null = null;
   private initialPositionValue: number | null = null;
   private initialPositionValueSol: number | null = null;
+  private positionEntryUsd: number | null = null;
+  private lastPositionValueUsdWithFees: number | null = null;
   private outOfRangeSince: number | null = null;
   private lastRebalanceAt: number | null = null;
+  private missingPositionSince: number | null = null;
   private lastStatus: BotStatus = {
     running: false,
     lastAction: null,
@@ -101,6 +114,13 @@ export class OrcaBot {
     positionPnl: null,
     positionValueUsd: null,
     positionPnlUsd: null,
+    positionEntryUsd: null,
+    positionFeesUsd: null,
+    positionExitUsd: null,
+    eventPositionMint: null,
+    eventPositionEntryUsd: null,
+    eventPositionFeesUsd: null,
+    eventPositionExitUsd: null,
     lastOpenTokenA: null,
     lastOpenTokenB: null,
     lastCloseTokenA: null,
@@ -126,16 +146,27 @@ export class OrcaBot {
 
   async tick(): Promise<BotStatus> {
     this.lastStatus.running = true;
+    this.lastStatus.eventPositionMint = null;
+    this.lastStatus.eventPositionEntryUsd = null;
+    this.lastStatus.eventPositionFeesUsd = null;
+    this.lastStatus.eventPositionExitUsd = null;
     await this.refreshPoolState();
 
     const solBalance = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
     this.lastStatus.solBalance = solBalance;
     if (solBalance < this.config.minSolBalance) {
-      logger.warn({ solBalance }, "SOL balance below minSolBalance; skipping");
-      this.lastStatus.lastAction = "skip-low-sol";
-      return this.getStatus();
+      const topupResult = await this.maybeTopUpSol("auto", solBalance);
+      if (topupResult.performed) {
+        const refreshed = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
+        this.lastStatus.solBalance = refreshed;
+      }
+      const finalSol = this.lastStatus.solBalance ?? solBalance;
+      if (finalSol < this.config.minSolBalance) {
+        logger.warn({ solBalance: finalSol, reason: topupResult.reason }, "SOL balance below minSolBalance; skipping");
+        this.lastStatus.lastAction = "skip-low-sol";
+        return this.getStatus();
+      }
     }
-
     const price = await this.getCurrentPrice();
     const range = calculateRange(price, this.config.rangeWidthPct);
     this.lastStatus.lastPrice = price;
@@ -149,6 +180,27 @@ export class OrcaBot {
     await this.updatePortfolioSnapshot(price, solUsdPrice);
 
     if (!this.currentPosition) {
+      await this.loadExistingPosition();
+    }
+
+    if (!this.currentPosition) {
+      if (this.currentPositionMint) {
+        const now = Date.now();
+        if (this.missingPositionSince === null) {
+          this.missingPositionSince = now;
+        }
+        const elapsedSec = (now - this.missingPositionSince) / 1000;
+        if (elapsedSec < 60) {
+          logger.info({ elapsedSec, positionMint: this.currentPositionMint }, "position mint not found yet; waiting");
+          this.lastStatus.lastAction = "await-position";
+          this.lastStatus.positionRange = null;
+          this.lastStatus.positionMint = this.currentPositionMint;
+          return this.getStatus();
+        }
+        this.currentPositionMint = null;
+        this.missingPositionSince = null;
+      }
+
       logger.info({ price, range }, "no active position found; opening new position");
       const result = await this.openPosition(range, price, solUsdPrice);
       this.lastStatus.lastAction = result;
@@ -215,9 +267,12 @@ export class OrcaBot {
 
     logger.info({ price, positionRange }, "price out of range; rebalancing");
     this.outOfRangeSince = null;
+    await this.updatePortfolioSnapshot(price, solUsdPrice);
+    this.captureCloseSnapshot();
     await this.closePosition(this.currentPosition);
     this.currentPosition = null;
     this.currentPositionMint = null;
+    this.missingPositionSince = null;
     const result = await this.openPosition(range, price, solUsdPrice);
     this.lastStatus.lastAction = result === "open-position" ? "rebalanced" : result;
     if (result === "open-position") {
@@ -231,6 +286,10 @@ export class OrcaBot {
 
   async closeActivePosition(): Promise<BotStatus> {
     this.lastStatus.running = true;
+    this.lastStatus.eventPositionMint = null;
+    this.lastStatus.eventPositionEntryUsd = null;
+    this.lastStatus.eventPositionFeesUsd = null;
+    this.lastStatus.eventPositionExitUsd = null;
     await this.refreshPoolState();
 
     const price = await this.getCurrentPrice();
@@ -247,9 +306,12 @@ export class OrcaBot {
       return this.getStatus();
     }
 
+    await this.updatePortfolioSnapshot(price, solUsdPrice);
+    this.captureCloseSnapshot();
     await this.closePosition(this.currentPosition);
     this.currentPosition = null;
     this.currentPositionMint = null;
+    this.missingPositionSince = null;
     await this.updatePortfolioSnapshot(price, solUsdPrice);
 
     this.lastStatus.lastAction = "close-position";
@@ -258,9 +320,35 @@ export class OrcaBot {
     return this.getStatus();
   }
 
+  async topUpSolNow(): Promise<{ ok: boolean; reason?: string }> {
+    this.lastStatus.running = true;
+    await this.refreshPoolState();
+    const solBalance = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
+    this.lastStatus.solBalance = solBalance;
+    const result = await this.maybeTopUpSol("manual", solBalance);
+    if (result.performed) {
+      this.lastStatus.lastAction = "manual-sol-topup";
+    }
+    return { ok: result.performed, reason: result.reason };
+  }
+
   private async refreshPoolState(): Promise<void> {
     const poolAddress = new PublicKey(this.config.whirlpoolAddress);
-    const pool = await this.client.getPool(poolAddress);
+    const ignoreCache = (whirlpools as any).IGNORE_CACHE;
+    try {
+      await this.ctx?.fetcher?.getPool?.(poolAddress, ignoreCache);
+      await this.ctx?.fetcher?.getPoolData?.(poolAddress, ignoreCache);
+    } catch {
+      // best-effort cache bypass; fallback to client.getPool below
+    }
+    const pool = await this.client.getPool(poolAddress, ignoreCache);
+    if (typeof pool?.refreshData === "function") {
+      try {
+        await pool.refreshData();
+      } catch {
+        // ignore refresh errors and use current data
+      }
+    }
     const poolData = pool.getData();
 
     const tokenMintA = new PublicKey(poolData.tokenMintA);
@@ -334,7 +422,8 @@ export class OrcaBot {
         foundPosition = position;
         foundMint = this.config.positionMint;
       }
-    } else {
+    }
+    if (!foundPosition) {
       const tokenAccounts = await this.connection.getParsedTokenAccountsByOwner(
         this.wallet.publicKey,
         { programId: TOKEN_PROGRAM_ID }
@@ -364,6 +453,7 @@ export class OrcaBot {
 
     this.currentPosition = foundPosition;
     this.currentPositionMint = foundMint;
+    this.missingPositionSince = foundPosition ? null : this.missingPositionSince;
     this.lastStatus.positionMint = this.currentPositionMint;
     if (this.currentPosition) {
       const range = await this.getPositionRange(this.currentPosition);
@@ -532,9 +622,14 @@ export class OrcaBot {
 
         if (executed && positionMint) {
           this.currentPositionMint = positionMint.toString();
+          this.missingPositionSince = Date.now();
           this.currentPosition = await this.fetchPositionByMint(this.currentPositionMint!);
+          if (this.currentPosition) {
+            this.missingPositionSince = null;
+          }
           this.initialPositionValue = null;
           this.initialPositionValueSol = null;
+          this.positionEntryUsd = null;
         }
         return executed ? "open-position" : "dry-run-open";
       } catch (err) {
@@ -843,10 +938,28 @@ export class OrcaBot {
 
     this.initialPositionValue = null;
     this.initialPositionValueSol = null;
+    this.positionEntryUsd = null;
+  }
+
+  private captureCloseSnapshot(): void {
+    if (!this.currentPosition || !this.currentPositionMint) {
+      return;
+    }
+    this.lastStatus.eventPositionMint = this.currentPositionMint;
+    this.lastStatus.eventPositionEntryUsd = this.lastStatus.positionEntryUsd ?? this.positionEntryUsd;
+    this.lastStatus.eventPositionFeesUsd = this.lastStatus.positionFeesUsd ?? null;
+    this.lastStatus.eventPositionExitUsd = this.lastPositionValueUsdWithFees
+      ?? this.lastStatus.positionValueUsd
+      ?? null;
   }
 
   getStatus(): BotStatus {
     return { ...this.lastStatus };
+  }
+
+  setPositionEntryUsd(value: number | null): void {
+    this.positionEntryUsd = value;
+    this.lastStatus.positionEntryUsd = value;
   }
 
   setError(err: unknown): void {
@@ -909,6 +1022,190 @@ export class OrcaBot {
     return { tokenA, tokenB };
   }
 
+  private async getWalletTokens(): Promise<Array<{ mint: string; rawAmount: number; uiAmount: number; decimals: number }>> {
+    const tokenAccounts = await this.connection.getParsedTokenAccountsByOwner(
+      this.wallet.publicKey,
+      { programId: TOKEN_PROGRAM_ID }
+    );
+    return tokenAccounts.value.map((acct) => {
+      const info = acct.account.data.parsed.info;
+      const amount = Number(info.tokenAmount?.amount ?? 0);
+      const decimals = Number(info.tokenAmount?.decimals ?? 0);
+      const uiAmount = Number(info.tokenAmount?.uiAmount ?? 0);
+      return { mint: String(info.mint), rawAmount: amount, uiAmount, decimals };
+    }).filter((item) => Number.isFinite(item.rawAmount) && item.rawAmount > 0);
+  }
+
+  private async maybeTopUpSol(reason: "auto" | "manual", solBalance: number): Promise<{ performed: boolean; reason?: string }> {
+    if (reason === "auto" && !this.config.autoSolTopupEnabled) {
+      return { performed: false, reason: "disabled" };
+    }
+    if (!this.config.jupiterApiKey) {
+      return { performed: false, reason: "missing-api-key" };
+    }
+    if (solBalance >= this.config.minSolBalance) {
+      return { performed: false, reason: "sol-ok" };
+    }
+
+    const now = Date.now();
+    if (OrcaBot.topupInFlight) {
+      return { performed: false, reason: "in-flight" };
+    }
+    if (this.config.autoSolCooldownSec > 0 && OrcaBot.lastTopupAt != null) {
+      const elapsedSec = (now - OrcaBot.lastTopupAt) / 1000;
+      if (elapsedSec < this.config.autoSolCooldownSec) {
+        logger.info({ elapsedSec, cooldownSec: this.config.autoSolCooldownSec }, "sol topup cooldown active");
+        return { performed: false, reason: "cooldown" };
+      }
+    }
+
+    const targetSol = this.config.minSolBalance * (1 + this.config.autoSolTargetBufferPct);
+    const neededLamports = Math.ceil((targetSol - solBalance) * LAMPORTS_PER_SOL);
+    if (!Number.isFinite(neededLamports) || neededLamports <= 0) {
+      return { performed: false, reason: "sol-ok" };
+    }
+
+    OrcaBot.topupInFlight = true;
+    try {
+      const allTokens = await this.getWalletTokens();
+      const whitelist = new Set(this.config.autoSolSwapMints.map((mint) => mint.trim()).filter((mint) => mint));
+      const candidates = allTokens.filter((token) => {
+        if (token.mint === NATIVE_MINT.toBase58()) {
+          return false;
+        }
+        if (token.decimals === 0) {
+          return false;
+        }
+        if (this.config.autoSolAllowAll) {
+          return true;
+        }
+        return whitelist.has(token.mint);
+      }).sort((a, b) => b.rawAmount - a.rawAmount);
+
+      if (!candidates.length) {
+        logger.warn("sol topup skipped: whitelist empty or no eligible tokens");
+        return { performed: false, reason: "whitelist-empty" };
+      }
+
+      let remainingLamports = neededLamports;
+      let swaps = 0;
+
+      for (const token of candidates) {
+        if (remainingLamports <= 0) {
+          break;
+        }
+        const maxInput = Math.floor(token.rawAmount * this.config.autoSolMaxInputPct);
+        if (maxInput <= 0) {
+          continue;
+        }
+        let quote = await this.fetchJupiterQuoteExactIn(
+          token.mint,
+          NATIVE_MINT.toBase58(),
+          maxInput,
+          this.config.autoSolSlippageBps
+        );
+        if (!quote) {
+          continue;
+        }
+        let outAmount = Number(quote.outAmount ?? 0);
+        if (!Number.isFinite(outAmount) || outAmount <= 0) {
+          continue;
+        }
+
+        if (outAmount > remainingLamports) {
+          const scale = remainingLamports / outAmount;
+          const adjustedIn = Math.max(1, Math.floor(maxInput * scale));
+          if (adjustedIn < maxInput) {
+            const adjustedQuote = await this.fetchJupiterQuoteExactIn(
+              token.mint,
+              NATIVE_MINT.toBase58(),
+              adjustedIn,
+              this.config.autoSolSlippageBps
+            );
+            if (adjustedQuote && Number(adjustedQuote.outAmount ?? 0) > 0) {
+              quote = adjustedQuote;
+              outAmount = Number(adjustedQuote.outAmount);
+            }
+          }
+        }
+
+        const sig = await this.executeJupiterSwap(quote);
+        if (sig) {
+          OrcaBot.lastTopupAt = Date.now();
+          this.lastStatus.lastAction = reason === "auto" ? "auto-sol-topup" : "manual-sol-topup";
+          swaps += 1;
+          remainingLamports = Math.max(0, remainingLamports - outAmount);
+        }
+      }
+
+      if (swaps > 0) {
+        return { performed: true };
+      }
+      logger.warn("sol topup failed: no viable route or insufficient balance");
+      return { performed: false, reason: "no-route" };
+    } catch (err) {
+      logger.warn({ err }, "sol topup failed");
+      return { performed: false, reason: "error" };
+    } finally {
+      OrcaBot.topupInFlight = false;
+    }
+  }
+
+  private async fetchJupiterQuoteExactIn(
+    inputMint: string,
+    outputMint: string,
+    amount: number,
+    slippageBps: number
+  ): Promise<any | null> {
+    const base = this.config.jupiterApiUrl.replace(/\/+$/, "");
+    const params = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount: String(amount),
+      swapMode: "ExactIn",
+      slippageBps: String(slippageBps)
+    });
+    const res = await fetch(`${base}/swap/v1/quote?${params.toString()}`, {
+      headers: { "x-api-key": this.config.jupiterApiKey ?? "" }
+    });
+    if (!res.ok) {
+      logger.warn({ status: res.status }, "jupiter quote failed");
+      return null;
+    }
+    return res.json();
+  }
+
+  private async executeJupiterSwap(quoteResponse: any): Promise<string | null> {
+    const base = this.config.jupiterApiUrl.replace(/\/+$/, "");
+    const res = await fetch(`${base}/swap/v1/swap`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": this.config.jupiterApiKey ?? ""
+      },
+      body: JSON.stringify({
+        quoteResponse,
+        userPublicKey: this.wallet.publicKey.toBase58(),
+        wrapAndUnwrapSol: true
+      })
+    });
+    if (!res.ok) {
+      logger.warn({ status: res.status }, "jupiter swap failed");
+      return null;
+    }
+    const data = await res.json();
+    const swapTx = data?.swapTransaction;
+    if (!swapTx) {
+      logger.warn("jupiter swap response missing swapTransaction");
+      return null;
+    }
+    const tx = VersionedTransaction.deserialize(Buffer.from(swapTx, "base64"));
+    const signed = await this.wallet.signTransaction(tx);
+    const sig = await this.connection.sendRawTransaction(signed.serialize(), { maxRetries: 2 });
+    await this.connection.confirmTransaction(sig, "confirmed");
+    return sig;
+  }
+
   private async updatePortfolioSnapshot(price: number, solUsdPrice: number | null): Promise<void> {
     if (!this.poolState) {
       return;
@@ -917,18 +1214,27 @@ export class OrcaBot {
     const walletBalances = await this.getTokenBalances();
     const positionBalances = this.currentPosition
       ? await this.getPositionTokenAmounts(this.currentPosition)
-      : { tokenA: 0, tokenB: 0 };
+      : { tokenA: 0, tokenB: 0, feeA: 0, feeB: 0 };
 
     const totalA = walletBalances.tokenA + positionBalances.tokenA;
     const totalB = walletBalances.tokenB + positionBalances.tokenB;
-    const portfolioValueTokenB = totalB + totalA * price;
     const positionValueTokenB = positionBalances.tokenB + positionBalances.tokenA * price;
+    const positionFeesTokenB = positionBalances.feeB + positionBalances.feeA * price;
+
+    let feesValueSol: number | null = null;
+    if (this.poolState.isTokenBSol) {
+      feesValueSol = positionFeesTokenB;
+    } else if (this.poolState.isTokenASol && price > 0) {
+      feesValueSol = positionBalances.feeA + positionBalances.feeB / price;
+    }
+
+    const portfolioValueTokenB = totalB + totalA * price + positionFeesTokenB;
 
     let portfolioValueSol: number | null = null;
     if (this.poolState.isTokenBSol) {
-      portfolioValueSol = portfolioValueTokenB;
+      portfolioValueSol = totalB + totalA * price + positionFeesTokenB;
     } else if (this.poolState.isTokenASol && price > 0) {
-      portfolioValueSol = totalA + totalB / price;
+      portfolioValueSol = totalA + totalB / price + (feesValueSol ?? 0);
     }
 
     this.lastStatus.tokenABalance = walletBalances.tokenA;
@@ -960,6 +1266,9 @@ export class OrcaBot {
       this.lastStatus.positionPnl = null;
       this.lastStatus.positionValueUsd = null;
       this.lastStatus.positionPnlUsd = null;
+      this.lastStatus.positionEntryUsd = null;
+      this.lastStatus.positionFeesUsd = null;
+      this.lastPositionValueUsdWithFees = null;
       return;
     }
 
@@ -970,35 +1279,68 @@ export class OrcaBot {
       positionValueSol = positionBalances.tokenA + positionBalances.tokenB / price;
     }
 
-    this.lastStatus.positionValue = positionValueSol ?? positionValueTokenB;
+    let positionValueSolWithFees: number | null = null;
+    if (this.poolState.isTokenBSol) {
+      positionValueSolWithFees = positionValueTokenB + positionFeesTokenB;
+    } else if (this.poolState.isTokenASol && price > 0) {
+      positionValueSolWithFees = positionBalances.tokenA + positionBalances.tokenB / price + (feesValueSol ?? 0);
+    }
 
-    if (positionValueSol != null) {
+    this.lastStatus.positionValue = positionValueSol ?? positionValueTokenB;
+    this.lastStatus.positionValueUsd = positionValueSol != null && solUsdPrice
+      ? positionValueSol * solUsdPrice
+      : null;
+
+    const positionValueTokenBWithFees = positionValueTokenB + positionFeesTokenB;
+    if (positionValueSolWithFees != null) {
       if (this.initialPositionValueSol === null) {
-        this.initialPositionValueSol = positionValueSol;
+        this.initialPositionValueSol = positionValueSolWithFees;
       }
-      this.lastStatus.positionPnl = positionValueSol - this.initialPositionValueSol;
-      this.lastStatus.positionValueUsd = solUsdPrice ? positionValueSol * solUsdPrice : null;
-      this.lastStatus.positionPnlUsd = solUsdPrice
-        ? (positionValueSol - this.initialPositionValueSol) * solUsdPrice
-        : null;
+      this.lastStatus.positionPnl = positionValueSolWithFees - this.initialPositionValueSol;
     } else {
       if (this.initialPositionValue === null) {
-        this.initialPositionValue = positionValueTokenB;
+        this.initialPositionValue = positionValueTokenBWithFees;
       }
-      this.lastStatus.positionPnl = positionValueTokenB - this.initialPositionValue;
-      this.lastStatus.positionValueUsd = null;
+      this.lastStatus.positionPnl = positionValueTokenBWithFees - this.initialPositionValue;
+    }
+
+    this.lastStatus.positionFeesUsd = (feesValueSol != null && solUsdPrice)
+      ? feesValueSol * solUsdPrice
+      : null;
+
+    const positionValueUsdWithFees = positionValueSolWithFees != null && solUsdPrice
+      ? positionValueSolWithFees * solUsdPrice
+      : null;
+
+    this.lastPositionValueUsdWithFees = positionValueUsdWithFees;
+
+    if (positionValueUsdWithFees != null) {
+      if (this.positionEntryUsd === null) {
+        this.positionEntryUsd = positionValueUsdWithFees;
+      }
+      this.lastStatus.positionEntryUsd = this.positionEntryUsd;
+      this.lastStatus.positionPnlUsd = positionValueUsdWithFees - this.positionEntryUsd;
+    } else {
+      this.lastStatus.positionEntryUsd = null;
       this.lastStatus.positionPnlUsd = null;
     }
   }
 
-  private async getPositionTokenAmounts(position: any): Promise<{ tokenA: number; tokenB: number }> {
+  private async getPositionTokenAmounts(position: any): Promise<{ tokenA: number; tokenB: number; feeA: number; feeB: number }> {
     if (!this.poolState) {
-      return { tokenA: 0, tokenB: 0 };
+      return { tokenA: 0, tokenB: 0, feeA: 0, feeB: 0 };
     }
 
+    if (typeof position.refreshData === "function") {
+      try {
+        await position.refreshData();
+      } catch (err) {
+        logger.warn({ err }, "failed to refresh position data");
+      }
+    }
     const data = position.getData?.() ?? position.getData;
     if (!data) {
-      return { tokenA: 0, tokenB: 0 };
+      return { tokenA: 0, tokenB: 0, feeA: 0, feeB: 0 };
     }
 
     const poolData = this.poolState.pool.getData();
@@ -1020,7 +1362,125 @@ export class OrcaBot {
 
     const tokenA = toNumber(common.DecimalUtil.fromBN(quote.tokenEstA, this.poolState.decimalsA));
     const tokenB = toNumber(common.DecimalUtil.fromBN(quote.tokenEstB, this.poolState.decimalsB));
-    return { tokenA, tokenB };
+    const feesQuote = await this.getCollectFeesQuote(data, poolData, tokenExtensionCtx);
+    let feeA = 0;
+    let feeB = 0;
+    if (feesQuote) {
+      const rawFeeA = feesQuote.feeOwedA ?? feesQuote.feeA ?? feesQuote.fee_a ?? 0;
+      const rawFeeB = feesQuote.feeOwedB ?? feesQuote.feeB ?? feesQuote.fee_b ?? 0;
+      feeA = toUiAmount(rawFeeA, this.poolState.decimalsA);
+      feeB = toUiAmount(rawFeeB, this.poolState.decimalsB);
+    } else {
+      const rawFeeA = data.feeOwedA ?? data.feesOwedA ?? data.feeOwedTokenA ?? data.feeOwed0 ?? 0;
+      const rawFeeB = data.feeOwedB ?? data.feesOwedB ?? data.feeOwedTokenB ?? data.feeOwed1 ?? 0;
+      feeA = normalizeTokenAmount(rawFeeA, this.poolState.decimalsA);
+      feeB = normalizeTokenAmount(rawFeeB, this.poolState.decimalsB);
+    }
+    return { tokenA, tokenB, feeA, feeB };
+  }
+
+  private async getCollectFeesQuote(positionData: any, poolData: any, tokenExtensionCtx: any): Promise<any | null> {
+    if (!this.poolState) {
+      return null;
+    }
+    if (typeof (whirlpools as any).collectFeesQuote !== "function") {
+      return null;
+    }
+
+    const programId = (whirlpools as any).ORCA_WHIRLPOOL_PROGRAM_ID ?? (whirlpools as any).WHIRLPOOL_PROGRAM_ID;
+    if (!programId) {
+      return null;
+    }
+
+    const tickLowerIndex = positionData?.tickLowerIndex;
+    const tickUpperIndex = positionData?.tickUpperIndex;
+    const tickSpacing = poolData?.tickSpacing ?? this.poolState.tickSpacing;
+    if (tickLowerIndex == null || tickUpperIndex == null || tickSpacing == null) {
+      return null;
+    }
+
+    try {
+      const [tickLower, tickUpper] = await Promise.all([
+        this.getTickData(tickLowerIndex, tickSpacing, programId),
+        this.getTickData(tickUpperIndex, tickSpacing, programId)
+      ]);
+      if (!tickLower || !tickUpper) {
+        return null;
+      }
+      return (whirlpools as any).collectFeesQuote({
+        whirlpool: poolData,
+        position: positionData,
+        tickLower,
+        tickUpper,
+        tokenExtensionCtx
+      });
+    } catch (err) {
+      logger.warn({ err }, "failed to compute collectFeesQuote");
+      return null;
+    }
+  }
+
+  private async getTickData(tickIndex: number, tickSpacing: number, programId: PublicKey): Promise<any | null> {
+    if (!this.poolState) {
+      return null;
+    }
+    if (!this.ctx?.fetcher) {
+      return null;
+    }
+    const poolAddress = this.poolState.poolAddress;
+    let tickArrayPda: any;
+    try {
+      if (typeof (whirlpools as any).TickUtil?.getPdaWithTickIndex === "function") {
+        tickArrayPda = (whirlpools as any).TickUtil.getPdaWithTickIndex(
+          tickIndex,
+          tickSpacing,
+          poolAddress,
+          programId
+        );
+      } else if (typeof (whirlpools as any).PDAUtil?.getTickArrayFromTickIndex === "function") {
+        tickArrayPda = (whirlpools as any).PDAUtil.getTickArrayFromTickIndex(
+          tickIndex,
+          tickSpacing,
+          poolAddress,
+          programId
+        );
+      } else if (typeof (whirlpools as any).PDAUtil?.getTickArray === "function"
+        && typeof (whirlpools as any).TickUtil?.getStartTickIndex === "function") {
+        const startTick = (whirlpools as any).TickUtil.getStartTickIndex(tickIndex, tickSpacing);
+        tickArrayPda = (whirlpools as any).PDAUtil.getTickArray(
+          programId,
+          poolAddress,
+          startTick
+        );
+      } else {
+        return null;
+      }
+      const tickArrayAddress = tickArrayPda?.publicKey ?? tickArrayPda;
+      const ignoreCache = (whirlpools as any).IGNORE_CACHE;
+      const tickArray = await this.ctx.fetcher.getTickArray(tickArrayAddress, ignoreCache);
+      const tickArrayData = tickArray?.getData?.() ?? tickArray;
+      if (!tickArrayData) {
+        return null;
+      }
+      if (typeof (whirlpools as any).TickUtil?.getTickFromTickArrayData === "function") {
+        return (whirlpools as any).TickUtil.getTickFromTickArrayData(
+          tickArrayData,
+          tickIndex,
+          tickSpacing
+        );
+      }
+      if (typeof (whirlpools as any).TickArrayUtil?.getTickFromArray === "function") {
+        return (whirlpools as any).TickArrayUtil.getTickFromArray(
+          tickArrayData,
+          tickIndex,
+          tickSpacing
+        );
+      }
+      return null;
+    } catch (err) {
+      logger.warn({ err }, "failed to fetch tick data");
+      return null;
+    }
   }
 
   private getTicksForRange(range: Range): { lowerTick: number; upperTick: number } {
@@ -1074,6 +1534,29 @@ export class OrcaBot {
 
     throw new Error("Unsupported transaction object; update src/orca.ts for your SDK version");
   }
+}
+
+function normalizeTokenAmount(raw: any, decimals: number): number {
+  if (raw == null) {
+    return 0;
+  }
+  if (typeof raw === "number") {
+    return raw;
+  }
+  if (typeof raw === "bigint") {
+    return Number(raw) / 10 ** decimals;
+  }
+  if (typeof raw === "string") {
+    const num = Number(raw);
+    return Number.isFinite(num) ? num / 10 ** decimals : 0;
+  }
+  if (typeof raw?.toArrayLike === "function") {
+    return toNumber(common.DecimalUtil.fromBN(raw, decimals));
+  }
+  if (typeof raw?.toNumber === "function" && typeof raw?.toFixed === "function") {
+    return raw.toNumber();
+  }
+  return toNumber(raw);
 }
 
 function toNumber(value: any): number {

@@ -65,6 +65,7 @@
           <button id="startBtn" class="primary">Iniciar</button>
           <button id="stopBtn" class="ghost">Parar</button>
           <button id="closeBtn" class="danger">Fechar posição</button>
+          <button id="topupBtn" class="ghost">Top-up SOL</button>
           <span id="statusBadge" class="badge">Desconhecido</span>
         </div>
         <div class="grid">
@@ -143,7 +144,10 @@
       <section class="panel">
         <div class="row row-between tight">
           <h2>Histórico da pool selecionada</h2>
-          <button id="clearHistoryBtn" class="ghost danger">Limpar histórico</button>
+          <div class="row tight">
+            <button id="exportHistoryBtn" class="ghost">Exportar CSV</button>
+            <button id="clearHistoryBtn" class="ghost danger">Limpar histórico</button>
+          </div>
         </div>
         <div class="table-wrap">
           <table>
@@ -154,17 +158,14 @@
                 <th>Preço</th>
                 <th>Faixa alvo</th>
                 <th>Mint posição</th>
-                <th>Entrada A</th>
-                <th>Entrada B</th>
-                <th>Saída A</th>
-                <th>Saída B</th>
-                <th>Valor (SOL)</th>
-                <th>PnL (SOL)</th>
-                <th>PnL Δ (USD)</th>
+                <th>Entrada (USD)</th>
+                <th>Taxas (USD)</th>
+                <th>Saída (USD)</th>
+                <th>PnL (USD)</th>
               </tr>
             </thead>
             <tbody id="historyBody">
-              <tr><td colspan="12">Sem eventos ainda</td></tr>
+              <tr><td colspan="9">Sem eventos ainda</td></tr>
             </tbody>
           </table>
         </div>
