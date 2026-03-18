@@ -36,6 +36,7 @@ export type BotStatus = {
   running: boolean;
   lastAction: string | null;
   lastError: string | null;
+  lastActionFeeLamports: number | null;
   lastPrice: number | null;
   solUsdPrice: number | null;
   budgetUsd: number | null;
@@ -87,6 +88,7 @@ export class OrcaBot {
   private initialPositionValueSol: number | null = null;
   private positionEntryUsd: number | null = null;
   private lastPositionValueUsdWithFees: number | null = null;
+  private actionFeeLamports: number | null = null;
   private outOfRangeSince: number | null = null;
   private lastRebalanceAt: number | null = null;
   private missingPositionSince: number | null = null;
@@ -94,6 +96,7 @@ export class OrcaBot {
     running: false,
     lastAction: null,
     lastError: null,
+    lastActionFeeLamports: null,
     lastPrice: null,
     solUsdPrice: null,
     budgetUsd: null,
@@ -150,6 +153,7 @@ export class OrcaBot {
     this.lastStatus.eventPositionEntryUsd = null;
     this.lastStatus.eventPositionFeesUsd = null;
     this.lastStatus.eventPositionExitUsd = null;
+    this.resetActionFee();
     await this.refreshPoolState();
 
     const solBalance = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
@@ -163,7 +167,27 @@ export class OrcaBot {
       const finalSol = this.lastStatus.solBalance ?? solBalance;
       if (finalSol < this.config.minSolBalance) {
         logger.warn({ solBalance: finalSol, reason: topupResult.reason }, "SOL balance below minSolBalance; skipping");
+        await this.loadExistingPosition();
+        if (this.currentPosition) {
+          const price = await this.getCurrentPrice();
+          const range = calculateRange(price, this.config.rangeWidthPct);
+          const solUsdPrice = await this.tryGetSolUsdPrice();
+          this.lastStatus.lastPrice = price;
+          this.lastStatus.targetRange = range;
+          this.lastStatus.solUsdPrice = solUsdPrice;
+          this.lastStatus.budgetUsd = this.config.budgetUsd;
+          this.lastStatus.budgetSol = solUsdPrice && this.config.budgetUsd
+            ? this.config.budgetUsd / solUsdPrice
+            : null;
+          this.lastStatus.positionRange = await this.getPositionRange(this.currentPosition);
+          this.lastStatus.positionMint = this.currentPositionMint;
+          await this.updatePortfolioSnapshot(price, solUsdPrice);
+          this.lastStatus.lastAction = "skip-low-sol-position";
+          return this.getStatus();
+        }
         this.lastStatus.lastAction = "skip-low-sol";
+        this.lastStatus.positionRange = null;
+        this.lastStatus.positionMint = this.currentPositionMint;
         return this.getStatus();
       }
     }
@@ -290,6 +314,7 @@ export class OrcaBot {
     this.lastStatus.eventPositionEntryUsd = null;
     this.lastStatus.eventPositionFeesUsd = null;
     this.lastStatus.eventPositionExitUsd = null;
+    this.resetActionFee();
     await this.refreshPoolState();
 
     const price = await this.getCurrentPrice();
@@ -322,6 +347,7 @@ export class OrcaBot {
 
   async topUpSolNow(): Promise<{ ok: boolean; reason?: string }> {
     this.lastStatus.running = true;
+    this.resetActionFee();
     await this.refreshPoolState();
     const solBalance = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
     this.lastStatus.solBalance = solBalance;
@@ -413,6 +439,7 @@ export class OrcaBot {
       return;
     }
 
+    const previousMint = this.currentPositionMint;
     let foundPosition: any | null = null;
     let foundMint: string | null = null;
 
@@ -449,6 +476,10 @@ export class OrcaBot {
           continue;
         }
       }
+    }
+
+    if (foundMint && foundMint !== previousMint) {
+      this.resetPositionAnchors();
     }
 
     this.currentPosition = foundPosition;
@@ -618,19 +649,18 @@ export class OrcaBot {
 
         const tx = openResult.transaction ?? openResult.tx ?? openResult;
         const positionMint = openResult.positionMint ?? openResult.positionMintAddress;
-        const executed = await this.executeTx(tx, "open-position");
+        const execution = await this.executeTx(tx, "open-position");
+        const executed = execution.ok;
 
-        if (executed && positionMint) {
-          this.currentPositionMint = positionMint.toString();
-          this.missingPositionSince = Date.now();
-          this.currentPosition = await this.fetchPositionByMint(this.currentPositionMint!);
-          if (this.currentPosition) {
-            this.missingPositionSince = null;
+          if (executed && positionMint) {
+            this.currentPositionMint = positionMint.toString();
+            this.missingPositionSince = Date.now();
+            this.currentPosition = await this.fetchPositionByMint(this.currentPositionMint!);
+            if (this.currentPosition) {
+              this.missingPositionSince = null;
+            }
+            this.resetPositionAnchors();
           }
-          this.initialPositionValue = null;
-          this.initialPositionValueSol = null;
-          this.positionEntryUsd = null;
-        }
         return executed ? "open-position" : "dry-run-open";
       } catch (err) {
         if (isPriceSlippageError(err) && attempt < 2) {
@@ -875,8 +905,8 @@ export class OrcaBot {
     }
 
     const tx = swapResult.transaction ?? swapResult.tx ?? swapResult;
-    await this.executeTx(tx, "swap");
-    return true;
+    const execution = await this.executeTx(tx, "swap");
+    return execution.ok || this.config.dryRun;
   }
 
   private async closePosition(position: any): Promise<void> {
@@ -936,9 +966,7 @@ export class OrcaBot {
       await this.executeTx(tx, "close-position");
     }
 
-    this.initialPositionValue = null;
-    this.initialPositionValueSol = null;
-    this.positionEntryUsd = null;
+    this.resetPositionAnchors();
   }
 
   private captureCloseSnapshot(): void {
@@ -1203,6 +1231,8 @@ export class OrcaBot {
     const signed = await this.wallet.signTransaction(tx);
     const sig = await this.connection.sendRawTransaction(signed.serialize(), { maxRetries: 2 });
     await this.connection.confirmTransaction(sig, "confirmed");
+    const feeLamports = await this.fetchTxFeeLamports(sig);
+    this.addActionFee(feeLamports);
     return sig;
   }
 
@@ -1315,11 +1345,24 @@ export class OrcaBot {
     this.lastPositionValueUsdWithFees = positionValueUsdWithFees;
 
     if (positionValueUsdWithFees != null) {
-      if (this.positionEntryUsd === null) {
-        this.positionEntryUsd = positionValueUsdWithFees;
+      const budgetUsd = this.config.budgetUsd ?? null;
+      const portfolioUsd = this.lastStatus.portfolioUsd ?? null;
+      if (this.positionEntryUsd != null
+        && !isEntryUsdSane(this.positionEntryUsd, budgetUsd, portfolioUsd)) {
+        this.positionEntryUsd = null;
       }
-      this.lastStatus.positionEntryUsd = this.positionEntryUsd;
-      this.lastStatus.positionPnlUsd = positionValueUsdWithFees - this.positionEntryUsd;
+      if (this.positionEntryUsd == null) {
+        if (isEntryUsdSane(positionValueUsdWithFees, budgetUsd, portfolioUsd)) {
+          this.positionEntryUsd = positionValueUsdWithFees;
+        }
+      }
+      if (this.positionEntryUsd != null) {
+        this.lastStatus.positionEntryUsd = this.positionEntryUsd;
+        this.lastStatus.positionPnlUsd = positionValueUsdWithFees - this.positionEntryUsd;
+      } else {
+        this.lastStatus.positionEntryUsd = null;
+        this.lastStatus.positionPnlUsd = null;
+      }
     } else {
       this.lastStatus.positionEntryUsd = null;
       this.lastStatus.positionPnlUsd = null;
@@ -1514,25 +1557,74 @@ export class OrcaBot {
     return { lowerTick, upperTick };
   }
 
-  private async executeTx(tx: any, label: string): Promise<boolean> {
+  private async executeTx(
+    tx: any,
+    label: string
+  ): Promise<{ ok: boolean; sig: string | null; feeLamports: number | null }> {
     if (this.config.dryRun) {
       logger.info({ label }, "dry-run enabled; skipping transaction execution");
-      return false;
+      return { ok: false, sig: null, feeLamports: null };
     }
 
     if (typeof tx.buildAndExecute === "function") {
-      const sig = await tx.buildAndExecute();
+      const sigResult = await tx.buildAndExecute();
+      const sig = sigResult ? String(sigResult) : null;
       logger.info({ label, sig }, "transaction executed");
-      return true;
+      const feeLamports = sig ? await this.fetchTxFeeLamports(sig) : null;
+      this.addActionFee(feeLamports);
+      return { ok: true, sig, feeLamports };
     }
 
     if (typeof tx.execute === "function") {
-      const sig = await tx.execute();
+      const sigResult = await tx.execute();
+      const sig = sigResult ? String(sigResult) : null;
       logger.info({ label, sig }, "transaction executed");
-      return true;
+      const feeLamports = sig ? await this.fetchTxFeeLamports(sig) : null;
+      this.addActionFee(feeLamports);
+      return { ok: true, sig, feeLamports };
     }
 
     throw new Error("Unsupported transaction object; update src/orca.ts for your SDK version");
+  }
+
+  private resetActionFee(): void {
+    this.actionFeeLamports = null;
+    this.lastStatus.lastActionFeeLamports = null;
+  }
+
+  private resetPositionAnchors(): void {
+    this.initialPositionValue = null;
+    this.initialPositionValueSol = null;
+    this.positionEntryUsd = null;
+    this.lastPositionValueUsdWithFees = null;
+    this.lastStatus.positionEntryUsd = null;
+    this.lastStatus.positionPnlUsd = null;
+  }
+
+  private addActionFee(feeLamports: number | null): void {
+    if (feeLamports == null) {
+      return;
+    }
+    this.actionFeeLamports = (this.actionFeeLamports ?? 0) + feeLamports;
+    this.lastStatus.lastActionFeeLamports = this.actionFeeLamports;
+  }
+
+  private async fetchTxFeeLamports(signature: string): Promise<number | null> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const tx = await this.connection.getTransaction(signature, {
+          commitment: "confirmed",
+          maxSupportedTransactionVersion: 0
+        });
+        if (tx?.meta?.fee != null) {
+          return tx.meta.fee;
+        }
+      } catch (err) {
+        logger.warn({ err, signature }, "failed to fetch transaction fee");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+    }
+    return null;
   }
 }
 
@@ -1601,6 +1693,24 @@ function toUiAmount(value: any, decimals: number): number {
   } catch {
     return toNumber(value);
   }
+}
+
+function isEntryUsdSane(entryUsd: number, budgetUsd: number | null, portfolioUsd: number | null): boolean {
+  if (!Number.isFinite(entryUsd) || entryUsd < 0) {
+    return false;
+  }
+  const budget = Number.isFinite(budgetUsd ?? NaN) ? Number(budgetUsd) : null;
+  const portfolio = Number.isFinite(portfolioUsd ?? NaN) ? Number(portfolioUsd) : null;
+  if (budget != null && budget > 0 && entryUsd > budget * 10) {
+    return false;
+  }
+  if (portfolio != null && portfolio > 0 && entryUsd > portfolio * 10) {
+    return false;
+  }
+  if ((budget == null || budget <= 0) && (portfolio == null || portfolio <= 0) && entryUsd > 1_000_000) {
+    return false;
+  }
+  return true;
 }
 
 function stringifyError(err: unknown): string {
