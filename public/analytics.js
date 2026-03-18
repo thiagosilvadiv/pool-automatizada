@@ -4,6 +4,8 @@ const endInput = document.getElementById("endDate");
 const applyBtn = document.getElementById("applyFilter");
 const errorBox = document.getElementById("analyticsError");
 const historyBody = document.getElementById("historyBody");
+const analyticsColumnFilters = document.getElementById("analyticsColumnFilters");
+const analyticsRowLimitSelect = document.getElementById("analyticsRowLimit");
 
 const summaryEvents = document.getElementById("summaryEvents");
 const summaryOpens = document.getElementById("summaryOpens");
@@ -31,6 +33,33 @@ const actionLabels = {
   "skip-low-sol-position": "posição existente (SOL baixo)",
   "swap": "swap"
 };
+
+const actionTypeLabels = {
+  "abertura": "Abertura",
+  "fechamento": "Fechamento",
+  "fechamento + abertura": "Fechamento + abertura",
+  "monitorando": "Monitorando",
+  "operacional": "Operacional"
+};
+
+const analyticsColumnDefaults = {
+  datetime: true,
+  openAt: true,
+  close: true,
+  type: true,
+  action: true,
+  price: true,
+  targetRange: true,
+  mint: true,
+  entryUsd: true,
+  feesUsd: true,
+  txFeeUsd: true,
+  exitUsd: true,
+  pnlUsd: true
+};
+
+let analyticsColumnVisibility = loadAnalyticsColumnVisibility();
+let analyticsRowLimit = loadAnalyticsRowLimit();
 
 function formatRange(range) {
   if (!range) return "-";
@@ -79,8 +108,8 @@ function formatTimestamp(value) {
 
 function formatCloseTimestamp(item) {
   if (!item) return "-";
-  if (item.action !== "close-position") return "-";
-  return formatTimestamp(item.timestamp);
+  if (!item.positionClosedAt) return "-";
+  return formatTimestamp(item.positionClosedAt);
 }
 
 function toDateInputValue(date) {
@@ -104,28 +133,33 @@ async function fetchHistory(poolId) {
 
 function renderHistory(items) {
   if (!items || items.length === 0) {
-    historyBody.innerHTML = "<tr><td colspan=\"11\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"12\">Sem eventos ainda</td></tr>";
     return;
   }
-  const rows = items.slice(0, 100).map((item) => {
+  const limit = analyticsRowLimit ?? 30;
+  const rows = items.slice(0, limit).map((item) => {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
+    const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
     return `
       <tr>
-        <td>${formatTimestamp(item.timestamp)}</td>
-        <td>${formatCloseTimestamp(item)}</td>
-        <td>${actionLabel}</td>
-        <td>${formatNumber(item.price, 8)}</td>
-        <td>${formatRange(item.targetRange)}</td>
-        <td>${item.positionMint ?? "-"}</td>
-        <td>${formatNumber(item.positionEntryUsd, 2)}</td>
-        <td>${formatNumber(item.positionFeesUsd, 2)}</td>
-        <td>${formatNumber(item.txFeeUsd, 6)}</td>
-        <td>${formatNumber(item.positionExitUsd, 2)}</td>
-        <td>${formatNumber(item.positionPnlUsd, 2)}</td>
+        <td data-col="datetime">${formatTimestamp(item.timestamp)}</td>
+        <td data-col="openAt">${formatTimestamp(item.positionOpenedAt)}</td>
+        <td data-col="close">${formatCloseTimestamp(item)}</td>
+        <td data-col="type">${typeLabel}</td>
+        <td data-col="action">${actionLabel}</td>
+        <td data-col="price">${formatNumber(item.price, 8)}</td>
+        <td data-col="targetRange">${formatRange(item.targetRange)}</td>
+        <td data-col="mint">${item.positionMint ?? "-"}</td>
+        <td data-col="entryUsd">${formatNumber(item.positionEntryUsd, 2)}</td>
+        <td data-col="feesUsd">${formatNumber(item.positionFeesUsd, 2)}</td>
+        <td data-col="txFeeUsd">${formatNumber(item.txFeeUsd, 6)}</td>
+        <td data-col="exitUsd">${formatNumber(item.positionExitUsd, 2)}</td>
+        <td data-col="pnlUsd">${formatNumber(item.positionPnlUsd, 2)}</td>
       </tr>
     `;
   });
   historyBody.innerHTML = rows.join("");
+  applyAnalyticsColumnVisibility();
 }
 
 function updateSummary(items) {
@@ -168,6 +202,57 @@ function updateSummary(items) {
   summaryInB.textContent = formatNumber(inB, 6);
   summaryOutA.textContent = formatNumber(outA, 6);
   summaryOutB.textContent = formatNumber(outB, 6);
+}
+
+function loadAnalyticsColumnVisibility() {
+  const raw = localStorage.getItem("analyticsColumnVisibility");
+  if (!raw) return { ...analyticsColumnDefaults };
+  try {
+    const parsed = JSON.parse(raw);
+    return { ...analyticsColumnDefaults, ...parsed };
+  } catch {
+    return { ...analyticsColumnDefaults };
+  }
+}
+
+function saveAnalyticsColumnVisibility() {
+  localStorage.setItem("analyticsColumnVisibility", JSON.stringify(analyticsColumnVisibility));
+}
+
+function applyAnalyticsColumnVisibility() {
+  if (!analyticsColumnVisibility) return;
+  Object.entries(analyticsColumnVisibility).forEach(([col, visible]) => {
+    document.querySelectorAll(`[data-col="${col}"]`).forEach((el) => {
+      el.classList.toggle("col-hidden", !visible);
+    });
+  });
+  syncAnalyticsColumnControls();
+}
+
+function syncAnalyticsColumnControls() {
+  if (!analyticsColumnFilters) return;
+  analyticsColumnFilters.querySelectorAll("input[data-col]").forEach((input) => {
+    if (!(input instanceof HTMLInputElement)) return;
+    const col = input.getAttribute("data-col");
+    if (!col) return;
+    input.checked = analyticsColumnVisibility[col] !== false;
+  });
+}
+
+function loadAnalyticsRowLimit() {
+  const raw = localStorage.getItem("analyticsRowLimit");
+  if (!raw) return 30;
+  const parsed = Number(raw);
+  return [10, 20, 30].includes(parsed) ? parsed : 30;
+}
+
+function saveAnalyticsRowLimit() {
+  localStorage.setItem("analyticsRowLimit", String(analyticsRowLimit));
+}
+
+function syncAnalyticsRowLimit() {
+  if (!analyticsRowLimitSelect) return;
+  analyticsRowLimitSelect.value = String(analyticsRowLimit ?? 30);
 }
 
 async function refresh() {
@@ -215,9 +300,32 @@ poolSelect.addEventListener("change", () => {
   refresh();
 });
 
+if (analyticsColumnFilters) {
+  analyticsColumnFilters.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    const col = target.getAttribute("data-col");
+    if (!col) return;
+    analyticsColumnVisibility = { ...analyticsColumnVisibility, [col]: target.checked };
+    saveAnalyticsColumnVisibility();
+    applyAnalyticsColumnVisibility();
+  });
+}
+
+if (analyticsRowLimitSelect) {
+  analyticsRowLimitSelect.addEventListener("change", () => {
+    const value = Number(analyticsRowLimitSelect.value);
+    analyticsRowLimit = [10, 20, 30].includes(value) ? value : 30;
+    saveAnalyticsRowLimit();
+    refresh();
+  });
+}
+
 const now = new Date();
 const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 startInput.value = toDateInputValue(weekAgo);
 endInput.value = toDateInputValue(now);
 
 refresh();
+applyAnalyticsColumnVisibility();
+syncAnalyticsRowLimit();

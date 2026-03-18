@@ -17,6 +17,10 @@ export type Config = {
   autoSolSlippageBps: number;
   autoSolCooldownSec: number;
   autoSolTargetBufferPct: number;
+  autoCloseEmptyAccountsEnabled: boolean;
+  autoCloseEmptyAccountsIntervalSec: number;
+  autoCloseEmptyAccountsOnLowSol: boolean;
+  autoCloseEmptyAccountsLowSolCooldownSec: number;
   jupiterApiKey: string | null;
   jupiterApiUrl: string;
   dryRun: boolean;
@@ -88,6 +92,14 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     autoSolCooldownSec: parseEnvNumber(process.env.AUTO_SOL_COOLDOWN_SEC) ?? Number(data.autoSolCooldownSec ?? 60),
     autoSolTargetBufferPct: parseEnvNumber(process.env.AUTO_SOL_TARGET_BUFFER_PCT)
       ?? (data.autoSolTargetBufferPct == null ? 0 : Number(data.autoSolTargetBufferPct)),
+    autoCloseEmptyAccountsEnabled: parseEnvBool(process.env.AUTO_CLOSE_EMPTY_ACCOUNTS_ENABLED)
+      ?? Boolean(data.autoCloseEmptyAccountsEnabled ?? false),
+    autoCloseEmptyAccountsIntervalSec: parseEnvNumber(process.env.AUTO_CLOSE_EMPTY_ACCOUNTS_INTERVAL_SEC)
+      ?? Number(data.autoCloseEmptyAccountsIntervalSec ?? 43200),
+    autoCloseEmptyAccountsOnLowSol: parseEnvBool(process.env.AUTO_CLOSE_EMPTY_ACCOUNTS_ON_LOW_SOL)
+      ?? Boolean(data.autoCloseEmptyAccountsOnLowSol ?? true),
+    autoCloseEmptyAccountsLowSolCooldownSec: parseEnvNumber(process.env.AUTO_CLOSE_EMPTY_ACCOUNTS_LOW_SOL_COOLDOWN_SEC)
+      ?? Number(data.autoCloseEmptyAccountsLowSolCooldownSec ?? 1800),
     jupiterApiKey: process.env.JUPITER_API_KEY ?? data.jupiterApiKey ?? null,
     jupiterApiUrl: process.env.JUPITER_API_URL ?? data.jupiterApiUrl ?? "https://api.jup.ag",
     dryRun: parseEnvBool(process.env.DRY_RUN) ?? Boolean(data.dryRun ?? false),
@@ -137,6 +149,13 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.autoSolTargetBufferPct) || config.autoSolTargetBufferPct < 0 || config.autoSolTargetBufferPct > 1) {
     throw new Error("autoSolTargetBufferPct must be between 0 and 1");
+  }
+  if (!Number.isFinite(config.autoCloseEmptyAccountsIntervalSec) || config.autoCloseEmptyAccountsIntervalSec <= 0) {
+    throw new Error("autoCloseEmptyAccountsIntervalSec must be > 0");
+  }
+  if (!Number.isFinite(config.autoCloseEmptyAccountsLowSolCooldownSec)
+    || config.autoCloseEmptyAccountsLowSolCooldownSec <= 0) {
+    throw new Error("autoCloseEmptyAccountsLowSolCooldownSec must be > 0");
   }
   if (!Number.isFinite(config.minSolBalance) || config.minSolBalance < 0) {
     throw new Error("minSolBalance must be >= 0");

@@ -56,6 +56,7 @@ export async function startServer(config: Config): Promise<void> {
 
   const poolManager = new PoolManager(config, connection, wallet);
   await poolManager.init();
+  poolManager.startAutoCloseEmptyAccounts();
 
   app.get("/api/status", (_req: Request, res: Response) => {
     const status = poolManager.getSelectedStatus();
@@ -97,6 +98,15 @@ export async function startServer(config: Config): Promise<void> {
     try {
       const result = await poolManager.topUpSolSelected();
       res.json({ ok: result.ok, reason: result.reason, status: poolManager.getSelectedStatus() });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post("/api/close-empty-accounts", async (_req: Request, res: Response) => {
+    try {
+      const result = await poolManager.closeEmptyTokenAccounts();
+      res.json({ ok: true, ...result });
     } catch (err) {
       res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
     }

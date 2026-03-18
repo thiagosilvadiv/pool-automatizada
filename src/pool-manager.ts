@@ -1,6 +1,7 @@
 import path from "path";
 import { fileURLToPath } from "url";
-import { PublicKey } from "@solana/web3.js";
+import { PublicKey, Transaction } from "@solana/web3.js";
+import { createCloseAccountInstruction, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import { Config } from "./config.js";
 import { OrcaBot } from "./orca.js";
@@ -40,6 +41,13 @@ export type PoolSummary = {
   overrides: PoolOverrides | null;
 };
 
+export type CloseEmptyAccountsResult = {
+  closedCount: number;
+  failedCount: number;
+  reclaimedLamports: number;
+  signatures: string[];
+};
+
 type PoolRecord = {
   entry: PoolEntry;
   runner: BotRunner;
@@ -54,6 +62,9 @@ export class PoolManager {
   private entries: PoolEntry[] = [];
   private selectedPoolId: string | null = null;
   private pendingAdds = new Set<string>();
+  private autoCloseTimer: NodeJS.Timeout | null = null;
+  private closeEmptyInFlight = false;
+  private lastLowSolAutoCloseAt: number | null = null;
 
   constructor(baseConfig: Config, connection: any, wallet: any) {
     this.baseConfig = baseConfig;
@@ -262,6 +273,128 @@ export class PoolManager {
     return { ok: result.ok, reason: result.reason };
   }
 
+  startAutoCloseEmptyAccounts(): void {
+    if (!this.baseConfig.autoCloseEmptyAccountsEnabled) {
+      return;
+    }
+    const intervalMs = Math.max(1, this.baseConfig.autoCloseEmptyAccountsIntervalSec) * 1000;
+    if (this.autoCloseTimer) {
+      clearInterval(this.autoCloseTimer);
+    }
+    this.autoCloseTimer = setInterval(() => {
+      void this.runAutoCloseEmptyAccounts();
+    }, intervalMs);
+  }
+
+  async closeEmptyTokenAccounts(): Promise<CloseEmptyAccountsResult> {
+    if (this.closeEmptyInFlight) {
+      throw new Error("close-empty-accounts already running");
+    }
+    this.closeEmptyInFlight = true;
+    try {
+      const owner = this.wallet.publicKey;
+      const ownerBase58 = owner.toBase58();
+      const accounts = await this.connection.getParsedTokenAccountsByOwner(
+        owner,
+        { programId: TOKEN_PROGRAM_ID }
+      );
+
+      const candidates = accounts.value.filter((acct: any) => {
+        const info = acct?.account?.data?.parsed?.info;
+        if (!info || info.owner !== ownerBase58) {
+          return false;
+        }
+        const amountStr = String(info.tokenAmount?.amount ?? "0");
+        if (amountStr !== "0") {
+          return false;
+        }
+        const closeAuthority = info.closeAuthority ?? null;
+        if (closeAuthority && closeAuthority !== ownerBase58) {
+          return false;
+        }
+        return true;
+      });
+
+      let closedCount = 0;
+      let failedCount = 0;
+      let reclaimedLamports = 0;
+      const signatures: string[] = [];
+
+      for (const acct of candidates) {
+        const accountPubkey = acct.pubkey as PublicKey;
+        const lamports = Number(acct?.account?.lamports ?? 0);
+        try {
+          const { blockhash } = await this.connection.getLatestBlockhash("confirmed");
+          const tx = new Transaction({
+            feePayer: owner,
+            recentBlockhash: blockhash
+          }).add(createCloseAccountInstruction(accountPubkey, owner, owner));
+          const signed = await this.wallet.signTransaction(tx);
+          const sig = await this.connection.sendRawTransaction(signed.serialize(), { maxRetries: 2 });
+          await this.connection.confirmTransaction(sig, "confirmed");
+          closedCount += 1;
+          reclaimedLamports += lamports;
+          signatures.push(sig);
+        } catch (err) {
+          failedCount += 1;
+          logger.warn({ err, account: accountPubkey.toBase58() }, "failed to close empty token account");
+        }
+      }
+
+      return { closedCount, failedCount, reclaimedLamports, signatures };
+    } finally {
+      this.closeEmptyInFlight = false;
+    }
+  }
+
+  async maybeCloseEmptyAccountsOnLowSol(): Promise<void> {
+    if (!this.baseConfig.autoCloseEmptyAccountsOnLowSol) {
+      return;
+    }
+    if (this.closeEmptyInFlight) {
+      return;
+    }
+    const now = Date.now();
+    const cooldownMs = Math.max(1, this.baseConfig.autoCloseEmptyAccountsLowSolCooldownSec) * 1000;
+    if (this.lastLowSolAutoCloseAt && now - this.lastLowSolAutoCloseAt < cooldownMs) {
+      logger.info({ cooldownSec: this.baseConfig.autoCloseEmptyAccountsLowSolCooldownSec }, "low-sol auto-close cooldown active");
+      return;
+    }
+    this.lastLowSolAutoCloseAt = now;
+    try {
+      const result = await this.closeEmptyTokenAccounts();
+      logger.info(
+        {
+          closedCount: result.closedCount,
+          failedCount: result.failedCount,
+          reclaimedLamports: result.reclaimedLamports
+        },
+        "low-sol auto-close empty token accounts complete"
+      );
+    } catch (err) {
+      logger.warn({ err }, "low-sol auto-close empty token accounts failed");
+    }
+  }
+
+  private async runAutoCloseEmptyAccounts(): Promise<void> {
+    if (this.closeEmptyInFlight) {
+      return;
+    }
+    try {
+      const result = await this.closeEmptyTokenAccounts();
+      logger.info(
+        {
+          closedCount: result.closedCount,
+          failedCount: result.failedCount,
+          reclaimedLamports: result.reclaimedLamports
+        },
+        "auto-close empty token accounts complete"
+      );
+    } catch (err) {
+      logger.warn({ err }, "auto-close empty token accounts failed");
+    }
+  }
+
   getSelectedStatus(): ReturnType<BotRunner["getStatus"]> | null {
     if (!this.selectedPoolId) {
       return null;
@@ -355,7 +488,10 @@ export class PoolManager {
     const bot = await OrcaBot.create({
       connection: this.connection,
       wallet: this.wallet,
-      config: poolConfig
+      config: poolConfig,
+      onLowSol: async () => {
+        await this.maybeCloseEmptyAccountsOnLowSol();
+      }
     });
     const historyStore = await createHistoryStore(entry.id);
     const runner = new BotRunner(bot, poolConfig, { historyStore });

@@ -18,6 +18,7 @@ export type BotContext = {
   connection: Connection;
   wallet: WalletLike;
   config: Config;
+  onLowSol?: () => Promise<void>;
 };
 
 type PoolState = {
@@ -92,6 +93,7 @@ export class OrcaBot {
   private outOfRangeSince: number | null = null;
   private lastRebalanceAt: number | null = null;
   private missingPositionSince: number | null = null;
+  private onLowSol?: () => Promise<void>;
   private lastStatus: BotStatus = {
     running: false,
     lastAction: null,
@@ -136,6 +138,7 @@ export class OrcaBot {
     this.connection = botCtx.connection;
     this.wallet = botCtx.wallet;
     this.config = botCtx.config;
+    this.onLowSol = botCtx.onLowSol;
   }
 
   static async create(botCtx: BotContext): Promise<OrcaBot> {
@@ -164,7 +167,19 @@ export class OrcaBot {
         const refreshed = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
         this.lastStatus.solBalance = refreshed;
       }
-      const finalSol = this.lastStatus.solBalance ?? solBalance;
+      let finalSol = this.lastStatus.solBalance ?? solBalance;
+      if (finalSol < this.config.minSolBalance) {
+        if (this.onLowSol) {
+          try {
+            await this.onLowSol();
+            const refreshed = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
+            this.lastStatus.solBalance = refreshed;
+            finalSol = refreshed;
+          } catch (err) {
+            logger.warn({ err }, "low-sol auto-close failed");
+          }
+        }
+      }
       if (finalSol < this.config.minSolBalance) {
         logger.warn({ solBalance: finalSol, reason: topupResult.reason }, "SOL balance below minSolBalance; skipping");
         await this.loadExistingPosition();
@@ -507,6 +522,9 @@ export class OrcaBot {
     const data = position.getData?.() ?? position.getData;
 
     if (data?.whirlpool && new PublicKey(data.whirlpool).equals(this.poolState.poolAddress)) {
+      if (data?.liquidity && typeof data.liquidity?.isZero === "function" && data.liquidity.isZero()) {
+        return null;
+      }
       logger.info({ positionMint: mint }, "found existing position for pool");
       return position;
     }
@@ -648,19 +666,28 @@ export class OrcaBot {
         }
 
         const tx = openResult.transaction ?? openResult.tx ?? openResult;
-        const positionMint = openResult.positionMint ?? openResult.positionMintAddress;
+        const rawPositionMint = openResult.positionMint
+          ?? openResult.positionMintAddress
+          ?? openResult.positionMintKeypair?.publicKey;
+        const positionMint = rawPositionMint
+          ? typeof rawPositionMint === "string"
+            ? rawPositionMint
+            : rawPositionMint.toString()
+          : null;
         const execution = await this.executeTx(tx, "open-position");
         const executed = execution.ok;
 
-          if (executed && positionMint) {
-            this.currentPositionMint = positionMint.toString();
-            this.missingPositionSince = Date.now();
-            this.currentPosition = await this.fetchPositionByMint(this.currentPositionMint!);
-            if (this.currentPosition) {
-              this.missingPositionSince = null;
-            }
-            this.resetPositionAnchors();
+        if (executed && positionMint) {
+          this.currentPositionMint = positionMint;
+          this.missingPositionSince = Date.now();
+          this.currentPosition = await this.fetchPositionByMint(this.currentPositionMint!);
+          if (this.currentPosition) {
+            this.missingPositionSince = null;
           }
+          this.resetPositionAnchors();
+        } else if (executed) {
+          await this.loadExistingPosition();
+        }
         return executed ? "open-position" : "dry-run-open";
       } catch (err) {
         if (isPriceSlippageError(err) && attempt < 2) {
@@ -1337,6 +1364,12 @@ export class OrcaBot {
     this.lastStatus.positionFeesUsd = (feesValueSol != null && solUsdPrice)
       ? feesValueSol * solUsdPrice
       : null;
+    const budgetUsd = this.config.budgetUsd ?? null;
+    const portfolioUsd = this.lastStatus.portfolioUsd ?? null;
+    if (this.lastStatus.positionFeesUsd != null
+      && !isEntryUsdSane(this.lastStatus.positionFeesUsd, budgetUsd, portfolioUsd)) {
+      this.lastStatus.positionFeesUsd = null;
+    }
 
     const positionValueUsdWithFees = positionValueSolWithFees != null && solUsdPrice
       ? positionValueSolWithFees * solUsdPrice
@@ -1345,8 +1378,6 @@ export class OrcaBot {
     this.lastPositionValueUsdWithFees = positionValueUsdWithFees;
 
     if (positionValueUsdWithFees != null) {
-      const budgetUsd = this.config.budgetUsd ?? null;
-      const portfolioUsd = this.lastStatus.portfolioUsd ?? null;
       if (this.positionEntryUsd != null
         && !isEntryUsdSane(this.positionEntryUsd, budgetUsd, portfolioUsd)) {
         this.positionEntryUsd = null;
