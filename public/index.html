@@ -69,6 +69,7 @@
           <button id="stopBtn" class="ghost">Parar</button>
           <button id="closeBtn" class="danger">Fechar posição</button>
           <button id="topupBtn" class="ghost">Top-up SOL</button>
+          <button id="closeEmptyAccountsBtn" class="ghost">Recolher SOL (contas vazias)</button>
           <span id="statusBadge" class="badge">Desconhecido</span>
         </div>
         <div class="grid">
@@ -158,7 +159,9 @@
         <div id="historyColumnFilters" class="row wrap history-columns">
           <span class="label">Colunas:</span>
           <label><input type="checkbox" data-col="datetime" checked /> Data/Hora</label>
+          <label><input type="checkbox" data-col="openAt" checked /> Abertura</label>
           <label><input type="checkbox" data-col="close" checked /> Fechamento</label>
+          <label><input type="checkbox" data-col="type" checked /> Tipo</label>
           <label><input type="checkbox" data-col="action" checked /> Ação</label>
           <label><input type="checkbox" data-col="price" checked /> Preço</label>
           <label><input type="checkbox" data-col="targetRange" checked /> Faixa alvo</label>
@@ -168,6 +171,14 @@
           <label><input type="checkbox" data-col="txFeeUsd" checked /> Taxa TX (USD)</label>
           <label><input type="checkbox" data-col="exitUsd" checked /> Saída (USD)</label>
           <label><input type="checkbox" data-col="pnlUsd" checked /> PnL líquido (USD)</label>
+          <div class="history-limit">
+            <label for="historyRowLimit">Linhas</label>
+            <select id="historyRowLimit">
+              <option value="10">10</option>
+              <option value="20">20</option>
+              <option value="30">30</option>
+            </select>
+          </div>
         </div>
         <div class="table-wrap">
           <div class="table-scroll">
@@ -176,7 +187,9 @@
               <tr>
                 <th><input id="selectAllHistory" type="checkbox" aria-label="Selecionar todos" /></th>
                 <th data-col="datetime">Data/Hora</th>
+                <th data-col="openAt">Abertura</th>
                 <th data-col="close">Fechamento</th>
+                <th data-col="type">Tipo</th>
                 <th data-col="action">Ação</th>
                 <th data-col="price">Preço</th>
                 <th data-col="targetRange">Faixa alvo</th>
@@ -189,7 +202,7 @@
               </tr>
             </thead>
             <tbody id="historyBody">
-              <tr><td colspan="12">Sem eventos ainda</td></tr>
+              <tr><td colspan="14">Sem eventos ainda</td></tr>
             </tbody>
             </table>
           </div>

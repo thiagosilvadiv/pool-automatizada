@@ -101,6 +101,22 @@ header h1 {
   color: var(--muted);
 }
 
+.history-limit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.history-limit select {
+  background: #0f1419;
+  border: 1px solid #2c3a4a;
+  border-radius: 8px;
+  color: var(--text);
+  padding: 4px 8px;
+}
+
 .col-hidden {
   display: none;
 }

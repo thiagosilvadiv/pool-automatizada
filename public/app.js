@@ -47,16 +47,21 @@ const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const closeBtn = document.getElementById("closeBtn");
 const topupBtn = document.getElementById("topupBtn");
+const closeEmptyAccountsBtn = document.getElementById("closeEmptyAccountsBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 const exportHistoryBtn = document.getElementById("exportHistoryBtn");
 const deleteHistoryBtn = document.getElementById("deleteHistoryBtn");
 const selectAllHistory = document.getElementById("selectAllHistory");
 const historyColumnFilters = document.getElementById("historyColumnFilters");
+const historyRowLimitSelect = document.getElementById("historyRowLimit");
 
 let selectedHistoryIds = new Set();
+let historyRowLimit = loadHistoryRowLimit();
 const historyColumnDefaults = {
   datetime: true,
+  openAt: true,
   close: true,
+  type: true,
   action: true,
   price: true,
   targetRange: true,
@@ -82,6 +87,14 @@ const actionLabels = {
   "skip-low-sol": "SOL baixo",
   "skip-low-sol-position": "posição existente (SOL baixo)",
   "swap": "swap"
+};
+
+const actionTypeLabels = {
+  "abertura": "Abertura",
+  "fechamento": "Fechamento",
+  "fechamento + abertura": "Fechamento + abertura",
+  "monitorando": "Monitorando",
+  "operacional": "Operacional"
 };
 
 function formatRange(range) {
@@ -131,8 +144,8 @@ function formatTimestamp(value) {
 
 function formatCloseTimestamp(item) {
   if (!item) return "-";
-  if (item.action !== "close-position") return "-";
-  return formatTimestamp(item.timestamp);
+  if (!item.positionClosedAt) return "-";
+  return formatTimestamp(item.positionClosedAt);
 }
 
 function toCsvValue(value) {
@@ -144,7 +157,9 @@ function toCsvValue(value) {
 function buildHistoryCsv(items) {
   const header = [
     "Data/Hora",
+    "Abertura",
     "Data fechamento",
+    "Tipo",
     "Ação",
     "Preço",
     "Faixa alvo",
@@ -157,9 +172,12 @@ function buildHistoryCsv(items) {
   ];
   const rows = items.map((item) => {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
+    const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
     return [
       formatTimestamp(item.timestamp),
+      formatTimestamp(item.positionOpenedAt),
       formatCloseTimestamp(item),
+      typeLabel,
       actionLabel,
       formatNumber(item.price, 8),
       formatRange(item.targetRange),
@@ -217,13 +235,15 @@ function parseOptionalNumber(value) {
 function renderHistory(items) {
   if (!items || items.length === 0) {
     selectedHistoryIds.clear();
-    historyBody.innerHTML = "<tr><td colspan=\"12\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"13\">Sem eventos ainda</td></tr>";
     updateHistorySelectionState();
     return;
   }
+  const limit = historyRowLimit ?? 30;
   const currentIds = new Set();
-  const rows = items.slice(0, 50).map((item, index) => {
+  const rows = items.slice(0, limit).map((item, index) => {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
+    const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
     const eventId = item.id ?? `legacy-${index}`;
     currentIds.add(eventId);
     const checked = selectedHistoryIds.has(eventId) ? "checked" : "";
@@ -231,7 +251,9 @@ function renderHistory(items) {
       <tr>
         <td><input type="checkbox" class="history-select" data-id="${eventId}" ${checked}></td>
         <td data-col="datetime">${formatTimestamp(item.timestamp)}</td>
+        <td data-col="openAt">${formatTimestamp(item.positionOpenedAt)}</td>
         <td data-col="close">${formatCloseTimestamp(item)}</td>
+        <td data-col="type">${typeLabel}</td>
         <td data-col="action">${actionLabel}</td>
         <td data-col="price">${formatNumber(item.price, 8)}</td>
         <td data-col="targetRange">${formatRange(item.targetRange)}</td>
@@ -408,6 +430,28 @@ topupBtn.addEventListener("click", async () => {
   }
   updateUI();
 });
+
+if (closeEmptyAccountsBtn) {
+  closeEmptyAccountsBtn.addEventListener("click", async () => {
+    const ok = window.confirm("Fechar contas SPL vazias e recolher SOL?");
+    if (!ok) return;
+    const res = await fetch("/api/close-empty-accounts", { method: "POST" });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) {
+      const msg = data?.error ?? "Falha ao fechar contas vazias.";
+      window.alert(msg);
+      return;
+    }
+    const reclaimedSol = Number(data.reclaimedLamports ?? 0) / 1_000_000_000;
+    const message = [
+      `Fechadas: ${data.closedCount ?? 0}`,
+      `Falhas: ${data.failedCount ?? 0}`,
+      `SOL recuperado: ${formatNumber(reclaimedSol, 6)}`
+    ].join("\n");
+    window.alert(message);
+    updateUI();
+  });
+}
 
 addPoolBtn.addEventListener("click", async () => {
   const name = poolNameInput.value.trim();
@@ -645,6 +689,17 @@ function loadHistoryColumnVisibility() {
   }
 }
 
+function loadHistoryRowLimit() {
+  const raw = localStorage.getItem("historyRowLimit");
+  if (!raw) return 30;
+  const parsed = Number(raw);
+  return [10, 20, 30].includes(parsed) ? parsed : 30;
+}
+
+function saveHistoryRowLimit() {
+  localStorage.setItem("historyRowLimit", String(historyRowLimit));
+}
+
 function saveHistoryColumnVisibility() {
   localStorage.setItem("historyColumnVisibility", JSON.stringify(historyColumnVisibility));
 }
@@ -667,6 +722,11 @@ function syncHistoryColumnControls() {
     if (!col) return;
     input.checked = historyColumnVisibility[col] !== false;
   });
+}
+
+function syncHistoryRowLimit() {
+  if (!historyRowLimitSelect) return;
+  historyRowLimitSelect.value = String(historyRowLimit ?? 30);
 }
 
 historyBody.addEventListener("change", (event) => {
@@ -708,6 +768,15 @@ if (historyColumnFilters) {
     historyColumnVisibility = { ...historyColumnVisibility, [col]: target.checked };
     saveHistoryColumnVisibility();
     applyHistoryColumnVisibility();
+  });
+}
+
+if (historyRowLimitSelect) {
+  historyRowLimitSelect.addEventListener("change", () => {
+    const value = Number(historyRowLimitSelect.value);
+    historyRowLimit = [10, 20, 30].includes(value) ? value : 30;
+    saveHistoryRowLimit();
+    renderHistory(cachedHistory);
   });
 }
 
@@ -759,4 +828,5 @@ if (exportHistoryBtn) {
 
 updateUI();
 applyHistoryColumnVisibility();
+syncHistoryRowLimit();
 setInterval(updateUI, 5000);
