@@ -1,8 +1,27 @@
+import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { OrcaBot, BotStatus } from "./orca.js";
 import { Config } from "./config.js";
 import { withRetry } from "./retry.js";
 import { logger } from "./logger.js";
 import { HistoryStore } from "./storage.js";
+
+function isEntryUsdSane(entryUsd: number, budgetUsd: number | null, portfolioUsd: number | null): boolean {
+  if (!Number.isFinite(entryUsd) || entryUsd < 0) {
+    return false;
+  }
+  const budget = Number.isFinite(budgetUsd ?? NaN) ? Number(budgetUsd) : null;
+  const portfolio = Number.isFinite(portfolioUsd ?? NaN) ? Number(portfolioUsd) : null;
+  if (budget != null && budget > 0 && entryUsd > budget * 10) {
+    return false;
+  }
+  if (portfolio != null && portfolio > 0 && entryUsd > portfolio * 10) {
+    return false;
+  }
+  if ((budget == null || budget <= 0) && (portfolio == null || portfolio <= 0) && entryUsd > 1_000_000) {
+    return false;
+  }
+  return true;
+}
 
 export type RunnerStatus = BotStatus & {
   running: boolean;
@@ -32,6 +51,8 @@ export type HistoryEvent = {
   positionFeesUsd: number | null;
   positionPnlUsd: number | null;
   positionExitUsd: number | null;
+  txFeeLamports: number | null;
+  txFeeUsd: number | null;
   portfolioValue: number | null;
   pnl: number | null;
   portfolioUsd: number | null;
@@ -205,6 +226,13 @@ export class BotRunner {
     if (eventPositionExitUsd != null && mergedPositionEntryUsd != null) {
       mergedPositionPnlUsd = eventPositionExitUsd - mergedPositionEntryUsd;
     }
+    const txFeeLamports = status.lastActionFeeLamports ?? null;
+    const txFeeUsd = txFeeLamports != null && status.solUsdPrice != null
+      ? (txFeeLamports / LAMPORTS_PER_SOL) * status.solUsdPrice
+      : null;
+    if (mergedPositionPnlUsd != null && txFeeUsd != null) {
+      mergedPositionPnlUsd -= txFeeUsd;
+    }
 
     if (!status.lastAction || status.lastAction === "no-action") {
       if (status.positionMint) {
@@ -232,6 +260,8 @@ export class BotRunner {
           positionFeesUsd: mergedPositionFeesUsd,
           positionPnlUsd: mergedPositionPnlUsd,
           positionExitUsd: null,
+          txFeeLamports,
+          txFeeUsd,
           portfolioValue: status.portfolioValue,
           pnl: status.pnl,
           portfolioUsd: status.portfolioUsd,
@@ -285,6 +315,8 @@ export class BotRunner {
       positionFeesUsd: mergedPositionFeesUsd,
       positionPnlUsd: mergedPositionPnlUsd,
       positionExitUsd: eventPositionExitUsd,
+      txFeeLamports,
+      txFeeUsd,
       portfolioValue: status.portfolioValue,
       pnl: status.pnl,
       portfolioUsd: status.portfolioUsd,
@@ -296,9 +328,9 @@ export class BotRunner {
   }
 
   private pushEvent(event: HistoryEvent): void {
-    if (event.action === "resume-position" && this.history.length > 0) {
+    if ((event.action === "resume-position" || event.action === "skip-low-sol-position") && this.history.length > 0) {
       const last = this.history[this.history.length - 1];
-      if (last?.action === "resume-position" && last?.positionMint === event.positionMint) {
+      if (last?.action === event.action && last?.positionMint === event.positionMint) {
         this.history[this.history.length - 1] = { ...event, id: last.id, timestamp: last.timestamp };
         if (event.portfolioValue != null) {
           this.lastEventPortfolioValue = event.portfolioValue;
@@ -347,7 +379,15 @@ export class BotRunner {
           if (id !== existingId) {
             mutated = true;
           }
-          normalized.push({ ...raw, id });
+          let next: HistoryEvent = { ...raw, id };
+          const entryUsd = typeof raw.positionEntryUsd === "number" ? raw.positionEntryUsd : null;
+          const budgetUsd = typeof raw.budgetUsd === "number" ? raw.budgetUsd : null;
+          const portfolioUsd = typeof raw.portfolioUsd === "number" ? raw.portfolioUsd : null;
+          if (entryUsd != null && !isEntryUsdSane(entryUsd, budgetUsd, portfolioUsd)) {
+            next = { ...next, positionEntryUsd: null, positionPnlUsd: null };
+            mutated = true;
+          }
+          normalized.push(next);
         });
         this.history = normalized;
         if (mutated) {

@@ -71,7 +71,8 @@
       <section class="panel">
         <h2>Histórico filtrado</h2>
         <div class="table-wrap">
-          <table>
+          <div class="table-scroll">
+            <table>
             <thead>
               <tr>
                 <th>Data/Hora</th>
@@ -82,14 +83,16 @@
                 <th>Mint posição</th>
                 <th>Entrada (USD)</th>
                 <th>Taxas (USD)</th>
+                <th>Taxa TX (USD)</th>
                 <th>Saída (USD)</th>
-                <th>PnL (USD)</th>
+                <th>PnL líquido (USD)</th>
               </tr>
             </thead>
             <tbody id="historyBody">
-              <tr><td colspan="10">Sem eventos ainda</td></tr>
+              <tr><td colspan="11">Sem eventos ainda</td></tr>
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
       </section>
     </main>

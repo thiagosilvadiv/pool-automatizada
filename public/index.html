@@ -39,7 +39,8 @@
         </div>
         <div id="poolError" class="error hidden"></div>
         <div class="table-wrap">
-          <table>
+          <div class="table-scroll">
+            <table>
             <thead>
               <tr>
                 <th>Pool</th>
@@ -57,7 +58,8 @@
             <tbody id="poolsBody">
               <tr><td colspan="10">Sem pools cadastradas</td></tr>
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -123,7 +125,8 @@
       <section class="panel">
         <h2>Resultados</h2>
         <div class="table-wrap">
-          <table>
+          <div class="table-scroll">
+            <table>
             <thead>
               <tr>
                 <th>Pool</th>
@@ -138,7 +141,8 @@
             <tbody id="resultsBody">
               <tr><td colspan="7">Sem dados ainda</td></tr>
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -151,27 +155,44 @@
             <button id="clearHistoryBtn" class="ghost danger">Limpar histórico</button>
           </div>
         </div>
+        <div id="historyColumnFilters" class="row wrap history-columns">
+          <span class="label">Colunas:</span>
+          <label><input type="checkbox" data-col="datetime" checked /> Data/Hora</label>
+          <label><input type="checkbox" data-col="close" checked /> Fechamento</label>
+          <label><input type="checkbox" data-col="action" checked /> Ação</label>
+          <label><input type="checkbox" data-col="price" checked /> Preço</label>
+          <label><input type="checkbox" data-col="targetRange" checked /> Faixa alvo</label>
+          <label><input type="checkbox" data-col="mint" checked /> Mint posição</label>
+          <label><input type="checkbox" data-col="entryUsd" checked /> Entrada (USD)</label>
+          <label><input type="checkbox" data-col="feesUsd" checked /> Taxas (USD)</label>
+          <label><input type="checkbox" data-col="txFeeUsd" checked /> Taxa TX (USD)</label>
+          <label><input type="checkbox" data-col="exitUsd" checked /> Saída (USD)</label>
+          <label><input type="checkbox" data-col="pnlUsd" checked /> PnL líquido (USD)</label>
+        </div>
         <div class="table-wrap">
-          <table>
+          <div class="table-scroll">
+            <table>
             <thead>
               <tr>
                 <th><input id="selectAllHistory" type="checkbox" aria-label="Selecionar todos" /></th>
-                <th>Data/Hora</th>
-                <th>Fechamento</th>
-                <th>Ação</th>
-                <th>Preço</th>
-                <th>Faixa alvo</th>
-                <th>Mint posição</th>
-                <th>Entrada (USD)</th>
-                <th>Taxas (USD)</th>
-                <th>Saída (USD)</th>
-                <th>PnL (USD)</th>
+                <th data-col="datetime">Data/Hora</th>
+                <th data-col="close">Fechamento</th>
+                <th data-col="action">Ação</th>
+                <th data-col="price">Preço</th>
+                <th data-col="targetRange">Faixa alvo</th>
+                <th data-col="mint">Mint posição</th>
+                <th data-col="entryUsd">Entrada (USD)</th>
+                <th data-col="feesUsd">Taxas (USD)</th>
+                <th data-col="txFeeUsd">Taxa TX (USD)</th>
+                <th data-col="exitUsd">Saída (USD)</th>
+                <th data-col="pnlUsd">PnL líquido (USD)</th>
               </tr>
             </thead>
             <tbody id="historyBody">
-              <tr><td colspan="11">Sem eventos ainda</td></tr>
+              <tr><td colspan="12">Sem eventos ainda</td></tr>
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
       </section>
     </main>

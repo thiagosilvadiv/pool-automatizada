@@ -27,6 +27,8 @@ const actionLabels = {
   "resume-position": "monitorando posição existente",
   "reload-position": "recarregar posição",
   "out-of-range-wait": "aguardando confirmação fora da faixa",
+  "skip-low-sol": "SOL baixo",
+  "skip-low-sol-position": "posição existente (SOL baixo)",
   "swap": "swap"
 };
 
@@ -102,7 +104,7 @@ async function fetchHistory(poolId) {
 
 function renderHistory(items) {
   if (!items || items.length === 0) {
-    historyBody.innerHTML = "<tr><td colspan=\"10\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"11\">Sem eventos ainda</td></tr>";
     return;
   }
   const rows = items.slice(0, 100).map((item) => {
@@ -117,6 +119,7 @@ function renderHistory(items) {
         <td>${item.positionMint ?? "-"}</td>
         <td>${formatNumber(item.positionEntryUsd, 2)}</td>
         <td>${formatNumber(item.positionFeesUsd, 2)}</td>
+        <td>${formatNumber(item.txFeeUsd, 6)}</td>
         <td>${formatNumber(item.positionExitUsd, 2)}</td>
         <td>${formatNumber(item.positionPnlUsd, 2)}</td>
       </tr>

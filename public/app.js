@@ -41,6 +41,7 @@ const resultsBody = document.getElementById("resultsBody");
 let cachedPools = [];
 let cachedConfig = null;
 let cachedHistory = [];
+let activeActionMenu = null;
 
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
@@ -50,8 +51,23 @@ const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 const exportHistoryBtn = document.getElementById("exportHistoryBtn");
 const deleteHistoryBtn = document.getElementById("deleteHistoryBtn");
 const selectAllHistory = document.getElementById("selectAllHistory");
+const historyColumnFilters = document.getElementById("historyColumnFilters");
 
 let selectedHistoryIds = new Set();
+const historyColumnDefaults = {
+  datetime: true,
+  close: true,
+  action: true,
+  price: true,
+  targetRange: true,
+  mint: true,
+  entryUsd: true,
+  feesUsd: true,
+  txFeeUsd: true,
+  exitUsd: true,
+  pnlUsd: true
+};
+let historyColumnVisibility = loadHistoryColumnVisibility();
 
 const actionLabels = {
   "open-position": "abertura",
@@ -63,6 +79,8 @@ const actionLabels = {
   "reload-position": "recarregar posição",
   "out-of-range-wait": "aguardando confirmação fora da faixa",
   "cooldown-wait": "aguardando cooldown",
+  "skip-low-sol": "SOL baixo",
+  "skip-low-sol-position": "posição existente (SOL baixo)",
   "swap": "swap"
 };
 
@@ -133,8 +151,9 @@ function buildHistoryCsv(items) {
     "Mint posição",
     "Entrada (USD)",
     "Taxas (USD)",
+    "Taxa TX (USD)",
     "Saída (USD)",
-    "PnL (USD)"
+    "PnL líquido (USD)"
   ];
   const rows = items.map((item) => {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
@@ -147,6 +166,7 @@ function buildHistoryCsv(items) {
       item.positionMint ?? "-",
       formatNumber(item.positionEntryUsd, 2),
       formatNumber(item.positionFeesUsd, 2),
+      formatNumber(item.txFeeUsd, 6),
       formatNumber(item.positionExitUsd, 2),
       formatNumber(item.positionPnlUsd, 2)
     ].map(toCsvValue).join(";");
@@ -197,7 +217,7 @@ function parseOptionalNumber(value) {
 function renderHistory(items) {
   if (!items || items.length === 0) {
     selectedHistoryIds.clear();
-    historyBody.innerHTML = "<tr><td colspan=\"11\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"12\">Sem eventos ainda</td></tr>";
     updateHistorySelectionState();
     return;
   }
@@ -210,25 +230,28 @@ function renderHistory(items) {
     return `
       <tr>
         <td><input type="checkbox" class="history-select" data-id="${eventId}" ${checked}></td>
-        <td>${formatTimestamp(item.timestamp)}</td>
-        <td>${formatCloseTimestamp(item)}</td>
-        <td>${actionLabel}</td>
-        <td>${formatNumber(item.price, 8)}</td>
-        <td>${formatRange(item.targetRange)}</td>
-        <td>${item.positionMint ?? "-"}</td>
-        <td>${formatNumber(item.positionEntryUsd, 2)}</td>
-        <td>${formatNumber(item.positionFeesUsd, 2)}</td>
-        <td>${formatNumber(item.positionExitUsd, 2)}</td>
-        <td>${formatNumber(item.positionPnlUsd, 2)}</td>
+        <td data-col="datetime">${formatTimestamp(item.timestamp)}</td>
+        <td data-col="close">${formatCloseTimestamp(item)}</td>
+        <td data-col="action">${actionLabel}</td>
+        <td data-col="price">${formatNumber(item.price, 8)}</td>
+        <td data-col="targetRange">${formatRange(item.targetRange)}</td>
+        <td data-col="mint">${item.positionMint ?? "-"}</td>
+        <td data-col="entryUsd">${formatNumber(item.positionEntryUsd, 2)}</td>
+        <td data-col="feesUsd">${formatNumber(item.positionFeesUsd, 2)}</td>
+        <td data-col="txFeeUsd">${formatNumber(item.txFeeUsd, 6)}</td>
+        <td data-col="exitUsd">${formatNumber(item.positionExitUsd, 2)}</td>
+        <td data-col="pnlUsd">${formatNumber(item.positionPnlUsd, 2)}</td>
       </tr>
     `;
   });
   historyBody.innerHTML = rows.join("");
   selectedHistoryIds = new Set(Array.from(selectedHistoryIds).filter((id) => currentIds.has(id)));
+  applyHistoryColumnVisibility();
   updateHistorySelectionState();
 }
 
 function renderPools(data, config) {
+  closeActiveActionMenu();
   const pools = data?.pools ?? [];
   cachedPools = pools;
   cachedConfig = config;
@@ -239,6 +262,10 @@ function renderPools(data, config) {
   const rows = pools.map((pool) => {
     const selected = pool.selected ? "Sim" : "Não";
     const statusLabel = pool.running ? "Rodando" : "Parado";
+    const lastActionLabel = actionLabels[pool.lastAction] ?? pool.lastAction ?? "-";
+    const startStopAction = pool.running
+      ? "<button class=\"ghost\" data-action=\"stop\" data-id=\"" + pool.id + "\">Parar</button>"
+      : "<button class=\"primary\" data-action=\"start\" data-id=\"" + pool.id + "\">Iniciar</button>";
     const rangeDisplay = pool.overrides?.rangeWidthPct ?? null;
     const budgetDisplay = pool.overrides?.budgetUsd ?? null;
     const defaultRange = config?.rangeWidthPct ?? "-";
@@ -254,18 +281,20 @@ function renderPools(data, config) {
         <td>${rangeLabel}</td>
         <td>${budgetLabel}</td>
         <td>${statusLabel}</td>
-        <td>${pool.lastAction ?? "-"}</td>
+        <td>${lastActionLabel}</td>
         <td>${formatNumber(pool.positionPnlUsd, 2)}</td>
         <td>${selected}</td>
         <td>
-          <div class="table-actions">
-            <button class="ghost" data-action="select" data-id="${pool.id}">Selecionar</button>
-            <button class="ghost" data-action="edit" data-id="${pool.id}">Editar</button>
-            <button class="primary" data-action="start" data-id="${pool.id}">Iniciar</button>
-            <button class="ghost" data-action="stop" data-id="${pool.id}">Parar</button>
-            <button class="danger" data-action="close" data-id="${pool.id}">Fechar</button>
-            <button class="ghost danger" data-action="remove" data-id="${pool.id}">Remover</button>
-          </div>
+          <details class="action-menu">
+            <summary>Ações</summary>
+            <div class="menu">
+              <button class="ghost" data-action="select" data-id="${pool.id}">Selecionar</button>
+              <button class="ghost" data-action="edit" data-id="${pool.id}">Editar</button>
+              ${startStopAction}
+              <button class="danger" data-action="close" data-id="${pool.id}">Fechar</button>
+              <button class="ghost danger" data-action="remove" data-id="${pool.id}">Remover</button>
+            </div>
+          </details>
         </td>
       </tr>
     `;
@@ -414,13 +443,7 @@ addPoolBtn.addEventListener("click", async () => {
   }
 });
 
-poolsBody.addEventListener("click", async (event) => {
-  const target = event.target;
-  if (!(target instanceof HTMLElement)) return;
-  const action = target.getAttribute("data-action");
-  const id = target.getAttribute("data-id");
-  if (!action || !id) return;
-
+async function handlePoolAction(action, id) {
   if (action === "select") {
     await fetch(`/api/pools/${id}/select`, { method: "POST" });
     updateUI();
@@ -493,7 +516,115 @@ poolsBody.addEventListener("click", async (event) => {
     });
     updateUI();
   }
+}
+
+function closeActiveActionMenu() {
+  if (!activeActionMenu) return;
+  const { details, menu } = activeActionMenu;
+  if (menu instanceof HTMLElement) {
+    menu.classList.remove("action-menu-popup");
+    menu.classList.remove("is-open");
+    menu.style.left = "";
+    menu.style.top = "";
+    menu.style.visibility = "";
+    if (details instanceof HTMLElement) {
+      details.appendChild(menu);
+    }
+  }
+  if (details instanceof HTMLDetailsElement) {
+    details.open = false;
+  }
+  activeActionMenu = null;
+}
+
+function positionActionMenu(menu, summary) {
+  if (!(menu instanceof HTMLElement) || !(summary instanceof HTMLElement)) return;
+
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+
+  const triggerRect = summary.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const padding = 8;
+  let left = triggerRect.right - menuRect.width;
+  if (left < padding) {
+    left = padding;
+  }
+  if (left + menuRect.width > window.innerWidth - padding) {
+    left = Math.max(padding, window.innerWidth - menuRect.width - padding);
+  }
+
+  let top = triggerRect.bottom + padding;
+  if (top + menuRect.height > window.innerHeight - padding) {
+    top = Math.max(padding, triggerRect.top - menuRect.height - padding);
+  }
+
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+
+function openActionMenu(details) {
+  if (!(details instanceof HTMLDetailsElement)) return;
+  const summary = details.querySelector("summary");
+  const menu = details.querySelector(".menu");
+  if (!(summary instanceof HTMLElement) || !(menu instanceof HTMLElement)) return;
+
+  if (activeActionMenu && activeActionMenu.details !== details) {
+    closeActiveActionMenu();
+  }
+
+  activeActionMenu = { details, menu, summary };
+  menu.classList.add("action-menu-popup");
+  menu.classList.remove("is-open");
+  document.body.appendChild(menu);
+  positionActionMenu(menu, summary);
+  menu.classList.add("is-open");
+}
+
+poolsBody.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const summary = target.closest("summary");
+  if (!summary) return;
+  const details = summary.closest("details.action-menu");
+  if (!(details instanceof HTMLDetailsElement)) return;
+  setTimeout(() => {
+    if (details.open) {
+      openActionMenu(details);
+    } else {
+      closeActiveActionMenu();
+    }
+  }, 0);
 });
+
+document.addEventListener("click", async (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+
+  const actionButton = target.closest("[data-action][data-id]");
+  if (actionButton instanceof HTMLElement) {
+    const action = actionButton.getAttribute("data-action");
+    const id = actionButton.getAttribute("data-id");
+    if (action && id) {
+      event.preventDefault();
+      closeActiveActionMenu();
+      await handlePoolAction(action, id);
+      return;
+    }
+  }
+
+  if (target.closest(".action-menu-popup")) return;
+  if (target.closest("details.action-menu")) return;
+  closeActiveActionMenu();
+});
+
+window.addEventListener("resize", () => {
+  closeActiveActionMenu();
+});
+
+window.addEventListener("scroll", () => {
+  closeActiveActionMenu();
+}, true);
 
 function updateHistorySelectionState() {
   if (!selectAllHistory) return;
@@ -501,6 +632,41 @@ function updateHistorySelectionState() {
   const selected = selectedHistoryIds.size;
   selectAllHistory.checked = total > 0 && selected === total;
   selectAllHistory.indeterminate = selected > 0 && selected < total;
+}
+
+function loadHistoryColumnVisibility() {
+  const raw = localStorage.getItem("historyColumnVisibility");
+  if (!raw) return { ...historyColumnDefaults };
+  try {
+    const parsed = JSON.parse(raw);
+    return { ...historyColumnDefaults, ...parsed };
+  } catch {
+    return { ...historyColumnDefaults };
+  }
+}
+
+function saveHistoryColumnVisibility() {
+  localStorage.setItem("historyColumnVisibility", JSON.stringify(historyColumnVisibility));
+}
+
+function applyHistoryColumnVisibility() {
+  if (!historyColumnVisibility) return;
+  Object.entries(historyColumnVisibility).forEach(([col, visible]) => {
+    document.querySelectorAll(`[data-col="${col}"]`).forEach((el) => {
+      el.classList.toggle("col-hidden", !visible);
+    });
+  });
+  syncHistoryColumnControls();
+}
+
+function syncHistoryColumnControls() {
+  if (!historyColumnFilters) return;
+  historyColumnFilters.querySelectorAll("input[data-col]").forEach((input) => {
+    if (!(input instanceof HTMLInputElement)) return;
+    const col = input.getAttribute("data-col");
+    if (!col) return;
+    input.checked = historyColumnVisibility[col] !== false;
+  });
 }
 
 historyBody.addEventListener("change", (event) => {
@@ -530,6 +696,18 @@ if (selectAllHistory) {
       }
     });
     updateHistorySelectionState();
+  });
+}
+
+if (historyColumnFilters) {
+  historyColumnFilters.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    const col = target.getAttribute("data-col");
+    if (!col) return;
+    historyColumnVisibility = { ...historyColumnVisibility, [col]: target.checked };
+    saveHistoryColumnVisibility();
+    applyHistoryColumnVisibility();
   });
 }
 
@@ -580,4 +758,5 @@ if (exportHistoryBtn) {
 }
 
 updateUI();
+applyHistoryColumnVisibility();
 setInterval(updateUI, 5000);
