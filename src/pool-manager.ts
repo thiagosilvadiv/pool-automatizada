@@ -273,6 +273,21 @@ export class PoolManager {
     return { ok: result.ok, reason: result.reason };
   }
 
+  async swapWalletToSolSelected(): Promise<{ ok: boolean; reason?: string; swaps: number; failed: number; totalOutLamports: number }> {
+    if (!this.selectedPoolId) {
+      throw new Error("No pool selected");
+    }
+    const record = this.getRecord(this.selectedPoolId);
+    const result = await record.runner.swapWalletToSolNow();
+    return {
+      ok: result.ok,
+      reason: result.reason,
+      swaps: result.swaps,
+      failed: result.failed,
+      totalOutLamports: result.totalOutLamports
+    };
+  }
+
   startAutoCloseEmptyAccounts(): void {
     if (!this.baseConfig.autoCloseEmptyAccountsEnabled) {
       return;

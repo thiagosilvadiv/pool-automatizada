@@ -69,6 +69,7 @@
           <button id="stopBtn" class="ghost">Parar</button>
           <button id="closeBtn" class="danger">Fechar posição</button>
           <button id="topupBtn" class="ghost">Top-up SOL</button>
+          <button id="swapToSolBtn" class="ghost">Converter tokens para SOL</button>
           <button id="closeEmptyAccountsBtn" class="ghost">Recolher SOL (contas vazias)</button>
           <span id="statusBadge" class="badge">Desconhecido</span>
         </div>
@@ -179,6 +180,13 @@
               <option value="30">30</option>
             </select>
           </div>
+        </div>
+        <div id="historyTypeFilters" class="row wrap history-columns">
+          <span class="label">Tipo:</span>
+          <label><input type="checkbox" data-type="abertura" checked /> Abertura</label>
+          <label><input type="checkbox" data-type="fechamento" checked /> Fechamento</label>
+          <label><input type="checkbox" data-type="monitorando" checked /> Monitorando</label>
+          <label><input type="checkbox" data-type="operacional" checked /> Operacional</label>
         </div>
         <div class="table-wrap">
           <div class="table-scroll">

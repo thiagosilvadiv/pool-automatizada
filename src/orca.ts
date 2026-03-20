@@ -13,6 +13,7 @@ import { getSolUsdPrice } from "./pyth.js";
 const whirlpools = whirlpoolsSdk as any;
 const common = commonSdk as any;
 const Decimal: any = DecimalJs;
+const MIN_ENTRY_BUDGET_FACTOR = 0.25;
 
 export type BotContext = {
   connection: Connection;
@@ -69,6 +70,13 @@ export type BotStatus = {
   lastOpenTokenB: number | null;
   lastCloseTokenA: number | null;
   lastCloseTokenB: number | null;
+};
+
+type SwapWalletToSolResult = {
+  swaps: number;
+  failed: number;
+  totalOutLamports: number;
+  reason?: string;
 };
 
 export class OrcaBot {
@@ -244,6 +252,13 @@ export class OrcaBot {
       const result = await this.openPosition(range, price, solUsdPrice);
       this.lastStatus.lastAction = result;
       if (result === "open-position") {
+        if (this.config.autoSwapToSolEnabled) {
+          try {
+            await this.swapWalletToSol("auto");
+          } catch (err) {
+            logger.warn({ err }, "auto swap-to-sol failed after open");
+          }
+        }
         await this.updatePortfolioSnapshot(price, solUsdPrice);
       }
       this.lastStatus.positionMint = this.currentPositionMint;
@@ -316,6 +331,13 @@ export class OrcaBot {
     this.lastStatus.lastAction = result === "open-position" ? "rebalanced" : result;
     if (result === "open-position") {
       this.lastRebalanceAt = Date.now();
+      if (this.config.autoSwapToSolEnabled) {
+        try {
+          await this.swapWalletToSol("auto");
+        } catch (err) {
+          logger.warn({ err }, "auto swap-to-sol failed after re-range");
+        }
+      }
       await this.updatePortfolioSnapshot(price, solUsdPrice);
     }
     this.lastStatus.positionRange = null;
@@ -371,6 +393,23 @@ export class OrcaBot {
       this.lastStatus.lastAction = "manual-sol-topup";
     }
     return { ok: result.performed, reason: result.reason };
+  }
+
+  async swapWalletToSolNow(): Promise<{ ok: boolean; reason?: string; swaps: number; failed: number; totalOutLamports: number }> {
+    this.lastStatus.running = true;
+    this.resetActionFee();
+    const result = await this.swapWalletToSol("manual");
+    if (result.swaps > 0) {
+      this.lastStatus.lastAction = "manual-swap-to-sol";
+    }
+    const ok = result.reason !== "missing-api-key";
+    return {
+      ok,
+      reason: result.reason,
+      swaps: result.swaps,
+      failed: result.failed,
+      totalOutLamports: result.totalOutLamports
+    };
   }
 
   private async refreshPoolState(): Promise<void> {
@@ -939,12 +978,16 @@ export class OrcaBot {
   private async closePosition(position: any): Promise<void> {
     logger.info("closing position and collecting fees");
 
+    let feeA = 0;
+    let feeB = 0;
     try {
       const amounts = await this.getPositionTokenAmounts(position);
       this.lastStatus.lastCloseTokenA = amounts.tokenA;
       this.lastStatus.lastCloseTokenB = amounts.tokenB;
       this.lastStatus.lastOpenTokenA = null;
       this.lastStatus.lastOpenTokenB = null;
+      feeA = amounts.feeA;
+      feeB = amounts.feeB;
     } catch (err) {
       logger.warn({ err }, "failed to estimate close amounts");
     }
@@ -991,6 +1034,14 @@ export class OrcaBot {
     for (const item of txList) {
       const tx = item.transaction ?? item.tx ?? item;
       await this.executeTx(tx, "close-position");
+    }
+
+    if (this.config.autoSwapFeesToUsdcEnabled) {
+      try {
+        await this.maybeSwapFeesToUsdc(feeA, feeB);
+      } catch (err) {
+        logger.warn({ err }, "swap-fees-to-usdc failed");
+      }
     }
 
     this.resetPositionAnchors();
@@ -1209,7 +1260,7 @@ export class OrcaBot {
   private async fetchJupiterQuoteExactIn(
     inputMint: string,
     outputMint: string,
-    amount: number,
+    amount: number | string,
     slippageBps: number
   ): Promise<any | null> {
     const base = this.config.jupiterApiUrl.replace(/\/+$/, "");
@@ -1261,6 +1312,88 @@ export class OrcaBot {
     const feeLamports = await this.fetchTxFeeLamports(sig);
     this.addActionFee(feeLamports);
     return sig;
+  }
+
+  private async swapWalletToSol(reason: "auto" | "manual"): Promise<SwapWalletToSolResult> {
+    if (!this.config.jupiterApiKey) {
+      logger.warn("swap-to-sol skipped: missing Jupiter API key");
+      return { swaps: 0, failed: 0, totalOutLamports: 0, reason: "missing-api-key" };
+    }
+
+    const tokens = await this.getWalletTokens();
+    const excludeSet = new Set(
+      (this.config.autoSwapToSolExcludeMints ?? [])
+        .map((mint) => String(mint).trim())
+        .filter((mint) => mint)
+    );
+    const candidates = tokens.filter((token) => {
+      if (token.mint === NATIVE_MINT.toBase58()) {
+        return false;
+      }
+      if (token.decimals === 0) {
+        return false;
+      }
+      if (excludeSet.has(token.mint)) {
+        return false;
+      }
+      return true;
+    });
+    if (!candidates.length) {
+      return { swaps: 0, failed: 0, totalOutLamports: 0, reason: "no-tokens" };
+    }
+    const minOutLamports = Math.max(
+      0,
+      Math.floor((this.config.autoSwapToSolMinOutSol ?? 0) * LAMPORTS_PER_SOL)
+    );
+
+    let swaps = 0;
+    let failed = 0;
+    let totalOutLamports = 0;
+
+    for (const token of candidates) {
+      const amountIn = Math.floor(token.rawAmount);
+      if (!Number.isFinite(amountIn) || amountIn <= 0) {
+        continue;
+      }
+      try {
+        const quote = await this.fetchJupiterQuoteExactIn(
+          token.mint,
+          NATIVE_MINT.toBase58(),
+          amountIn,
+          this.config.autoSolSlippageBps
+        );
+        if (!quote) {
+          continue;
+        }
+        const outAmount = Number(quote.outAmount ?? 0);
+        if (!Number.isFinite(outAmount) || outAmount <= 0) {
+          continue;
+        }
+        if (outAmount < minOutLamports) {
+          continue;
+        }
+        const sig = await this.executeJupiterSwap(quote);
+        if (sig) {
+          swaps += 1;
+          totalOutLamports += outAmount;
+        } else {
+          failed += 1;
+        }
+      } catch (err) {
+        failed += 1;
+        logger.warn({ err, mint: token.mint }, "swap-to-sol failed for token");
+      }
+    }
+
+    let finalReason = undefined;
+    if (swaps === 0 && failed === 0) {
+      finalReason = "no-route";
+    }
+    logger.info(
+      { reason, swaps, failed, totalOutLamports, finalReason },
+      "swap-to-sol complete"
+    );
+    return { swaps, failed, totalOutLamports, reason: finalReason };
   }
 
   private async updatePortfolioSnapshot(price: number, solUsdPrice: number | null): Promise<void> {
@@ -1379,11 +1512,15 @@ export class OrcaBot {
 
     if (positionValueUsdWithFees != null) {
       if (this.positionEntryUsd != null
-        && !isEntryUsdSane(this.positionEntryUsd, budgetUsd, portfolioUsd)) {
+        && !isEntryUsdSane(this.positionEntryUsd, budgetUsd, portfolioUsd, {
+          minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
+        })) {
         this.positionEntryUsd = null;
       }
       if (this.positionEntryUsd == null) {
-        if (isEntryUsdSane(positionValueUsdWithFees, budgetUsd, portfolioUsd)) {
+        if (isEntryUsdSane(positionValueUsdWithFees, budgetUsd, portfolioUsd, {
+          minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
+        })) {
           this.positionEntryUsd = positionValueUsdWithFees;
         }
       }
@@ -1618,6 +1755,90 @@ export class OrcaBot {
     throw new Error("Unsupported transaction object; update src/orca.ts for your SDK version");
   }
 
+  private toRawAmountString(amountUi: number, decimals: number): string | null {
+    if (!Number.isFinite(amountUi) || amountUi <= 0) {
+      return null;
+    }
+    if (!Number.isFinite(decimals) || decimals < 0) {
+      return null;
+    }
+    const raw = common.DecimalUtil.toBN(new Decimal(amountUi), decimals);
+    const text = raw?.toString?.() ?? String(raw);
+    if (!text || text === "0") {
+      return null;
+    }
+    return text;
+  }
+
+  private async maybeSwapFeesToUsdc(feeA: number, feeB: number): Promise<void> {
+    if (!this.poolState) {
+      return;
+    }
+    if (!this.config.jupiterApiKey) {
+      logger.warn("swap-fees-to-usdc skipped: missing Jupiter API key");
+      return;
+    }
+
+    const targetMint = (this.config.autoSwapFeesToUsdcTargetMint || "").trim();
+    if (!targetMint) {
+      logger.warn("swap-fees-to-usdc skipped: target mint not set");
+      return;
+    }
+
+    const nativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
+    const availableSol = Math.max(0, nativeSol - this.config.minSolBalance);
+
+    const candidates = [
+      {
+        mint: this.poolState.tokenMintA.toBase58(),
+        decimals: this.poolState.decimalsA,
+        uiAmount: feeA
+      },
+      {
+        mint: this.poolState.tokenMintB.toBase58(),
+        decimals: this.poolState.decimalsB,
+        uiAmount: feeB
+      }
+    ];
+
+    for (const token of candidates) {
+      if (!Number.isFinite(token.uiAmount) || token.uiAmount <= 0) {
+        continue;
+      }
+      if (token.mint === targetMint) {
+        continue;
+      }
+      let amountUi = token.uiAmount;
+      if (token.mint === NATIVE_MINT.toBase58()) {
+        if (availableSol <= 0) {
+          continue;
+        }
+        amountUi = Math.min(amountUi, availableSol);
+        if (amountUi <= 0) {
+          continue;
+        }
+      }
+      const amountRaw = this.toRawAmountString(amountUi, token.decimals);
+      if (!amountRaw) {
+        continue;
+      }
+
+      const quote = await this.fetchJupiterQuoteExactIn(
+        token.mint,
+        targetMint,
+        amountRaw,
+        this.config.autoSolSlippageBps
+      );
+      if (!quote) {
+        continue;
+      }
+      const sig = await this.executeJupiterSwap(quote);
+      if (sig) {
+        logger.info({ mint: token.mint, outMint: targetMint, amountRaw }, "swap-fees-to-usdc executed");
+      }
+    }
+  }
+
   private resetActionFee(): void {
     this.actionFeeLamports = null;
     this.lastStatus.lastActionFeeLamports = null;
@@ -1726,12 +1947,25 @@ function toUiAmount(value: any, decimals: number): number {
   }
 }
 
-function isEntryUsdSane(entryUsd: number, budgetUsd: number | null, portfolioUsd: number | null): boolean {
+function isEntryUsdSane(
+  entryUsd: number,
+  budgetUsd: number | null,
+  portfolioUsd: number | null,
+  options?: { minBudgetFactor?: number }
+): boolean {
   if (!Number.isFinite(entryUsd) || entryUsd < 0) {
     return false;
   }
   const budget = Number.isFinite(budgetUsd ?? NaN) ? Number(budgetUsd) : null;
   const portfolio = Number.isFinite(portfolioUsd ?? NaN) ? Number(portfolioUsd) : null;
+  const minBudgetFactor = Number.isFinite(options?.minBudgetFactor ?? NaN)
+    ? Number(options?.minBudgetFactor)
+    : null;
+  if (budget != null && budget > 0 && minBudgetFactor != null && minBudgetFactor > 0) {
+    if (entryUsd < budget * minBudgetFactor) {
+      return false;
+    }
+  }
   if (budget != null && budget > 0 && entryUsd > budget * 10) {
     return false;
   }
