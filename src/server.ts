@@ -112,6 +112,15 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
+  app.post("/api/swap-wallet-to-sol", async (_req: Request, res: Response) => {
+    try {
+      const result = await poolManager.swapWalletToSolSelected();
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   app.get("/api/config", (_req: Request, res: Response) => {
     const selectedId = poolManager.getSelectedPoolId();
     const selected = poolManager.listPools().find((entry) => entry.id === selectedId) ?? null;

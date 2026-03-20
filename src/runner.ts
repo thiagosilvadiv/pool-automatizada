@@ -5,12 +5,27 @@ import { withRetry } from "./retry.js";
 import { logger } from "./logger.js";
 import { HistoryStore } from "./storage.js";
 
-function isEntryUsdSane(entryUsd: number, budgetUsd: number | null, portfolioUsd: number | null): boolean {
+const MIN_ENTRY_BUDGET_FACTOR = 0.25;
+
+function isEntryUsdSane(
+  entryUsd: number,
+  budgetUsd: number | null,
+  portfolioUsd: number | null,
+  options?: { minBudgetFactor?: number }
+): boolean {
   if (!Number.isFinite(entryUsd) || entryUsd < 0) {
     return false;
   }
   const budget = Number.isFinite(budgetUsd ?? NaN) ? Number(budgetUsd) : null;
   const portfolio = Number.isFinite(portfolioUsd ?? NaN) ? Number(portfolioUsd) : null;
+  const minBudgetFactor = Number.isFinite(options?.minBudgetFactor ?? NaN)
+    ? Number(options?.minBudgetFactor)
+    : null;
+  if (budget != null && budget > 0 && minBudgetFactor != null && minBudgetFactor > 0) {
+    if (entryUsd < budget * minBudgetFactor) {
+      return false;
+    }
+  }
   if (budget != null && budget > 0 && entryUsd > budget * 10) {
     return false;
   }
@@ -40,6 +55,7 @@ function resolveActionType(action: string | null): string | null {
     case "swap":
     case "manual-sol-topup":
     case "auto-sol-topup":
+    case "manual-swap-to-sol":
       return "operacional";
     default:
       return "operacional";
@@ -168,6 +184,41 @@ export class BotRunner {
     }
   }
 
+  async swapWalletToSolNow(): Promise<{ ok: boolean; reason?: string; swaps: number; failed: number; totalOutLamports: number; status: RunnerStatus }> {
+    if (this.inFlight) {
+      return { ok: false, reason: "busy", swaps: 0, failed: 0, totalOutLamports: 0, status: this.getStatus() };
+    }
+    this.inFlight = true;
+    try {
+      const result = await this.bot.swapWalletToSolNow();
+      this.lastTickAt = new Date().toISOString();
+      if (result.swaps > 0) {
+        this.recordEvent(this.bot.getStatus());
+      }
+      return {
+        ok: result.ok,
+        reason: result.reason,
+        swaps: result.swaps,
+        failed: result.failed,
+        totalOutLamports: result.totalOutLamports,
+        status: this.getStatus()
+      };
+    } catch (err) {
+      logger.error({ err }, "swap-wallet-to-sol failed");
+      this.bot.setError(err);
+      return {
+        ok: false,
+        reason: err instanceof Error ? err.message : String(err),
+        swaps: 0,
+        failed: 0,
+        totalOutLamports: 0,
+        status: this.getStatus()
+      };
+    } finally {
+      this.inFlight = false;
+    }
+  }
+
   getStatus(): RunnerStatus {
     const status = this.bot.getStatus();
     return {
@@ -216,7 +267,9 @@ export class BotRunner {
     const entryByMint = new Map<string, number>();
     for (const item of this.history) {
       if (item.positionMint && typeof item.positionEntryUsd === "number") {
-        if (isEntryUsdSane(item.positionEntryUsd, item.budgetUsd ?? null, item.portfolioUsd ?? null)) {
+        if (isEntryUsdSane(item.positionEntryUsd, item.budgetUsd ?? null, item.portfolioUsd ?? null, {
+          minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
+        })) {
           entryByMint.set(item.positionMint, item.positionEntryUsd);
         }
       }
@@ -269,7 +322,9 @@ export class BotRunner {
       if (fallback == null) {
         return null;
       }
-      return isEntryUsdSane(fallback, status.budgetUsd ?? null, status.portfolioUsd ?? null)
+      return isEntryUsdSane(fallback, status.budgetUsd ?? null, status.portfolioUsd ?? null, {
+        minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
+      })
         ? fallback
         : null;
     };
@@ -513,7 +568,9 @@ export class BotRunner {
       if (last?.action === event.action && last?.positionMint === event.positionMint) {
         this.history[this.history.length - 1] = { ...event, id: last.id, timestamp: last.timestamp };
         if (event.positionMint && typeof event.positionEntryUsd === "number") {
-          if (isEntryUsdSane(event.positionEntryUsd, event.budgetUsd ?? null, event.portfolioUsd ?? null)) {
+          if (isEntryUsdSane(event.positionEntryUsd, event.budgetUsd ?? null, event.portfolioUsd ?? null, {
+            minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
+          })) {
             this.entryByMint.set(event.positionMint, event.positionEntryUsd);
           }
         }
@@ -533,7 +590,9 @@ export class BotRunner {
       this.openedAtByMint.set(event.positionMint, event.positionOpenedAt);
     }
     if (event.positionMint && typeof event.positionEntryUsd === "number") {
-      if (isEntryUsdSane(event.positionEntryUsd, event.budgetUsd ?? null, event.portfolioUsd ?? null)) {
+      if (isEntryUsdSane(event.positionEntryUsd, event.budgetUsd ?? null, event.portfolioUsd ?? null, {
+        minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
+      })) {
         this.entryByMint.set(event.positionMint, event.positionEntryUsd);
       }
     }
@@ -586,7 +645,9 @@ export class BotRunner {
             next = { ...next, positionClosedAt: next.timestamp };
             mutated = true;
           }
-          if (entryUsd != null && !isEntryUsdSane(entryUsd, budgetUsd, portfolioUsd)) {
+          if (entryUsd != null && !isEntryUsdSane(entryUsd, budgetUsd, portfolioUsd, {
+            minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
+          })) {
             next = { ...next, positionEntryUsd: null, positionPnlUsd: null };
             mutated = true;
           }
@@ -653,7 +714,9 @@ export class BotRunner {
           const entryByMint = new Map<string, number>();
           for (const item of normalized) {
             if (item.positionMint && typeof item.positionEntryUsd === "number") {
-              if (isEntryUsdSane(item.positionEntryUsd, item.budgetUsd ?? null, item.portfolioUsd ?? null)) {
+              if (isEntryUsdSane(item.positionEntryUsd, item.budgetUsd ?? null, item.portfolioUsd ?? null, {
+                minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
+              })) {
                 entryByMint.set(item.positionMint, item.positionEntryUsd);
               }
             }

@@ -5,6 +5,7 @@ const applyBtn = document.getElementById("applyFilter");
 const errorBox = document.getElementById("analyticsError");
 const historyBody = document.getElementById("historyBody");
 const analyticsColumnFilters = document.getElementById("analyticsColumnFilters");
+const analyticsTypeFilters = document.getElementById("analyticsTypeFilters");
 const analyticsRowLimitSelect = document.getElementById("analyticsRowLimit");
 
 const summaryEvents = document.getElementById("summaryEvents");
@@ -26,6 +27,7 @@ const actionLabels = {
   "close-position": "fechamento",
   "auto-sol-topup": "top-up SOL",
   "manual-sol-topup": "top-up SOL (manual)",
+  "manual-swap-to-sol": "converter tokens para SOL",
   "resume-position": "monitorando posição existente",
   "reload-position": "recarregar posição",
   "out-of-range-wait": "aguardando confirmação fora da faixa",
@@ -59,6 +61,13 @@ const analyticsColumnDefaults = {
 };
 
 let analyticsColumnVisibility = loadAnalyticsColumnVisibility();
+const analyticsTypeDefaults = {
+  abertura: true,
+  fechamento: true,
+  monitorando: true,
+  operacional: true
+};
+let analyticsTypeVisibility = loadAnalyticsTypeVisibility();
 let analyticsRowLimit = loadAnalyticsRowLimit();
 
 function formatRange(range) {
@@ -215,8 +224,23 @@ function loadAnalyticsColumnVisibility() {
   }
 }
 
+function loadAnalyticsTypeVisibility() {
+  const raw = localStorage.getItem("analyticsTypeFilters");
+  if (!raw) return { ...analyticsTypeDefaults };
+  try {
+    const parsed = JSON.parse(raw);
+    return { ...analyticsTypeDefaults, ...parsed };
+  } catch {
+    return { ...analyticsTypeDefaults };
+  }
+}
+
 function saveAnalyticsColumnVisibility() {
   localStorage.setItem("analyticsColumnVisibility", JSON.stringify(analyticsColumnVisibility));
+}
+
+function saveAnalyticsTypeVisibility() {
+  localStorage.setItem("analyticsTypeFilters", JSON.stringify(analyticsTypeVisibility));
 }
 
 function applyAnalyticsColumnVisibility() {
@@ -229,6 +253,16 @@ function applyAnalyticsColumnVisibility() {
   syncAnalyticsColumnControls();
 }
 
+function syncAnalyticsTypeControls() {
+  if (!analyticsTypeFilters) return;
+  analyticsTypeFilters.querySelectorAll("input[data-type]").forEach((input) => {
+    if (!(input instanceof HTMLInputElement)) return;
+    const type = input.getAttribute("data-type");
+    if (!type) return;
+    input.checked = analyticsTypeVisibility[type] !== false;
+  });
+}
+
 function syncAnalyticsColumnControls() {
   if (!analyticsColumnFilters) return;
   analyticsColumnFilters.querySelectorAll("input[data-col]").forEach((input) => {
@@ -236,6 +270,31 @@ function syncAnalyticsColumnControls() {
     const col = input.getAttribute("data-col");
     if (!col) return;
     input.checked = analyticsColumnVisibility[col] !== false;
+  });
+}
+
+function normalizeAnalyticsActionType(value) {
+  if (!value) return "operacional";
+  if (value === "fechamento + abertura") return value;
+  if (Object.prototype.hasOwnProperty.call(analyticsTypeDefaults, value)) {
+    return value;
+  }
+  return "operacional";
+}
+
+function getAnalyticsEventTypes(item) {
+  const raw = normalizeAnalyticsActionType(item?.actionType);
+  if (raw === "fechamento + abertura") {
+    return ["fechamento", "abertura"];
+  }
+  return [raw];
+}
+
+function applyAnalyticsTypeFilter(items) {
+  if (!Array.isArray(items)) return [];
+  return items.filter((item) => {
+    const types = getAnalyticsEventTypes(item);
+    return types.some((type) => analyticsTypeVisibility[type] !== false);
   });
 }
 
@@ -284,8 +343,9 @@ async function refresh() {
       if (end && date > end) return false;
       return true;
     });
-    renderHistory(filtered);
-    updateSummary(filtered);
+    const typeFiltered = applyAnalyticsTypeFilter(filtered);
+    renderHistory(typeFiltered);
+    updateSummary(typeFiltered);
   } catch (err) {
     errorBox.textContent = err instanceof Error ? err.message : String(err);
     errorBox.classList.remove("hidden");
@@ -312,6 +372,18 @@ if (analyticsColumnFilters) {
   });
 }
 
+if (analyticsTypeFilters) {
+  analyticsTypeFilters.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    const type = target.getAttribute("data-type");
+    if (!type) return;
+    analyticsTypeVisibility = { ...analyticsTypeVisibility, [type]: target.checked };
+    saveAnalyticsTypeVisibility();
+    refresh();
+  });
+}
+
 if (analyticsRowLimitSelect) {
   analyticsRowLimitSelect.addEventListener("change", () => {
     const value = Number(analyticsRowLimitSelect.value);
@@ -328,4 +400,5 @@ endInput.value = toDateInputValue(now);
 
 refresh();
 applyAnalyticsColumnVisibility();
+syncAnalyticsTypeControls();
 syncAnalyticsRowLimit();

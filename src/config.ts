@@ -21,6 +21,11 @@ export type Config = {
   autoCloseEmptyAccountsIntervalSec: number;
   autoCloseEmptyAccountsOnLowSol: boolean;
   autoCloseEmptyAccountsLowSolCooldownSec: number;
+  autoSwapToSolEnabled: boolean;
+  autoSwapToSolMinOutSol: number;
+  autoSwapToSolExcludeMints: string[];
+  autoSwapFeesToUsdcEnabled: boolean;
+  autoSwapFeesToUsdcTargetMint: string;
   jupiterApiKey: string | null;
   jupiterApiUrl: string;
   dryRun: boolean;
@@ -100,6 +105,22 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? Boolean(data.autoCloseEmptyAccountsOnLowSol ?? true),
     autoCloseEmptyAccountsLowSolCooldownSec: parseEnvNumber(process.env.AUTO_CLOSE_EMPTY_ACCOUNTS_LOW_SOL_COOLDOWN_SEC)
       ?? Number(data.autoCloseEmptyAccountsLowSolCooldownSec ?? 1800),
+    autoSwapToSolEnabled: parseEnvBool(process.env.AUTO_SWAP_TO_SOL_ENABLED)
+      ?? Boolean(data.autoSwapToSolEnabled ?? false),
+    autoSwapToSolMinOutSol: parseEnvNumber(process.env.AUTO_SWAP_TO_SOL_MIN_OUT_SOL)
+      ?? Number(data.autoSwapToSolMinOutSol ?? 0),
+    autoSwapToSolExcludeMints: parseEnvList(process.env.AUTO_SWAP_TO_SOL_EXCLUDE_MINTS)
+      ?? (Array.isArray((data as any).autoSwapToSolExcludeMints)
+        ? (data as any).autoSwapToSolExcludeMints.map((item: any) => String(item))
+        : (typeof (data as any).autoSwapToSolExcludeMints === "string"
+          ? parseEnvList((data as any).autoSwapToSolExcludeMints)
+          : null))
+      ?? [],
+    autoSwapFeesToUsdcEnabled: parseEnvBool(process.env.AUTO_SWAP_FEES_TO_USDC_ENABLED)
+      ?? Boolean(data.autoSwapFeesToUsdcEnabled ?? false),
+    autoSwapFeesToUsdcTargetMint: process.env.AUTO_SWAP_FEES_TO_USDC_TARGET_MINT
+      ?? (data as any).autoSwapFeesToUsdcTargetMint
+      ?? "",
     jupiterApiKey: process.env.JUPITER_API_KEY ?? data.jupiterApiKey ?? null,
     jupiterApiUrl: process.env.JUPITER_API_URL ?? data.jupiterApiUrl ?? "https://api.jup.ag",
     dryRun: parseEnvBool(process.env.DRY_RUN) ?? Boolean(data.dryRun ?? false),
@@ -156,6 +177,12 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   if (!Number.isFinite(config.autoCloseEmptyAccountsLowSolCooldownSec)
     || config.autoCloseEmptyAccountsLowSolCooldownSec <= 0) {
     throw new Error("autoCloseEmptyAccountsLowSolCooldownSec must be > 0");
+  }
+  if (!Number.isFinite(config.autoSwapToSolMinOutSol) || config.autoSwapToSolMinOutSol < 0) {
+    throw new Error("autoSwapToSolMinOutSol must be >= 0");
+  }
+  if (!config.autoSwapFeesToUsdcTargetMint || !config.autoSwapFeesToUsdcTargetMint.trim()) {
+    config.autoSwapFeesToUsdcTargetMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   }
   if (!Number.isFinite(config.minSolBalance) || config.minSolBalance < 0) {
     throw new Error("minSolBalance must be >= 0");

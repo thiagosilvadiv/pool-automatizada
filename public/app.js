@@ -48,11 +48,13 @@ const stopBtn = document.getElementById("stopBtn");
 const closeBtn = document.getElementById("closeBtn");
 const topupBtn = document.getElementById("topupBtn");
 const closeEmptyAccountsBtn = document.getElementById("closeEmptyAccountsBtn");
+const swapToSolBtn = document.getElementById("swapToSolBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 const exportHistoryBtn = document.getElementById("exportHistoryBtn");
 const deleteHistoryBtn = document.getElementById("deleteHistoryBtn");
 const selectAllHistory = document.getElementById("selectAllHistory");
 const historyColumnFilters = document.getElementById("historyColumnFilters");
+const historyTypeFilters = document.getElementById("historyTypeFilters");
 const historyRowLimitSelect = document.getElementById("historyRowLimit");
 
 let selectedHistoryIds = new Set();
@@ -73,6 +75,13 @@ const historyColumnDefaults = {
   pnlUsd: true
 };
 let historyColumnVisibility = loadHistoryColumnVisibility();
+const historyTypeDefaults = {
+  abertura: true,
+  fechamento: true,
+  monitorando: true,
+  operacional: true
+};
+let historyTypeVisibility = loadHistoryTypeVisibility();
 
 const actionLabels = {
   "open-position": "abertura",
@@ -80,6 +89,7 @@ const actionLabels = {
   "close-position": "fechamento",
   "auto-sol-topup": "top-up SOL",
   "manual-sol-topup": "top-up SOL (manual)",
+  "manual-swap-to-sol": "converter tokens para SOL",
   "resume-position": "monitorando posição existente",
   "reload-position": "recarregar posição",
   "out-of-range-wait": "aguardando confirmação fora da faixa",
@@ -233,7 +243,8 @@ function parseOptionalNumber(value) {
 }
 
 function renderHistory(items) {
-  if (!items || items.length === 0) {
+  const filteredItems = applyHistoryTypeFilter(items);
+  if (!filteredItems || filteredItems.length === 0) {
     selectedHistoryIds.clear();
     historyBody.innerHTML = "<tr><td colspan=\"13\">Sem eventos ainda</td></tr>";
     updateHistorySelectionState();
@@ -241,7 +252,7 @@ function renderHistory(items) {
   }
   const limit = historyRowLimit ?? 30;
   const currentIds = new Set();
-  const rows = items.slice(0, limit).map((item, index) => {
+  const rows = filteredItems.slice(0, limit).map((item, index) => {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
     const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
     const eventId = item.id ?? `legacy-${index}`;
@@ -448,6 +459,35 @@ if (closeEmptyAccountsBtn) {
       `Falhas: ${data.failedCount ?? 0}`,
       `SOL recuperado: ${formatNumber(reclaimedSol, 6)}`
     ].join("\n");
+    window.alert(message);
+    updateUI();
+  });
+}
+
+if (swapToSolBtn) {
+  swapToSolBtn.addEventListener("click", async () => {
+    const ok = window.confirm("Converter todos os tokens da wallet para SOL?");
+    if (!ok) return;
+    const res = await fetch("/api/swap-wallet-to-sol", { method: "POST" });
+    const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) {
+    const msg = data?.error ?? data?.reason ?? "Falha ao converter tokens para SOL.";
+    window.alert(msg);
+    return;
+  }
+  const totalSol = Number(data.totalOutLamports ?? 0) / 1_000_000_000;
+  let reasonLabel = null;
+  if (data?.reason === "no-tokens") {
+    reasonLabel = "Sem tokens para converter.";
+  } else if (data?.reason === "no-route") {
+    reasonLabel = "Sem rota disponivel para conversao.";
+  }
+  const message = [
+    `Swaps: ${data.swaps ?? 0}`,
+    `Falhas: ${data.failed ?? 0}`,
+    `SOL estimado: ${formatNumber(totalSol, 6)}`,
+    reasonLabel
+  ].filter(Boolean).join("\n");
     window.alert(message);
     updateUI();
   });
@@ -689,6 +729,17 @@ function loadHistoryColumnVisibility() {
   }
 }
 
+function loadHistoryTypeVisibility() {
+  const raw = localStorage.getItem("historyTypeFilters");
+  if (!raw) return { ...historyTypeDefaults };
+  try {
+    const parsed = JSON.parse(raw);
+    return { ...historyTypeDefaults, ...parsed };
+  } catch {
+    return { ...historyTypeDefaults };
+  }
+}
+
 function loadHistoryRowLimit() {
   const raw = localStorage.getItem("historyRowLimit");
   if (!raw) return 30;
@@ -704,6 +755,10 @@ function saveHistoryColumnVisibility() {
   localStorage.setItem("historyColumnVisibility", JSON.stringify(historyColumnVisibility));
 }
 
+function saveHistoryTypeVisibility() {
+  localStorage.setItem("historyTypeFilters", JSON.stringify(historyTypeVisibility));
+}
+
 function applyHistoryColumnVisibility() {
   if (!historyColumnVisibility) return;
   Object.entries(historyColumnVisibility).forEach(([col, visible]) => {
@@ -714,6 +769,16 @@ function applyHistoryColumnVisibility() {
   syncHistoryColumnControls();
 }
 
+function syncHistoryTypeControls() {
+  if (!historyTypeFilters) return;
+  historyTypeFilters.querySelectorAll("input[data-type]").forEach((input) => {
+    if (!(input instanceof HTMLInputElement)) return;
+    const type = input.getAttribute("data-type");
+    if (!type) return;
+    input.checked = historyTypeVisibility[type] !== false;
+  });
+}
+
 function syncHistoryColumnControls() {
   if (!historyColumnFilters) return;
   historyColumnFilters.querySelectorAll("input[data-col]").forEach((input) => {
@@ -721,6 +786,31 @@ function syncHistoryColumnControls() {
     const col = input.getAttribute("data-col");
     if (!col) return;
     input.checked = historyColumnVisibility[col] !== false;
+  });
+}
+
+function normalizeActionTypeValue(value) {
+  if (!value) return "operacional";
+  if (value === "fechamento + abertura") return value;
+  if (Object.prototype.hasOwnProperty.call(historyTypeDefaults, value)) {
+    return value;
+  }
+  return "operacional";
+}
+
+function getEventTypes(item) {
+  const raw = normalizeActionTypeValue(item?.actionType);
+  if (raw === "fechamento + abertura") {
+    return ["fechamento", "abertura"];
+  }
+  return [raw];
+}
+
+function applyHistoryTypeFilter(items) {
+  if (!Array.isArray(items)) return [];
+  return items.filter((item) => {
+    const types = getEventTypes(item);
+    return types.some((type) => historyTypeVisibility[type] !== false);
   });
 }
 
@@ -768,6 +858,18 @@ if (historyColumnFilters) {
     historyColumnVisibility = { ...historyColumnVisibility, [col]: target.checked };
     saveHistoryColumnVisibility();
     applyHistoryColumnVisibility();
+  });
+}
+
+if (historyTypeFilters) {
+  historyTypeFilters.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    const type = target.getAttribute("data-type");
+    if (!type) return;
+    historyTypeVisibility = { ...historyTypeVisibility, [type]: target.checked };
+    saveHistoryTypeVisibility();
+    renderHistory(cachedHistory);
   });
 }
 
@@ -828,5 +930,6 @@ if (exportHistoryBtn) {
 
 updateUI();
 applyHistoryColumnVisibility();
+syncHistoryTypeControls();
 syncHistoryRowLimit();
 setInterval(updateUI, 5000);
