@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orca Liquidity Bot - Tokens Permitidos</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Tokens Permitidos</h1>
+        <p class="subtitle">Defina quais mints podem ser usados nos swaps via Jupiter.</p>
+        <nav class="nav">
+          <a href="/">Painel</a>
+          <a href="/analytics.html">Análises</a>
+          <a href="/charts.html">Gráficos</a>
+        </nav>
+      </header>
+
+      <section class="panel">
+        <div class="field">
+          <label for="allowlistInput">Lista de mints (1 por linha)</label>
+          <textarea
+            id="allowlistInput"
+            rows="12"
+            placeholder="Ex:\nEPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+          ></textarea>
+          <div class="hint">
+            Se a lista estiver vazia, todos os tokens continuam permitidos. A allowlist vale para swaps manuais,
+            auto swap para SOL, top-up e swap de fees.
+          </div>
+        </div>
+        <div class="row wrap">
+          <button id="allowlistSave" class="primary">Salvar lista</button>
+          <button id="allowlistReload" class="ghost">Recarregar</button>
+          <span class="subtitle">Tokens: <strong id="allowlistCount">0</strong></span>
+        </div>
+        <div id="allowlistStatus" class="subtitle"></div>
+      </section>
+    </main>
+    <script src="allowlist.js"></script>
+  </body>
+</html>

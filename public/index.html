@@ -13,6 +13,8 @@
         <p class="subtitle">Painel local para iniciar, parar e monitorar o bot.</p>
         <nav class="nav">
           <a href="/analytics.html">Análises</a>
+          <a href="/charts.html">Gráficos</a>
+          <a href="/allowlist.html">Tokens Permitidos</a>
         </nav>
       </header>
 
@@ -32,11 +34,62 @@
             <input id="poolRange" type="number" min="0" step="0.01" placeholder="Padrão" />
           </div>
           <div class="field">
+            <label for="poolExitToken">Saída preferida</label>
+            <select id="poolExitToken">
+              <option value="">Padrão</option>
+              <option value="tokenA">Token A</option>
+              <option value="tokenB">Token B</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolExitBias">Saída % a menos (PnL do token escolhido)</label>
+            <input id="poolExitBias" type="number" min="0" max="99.9" step="0.1" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="poolTrendEnabled">Usar tendência</label>
+            <select id="poolTrendEnabled">
+              <option value="">Padrão</option>
+              <option value="true">Sim</option>
+              <option value="false">Não</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolTrendTimeframe">Timeframe tendência</label>
+            <select id="poolTrendTimeframe">
+              <option value="">Padrão</option>
+              <option value="1m">1m</option>
+              <option value="5m">5m</option>
+              <option value="30m">30m</option>
+              <option value="1h">1h</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolTrendUp">Alta -&gt;</label>
+            <select id="poolTrendUp">
+              <option value="">Padrão</option>
+              <option value="sol">SOL</option>
+              <option value="other">Outro</option>
+              <option value="tokenA">Token A</option>
+              <option value="tokenB">Token B</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolTrendDown">Baixa -&gt;</label>
+            <select id="poolTrendDown">
+              <option value="">Padrão</option>
+              <option value="other">Outro</option>
+              <option value="sol">SOL</option>
+              <option value="tokenA">Token A</option>
+              <option value="tokenB">Token B</option>
+            </select>
+          </div>
+          <div class="field">
             <label for="poolBudget">Budget USD (opcional)</label>
             <input id="poolBudget" type="number" min="0" step="0.01" placeholder="Padrão" />
           </div>
           <button id="addPoolBtn" class="primary">Adicionar</button>
         </div>
+        <div id="poolTrendHint" class="hint hidden"></div>
         <div id="poolError" class="error hidden"></div>
         <div class="table-wrap">
           <div class="table-scroll">
@@ -47,6 +100,9 @@
                 <th>Criada em</th>
                 <th>Whirlpool</th>
                 <th>Range %</th>
+                <th>Saída pref.</th>
+                <th>Bias %</th>
+                <th>Tendência</th>
                 <th>Budget USD</th>
                 <th>Status</th>
                 <th>Ação</th>
@@ -56,7 +112,7 @@
               </tr>
             </thead>
             <tbody id="poolsBody">
-              <tr><td colspan="10">Sem pools cadastradas</td></tr>
+              <tr><td colspan="13">Sem pools cadastradas</td></tr>
             </tbody>
             </table>
           </div>
@@ -164,6 +220,7 @@
           <label><input type="checkbox" data-col="close" checked /> Fechamento</label>
           <label><input type="checkbox" data-col="type" checked /> Tipo</label>
           <label><input type="checkbox" data-col="action" checked /> Ação</label>
+          <label><input type="checkbox" data-col="trend" checked /> Tendência</label>
           <label><input type="checkbox" data-col="price" checked /> Preço</label>
           <label><input type="checkbox" data-col="targetRange" checked /> Faixa alvo</label>
           <label><input type="checkbox" data-col="mint" checked /> Mint posição</label>
@@ -199,6 +256,7 @@
                 <th data-col="close">Fechamento</th>
                 <th data-col="type">Tipo</th>
                 <th data-col="action">Ação</th>
+                <th data-col="trend">Tendência</th>
                 <th data-col="price">Preço</th>
                 <th data-col="targetRange">Faixa alvo</th>
                 <th data-col="mint">Mint posição</th>
@@ -210,13 +268,117 @@
               </tr>
             </thead>
             <tbody id="historyBody">
-              <tr><td colspan="14">Sem eventos ainda</td></tr>
+              <tr><td colspan="15">Sem eventos ainda</td></tr>
             </tbody>
             </table>
           </div>
         </div>
       </section>
     </main>
+    <div id="editPoolModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editPoolTitle">
+      <div class="modal-backdrop" data-close="edit"></div>
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="editPoolTitle">Editar pool</h3>
+          <button type="button" class="icon-btn" data-close="edit">x</button>
+        </div>
+        <div id="editPoolError" class="error hidden"></div>
+        <form id="editPoolForm" class="modal-grid">
+          <input id="editPoolId" type="hidden" />
+          <div class="field">
+            <label for="editPoolRange">Range %</label>
+            <input id="editPoolRange" type="number" min="0" step="0.01" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="editPoolExitToken">Saída preferida</label>
+            <select id="editPoolExitToken">
+              <option value="">Padrão</option>
+              <option value="tokenA">Token A</option>
+              <option value="tokenB">Token B</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolExitBias">Bias %</label>
+            <input id="editPoolExitBias" type="number" min="0" max="99.9" step="0.1" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="editPoolTrendEnabled">Usar tendência</label>
+            <select id="editPoolTrendEnabled">
+              <option value="">Padrão</option>
+              <option value="true">Sim</option>
+              <option value="false">Não</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolTrendTimeframe">Timeframe tendência</label>
+            <select id="editPoolTrendTimeframe">
+              <option value="">Padrão</option>
+              <option value="1m">1m</option>
+              <option value="5m">5m</option>
+              <option value="30m">30m</option>
+              <option value="1h">1h</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolTrendUp">Alta -&gt;</label>
+            <select id="editPoolTrendUp">
+              <option value="">Padrão</option>
+              <option value="sol">SOL</option>
+              <option value="other">Outro</option>
+              <option value="tokenA">Token A</option>
+              <option value="tokenB">Token B</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolTrendDown">Baixa -&gt;</label>
+            <select id="editPoolTrendDown">
+              <option value="">Padrão</option>
+              <option value="other">Outro</option>
+              <option value="sol">SOL</option>
+              <option value="tokenA">Token A</option>
+              <option value="tokenB">Token B</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolBudget">Budget USD</label>
+            <input id="editPoolBudget" type="number" min="0" step="0.01" placeholder="Padrão" />
+          </div>
+          <div id="editPoolTrendHint" class="hint hidden"></div>
+          <div class="modal-actions">
+            <button type="button" class="ghost" data-close="edit">Cancelar</button>
+            <button type="submit" class="primary">Salvar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div id="swapResultModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="swapResultTitle">
+      <div class="modal-backdrop" data-close="swap"></div>
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="swapResultTitle">Conversão para SOL</h3>
+          <button type="button" class="icon-btn" data-close="swap">x</button>
+        </div>
+        <div id="swapResultSummary" class="modal-summary"></div>
+        <div id="swapResultList" class="modal-list"></div>
+        <div class="modal-actions">
+          <button type="button" class="ghost" data-close="swap">Fechar</button>
+        </div>
+      </div>
+    </div>
+    <div id="swapErrorModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="swapErrorTitle">
+      <div class="modal-backdrop" data-close="swap-error"></div>
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="swapErrorTitle">Log completo</h3>
+          <button type="button" class="icon-btn" data-close="swap-error">x</button>
+        </div>
+        <pre id="swapErrorText" class="error-log"></pre>
+        <div class="modal-actions">
+          <button type="button" class="ghost" id="swapErrorCopy">Copiar erro</button>
+          <button type="button" class="primary" data-close="swap-error">Fechar</button>
+        </div>
+      </div>
+    </div>
     <script src="app.js"></script>
   </body>
 </html>

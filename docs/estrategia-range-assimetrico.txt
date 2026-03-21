@@ -1,0 +1,99 @@
+Estrategia: Range Assimetrico por Valor (PnL simetrico no token escolhido)
+
+Resumo
+-------
+Objetivo: ao abrir ou re-rangear uma posicao de liquidez concentrada, ajustar a faixa de preco
+de forma assimetrica para que o PnL de saida seja simetrico (em magnitude) no token escolhido
+(tokenA ou tokenB). Um bias opcional reduz apenas o lado negativo do PnL.
+
+Isso evita que o lado "negativo" tenha uma perda maior do que o ganho no lado "positivo".
+Exemplo: se o lado positivo gera +X (no token escolhido), o lado negativo deve gerar -X,
+ou -X*(1 - bias) quando o bias estiver ativo.
+
+Definicoes e Premissas
+----------------------
+1) Orca/Whirlpool usa price = tokenB / tokenA.
+2) A faixa e calculada sempre na abertura e no re-range.
+3) O token de referencia do PnL e o token escolhido pelo usuario:
+   - preferredExitToken = tokenA => PnL medido em tokenA, saida preferida no lower.
+   - preferredExitToken = tokenB => PnL medido em tokenB, saida preferida no upper.
+4) rangeWidthPct fixa o lado preferido (upper ou lower).
+5) rangeExitBiasPct reduz a magnitude do PnL negativo (na moeda escolhida).
+
+Inputs
+------
+P: preco atual (tokenB/tokenA)
+w: rangeWidthPct (em %)
+biasPct: rangeExitBiasPct (0..99.9)
+preferredExitToken: tokenA ou tokenB
+
+Saida
+-----
+lower, upper: limites da faixa de preco
+
+Calculo do Range (alto nivel)
+-----------------------------
+1) Defina w = rangeWidthPct/100 e bias = biasPct/100.
+2) Fixe o lado preferido:
+   - Se preferredExitToken=tokenB (saida em tokenB): upper = P * (1 + w)
+   - Se preferredExitToken=tokenA (saida em tokenA): lower = P * (1 - w)
+3) Resolva o outro lado (lower ou upper) via bissecao, buscando:
+   PnL_down = PnL_up * (1 - bias)
+   onde PnL e medido no token escolhido.
+4) Se nao houver solucao numerica, use faixa simetrica: lower = P*(1-w), upper = P*(1+w).
+
+Formula de valor (LP concentrado, com L=1)
+------------------------------------------
+Use:
+  s  = sqrt(P)
+  sa = sqrt(lower)
+  sb = sqrt(upper)
+
+Quantidade de tokens dentro da faixa (L=1):
+  amount0 (tokenA) = (sb - s) / (s * sb)
+  amount1 (tokenB) = s - sa
+
+Valor atual em tokenB:
+  V_current_B = amount0 * P + amount1
+
+Valor atual em tokenA:
+  V_current_A = amount0 + amount1 / P
+
+Valor na saida superior (100% tokenB):
+  V_upper_B = sb - sa
+  V_upper_A = V_upper_B / (sb * sb)
+
+Valor na saida inferior (100% tokenA):
+  V_lower_A = (sb - sa) / (sa * sb)
+  V_lower_B = V_lower_A * sa * sa
+
+PnL (no token escolhido):
+  Se token escolhido = tokenB:
+    PnL_up   = V_upper_B - V_current_B
+    PnL_down = V_current_B - V_lower_B
+  Se token escolhido = tokenA:
+    PnL_up   = V_upper_A - V_current_A
+    PnL_down = V_current_A - V_lower_A
+
+Condicao alvo:
+  PnL_down = PnL_up * (1 - bias)
+
+Observacoes de Backtest
+-----------------------
+1) Use precos historicos para simular:
+   - abertura inicial com P0
+   - re-range sempre que P sair de [lower, upper]
+2) A cada re-range, recalcule a faixa usando o mesmo algoritmo.
+3) Este calculo ignora fees, slippage e taxa de rede. Para backtest realista,
+   inclua taxas e custos de swap/tx.
+4) Se quiser simular aportes constantes, fixe L ou valor da posicao em token escolhido.
+
+Como escolher o token correto
+-----------------------------
+Se a UI mostrar:
+  - "Token A (SOL)": SOL e tokenA
+  - "Token B (SOL)": SOL e tokenB
+
+Para sair em SOL, escolha o token que estiver marcado como SOL.
+
+Fim.

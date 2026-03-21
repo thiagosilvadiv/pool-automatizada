@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orca Liquidity Bot - Gráficos</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Gráficos</h1>
+        <p class="subtitle">Visualize o gráfico de cada pool e a tendência calculada.</p>
+        <nav class="nav">
+          <a href="/">Painel</a>
+          <a href="/analytics.html">Análises</a>
+          <a href="/allowlist.html">Tokens Permitidos</a>
+        </nav>
+      </header>
+
+      <section class="panel">
+        <div class="row wrap row-between">
+          <div class="field">
+            <label for="chartPoolSelect">Pool</label>
+            <select id="chartPoolSelect"></select>
+          </div>
+          <div class="field">
+            <label>Tendência</label>
+            <span id="chartTrendBadge" class="trend-badge">-</span>
+          </div>
+          <a id="chartExternalLink" class="link-btn" href="#" target="_blank" rel="noopener">Abrir no GeckoTerminal</a>
+        </div>
+        <div class="chart-wrap">
+          <iframe
+            id="chartFrame"
+            class="chart-frame"
+            title="Gráfico GeckoTerminal"
+            loading="lazy"
+            referrerpolicy="no-referrer"
+          ></iframe>
+          <div id="chartEmpty" class="chart-empty">Selecione uma pool para ver o gráfico.</div>
+        </div>
+      </section>
+    </main>
+    <script src="charts.js"></script>
+  </body>
+</html>
