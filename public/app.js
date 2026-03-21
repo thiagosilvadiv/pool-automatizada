@@ -33,15 +33,42 @@ const poolNameLabel = document.getElementById("poolNameLabel");
 const poolNameInput = document.getElementById("poolName");
 const poolAddressInput = document.getElementById("poolAddress");
 const poolRangeInput = document.getElementById("poolRange");
+const poolExitTokenInput = document.getElementById("poolExitToken");
+const poolExitBiasInput = document.getElementById("poolExitBias");
+const poolTrendEnabledInput = document.getElementById("poolTrendEnabled");
+const poolTrendTimeframeInput = document.getElementById("poolTrendTimeframe");
+const poolTrendUpInput = document.getElementById("poolTrendUp");
+const poolTrendDownInput = document.getElementById("poolTrendDown");
 const poolBudgetInput = document.getElementById("poolBudget");
+const poolTrendHint = document.getElementById("poolTrendHint");
 const addPoolBtn = document.getElementById("addPoolBtn");
 const poolsBody = document.getElementById("poolsBody");
 const poolError = document.getElementById("poolError");
 const resultsBody = document.getElementById("resultsBody");
+const editPoolModal = document.getElementById("editPoolModal");
+const editPoolForm = document.getElementById("editPoolForm");
+const editPoolIdInput = document.getElementById("editPoolId");
+const editPoolRangeInput = document.getElementById("editPoolRange");
+const editPoolExitTokenInput = document.getElementById("editPoolExitToken");
+const editPoolExitBiasInput = document.getElementById("editPoolExitBias");
+const editPoolTrendEnabledInput = document.getElementById("editPoolTrendEnabled");
+const editPoolTrendTimeframeInput = document.getElementById("editPoolTrendTimeframe");
+const editPoolTrendUpInput = document.getElementById("editPoolTrendUp");
+const editPoolTrendDownInput = document.getElementById("editPoolTrendDown");
+const editPoolBudgetInput = document.getElementById("editPoolBudget");
+const editPoolTrendHint = document.getElementById("editPoolTrendHint");
+const editPoolError = document.getElementById("editPoolError");
+const swapResultModal = document.getElementById("swapResultModal");
+const swapResultSummary = document.getElementById("swapResultSummary");
+const swapResultList = document.getElementById("swapResultList");
+const swapErrorModal = document.getElementById("swapErrorModal");
+const swapErrorText = document.getElementById("swapErrorText");
+const swapErrorCopy = document.getElementById("swapErrorCopy");
 let cachedPools = [];
 let cachedConfig = null;
 let cachedHistory = [];
 let activeActionMenu = null;
+let swapErrorDetails = [];
 
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
@@ -65,6 +92,7 @@ const historyColumnDefaults = {
   close: true,
   type: true,
   action: true,
+  trend: true,
   price: true,
   targetRange: true,
   mint: true,
@@ -131,6 +159,109 @@ function formatNumber(value, digits = 6) {
   return formatter.format(num);
 }
 
+const KNOWN_MINT_LABELS = {
+  "So11111111111111111111111111111111111111112": "SOL",
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC"
+};
+
+function shortMint(mint) {
+  if (!mint || typeof mint !== "string") return "";
+  if (mint.length <= 8) return mint;
+  return `${mint.slice(0, 4)}...${mint.slice(-4)}`;
+}
+
+function formatMintLabel(mint) {
+  if (!mint || typeof mint !== "string") return "";
+  return KNOWN_MINT_LABELS[mint] ?? shortMint(mint);
+}
+
+function describeToken(side, info) {
+  const base = side === "tokenA" ? "Token A" : "Token B";
+  if (!info) return base;
+  const isSol = side === "tokenA" ? info.isTokenASol : info.isTokenBSol;
+  if (isSol) return `${base} (SOL)`;
+  const mint = side === "tokenA" ? info.tokenAMint : info.tokenBMint;
+  if (mint) return `${base} (${formatMintLabel(mint)})`;
+  return base;
+}
+
+function getOtherTokenLabel(info) {
+  if (!info) return null;
+  if (info.isTokenASol) {
+    return info.tokenBMint ? formatMintLabel(info.tokenBMint) : null;
+  }
+  if (info.isTokenBSol) {
+    return info.tokenAMint ? formatMintLabel(info.tokenAMint) : null;
+  }
+  return null;
+}
+
+function formatTrendTargetLabel(value, info) {
+  if (!value) return "-";
+  if (value === "sol") return "SOL";
+  if (value === "other") {
+    const label = getOtherTokenLabel(info);
+    return label ? `Outro (${label})` : "Outro";
+  }
+  if (value === "tokenA" || value === "tokenB") {
+    return describeToken(value, info);
+  }
+  return String(value);
+}
+
+function formatExitToken(value, info) {
+  if (value === "tokenA") return describeToken("tokenA", info);
+  if (value === "tokenB") return describeToken("tokenB", info);
+  return "-";
+}
+
+function getTokenInfo(source) {
+  if (!source) return null;
+  return {
+    tokenAMint: source.tokenAMint ?? null,
+    tokenBMint: source.tokenBMint ?? null,
+    isTokenASol: source.isTokenASol ?? null,
+    isTokenBSol: source.isTokenBSol ?? null
+  };
+}
+
+function updateExitTokenSelectHints(selectEl, info) {
+  if (!(selectEl instanceof HTMLSelectElement)) return;
+  const optionA = selectEl.querySelector("option[value=\"tokenA\"]");
+  const optionB = selectEl.querySelector("option[value=\"tokenB\"]");
+  if (optionA) optionA.textContent = describeToken("tokenA", info);
+  if (optionB) optionB.textContent = describeToken("tokenB", info);
+}
+
+function updateTrendTargetSelectHints(selectEl, info) {
+  if (!(selectEl instanceof HTMLSelectElement)) return;
+  const optionSol = selectEl.querySelector("option[value=\"sol\"]");
+  const optionOther = selectEl.querySelector("option[value=\"other\"]");
+  const optionA = selectEl.querySelector("option[value=\"tokenA\"]");
+  const optionB = selectEl.querySelector("option[value=\"tokenB\"]");
+  if (optionSol) optionSol.textContent = "SOL";
+  if (optionOther) optionOther.textContent = formatTrendTargetLabel("other", info);
+  if (optionA) optionA.textContent = describeToken("tokenA", info);
+  if (optionB) optionB.textContent = describeToken("tokenB", info);
+}
+
+function updateTrendHint(el, info) {
+  if (!(el instanceof HTMLElement)) return;
+  if (info && info.isTokenASol === false && info.isTokenBSol === false) {
+    el.textContent = "";
+    el.classList.add("hidden");
+    return;
+  }
+  const otherLabel = getOtherTokenLabel(info);
+  if (otherLabel) {
+    el.textContent = `Dica: para pools com SOL use Alta \u2192 Outro (${otherLabel}) e Baixa \u2192 SOL. Deixe em branco para usar o padrÃ£o global.`;
+    el.classList.remove("hidden");
+    return;
+  }
+  el.textContent = "Dica: para pools com SOL use Alta \u2192 Outro e Baixa \u2192 SOL. Deixe em branco para usar o padrÃ£o global.";
+  el.classList.remove("hidden");
+}
+
 function formatTimestamp(value) {
   if (!value) return "-";
   const date = new Date(value);
@@ -158,6 +289,12 @@ function formatCloseTimestamp(item) {
   return formatTimestamp(item.positionClosedAt);
 }
 
+function formatTrendDirection(value) {
+  if (value === "up") return "Alta";
+  if (value === "down") return "Baixa";
+  return "-";
+}
+
 function toCsvValue(value) {
   if (value === null || value === undefined) return "";
   const text = String(value).replace(/"/g, "\"\"");
@@ -171,6 +308,7 @@ function buildHistoryCsv(items) {
     "Data fechamento",
     "Tipo",
     "Ação",
+    "Tendência",
     "Preço",
     "Faixa alvo",
     "Mint posição",
@@ -189,6 +327,7 @@ function buildHistoryCsv(items) {
       formatCloseTimestamp(item),
       typeLabel,
       actionLabel,
+      formatTrendDirection(item.trendDirection),
       formatNumber(item.price, 8),
       formatRange(item.targetRange),
       item.positionMint ?? "-",
@@ -242,11 +381,307 @@ function parseOptionalNumber(value) {
   return Number.isFinite(num) ? num : undefined;
 }
 
+function parseExitTokenInput(value) {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim();
+  if (!trimmed) return undefined;
+  const lower = trimmed.toLowerCase();
+  if (lower === "tokena" || lower === "a" || lower === "token_a") return "tokenA";
+  if (lower === "tokenb" || lower === "b" || lower === "token_b") return "tokenB";
+  return null;
+}
+
+function parseTrendEnabledInput(value) {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (["1", "true", "yes", "on", "sim"].includes(trimmed)) return true;
+  if (["0", "false", "no", "off", "nao", "não"].includes(trimmed)) return false;
+  return null;
+}
+
+function parseTrendTimeframeInput(value) {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (["1m", "5m", "30m", "1h"].includes(trimmed)) return trimmed;
+  return null;
+}
+
+function parseTrendTargetInput(value) {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "sol" || trimmed === "other") return trimmed;
+  if (trimmed === "tokena" || trimmed === "token_a") return "tokenA";
+  if (trimmed === "tokenb" || trimmed === "token_b") return "tokenB";
+  return null;
+}
+
+function formatTrendBadge(pool) {
+  if (!pool?.trendEnabled) {
+    return "<span class=\"trend-badge trend-off\">Desativado</span>";
+  }
+  const timeframe = pool?.trendTimeframe ? ` ${pool.trendTimeframe}` : "";
+  if (pool?.trendStale) {
+    return `<span class="trend-badge trend-unknown">Desatualizado${timeframe}</span>`;
+  }
+  if (pool?.trendDirection === "up") {
+    return `<span class="trend-badge trend-up">Alta${timeframe}</span>`;
+  }
+  if (pool?.trendDirection === "down") {
+    return `<span class="trend-badge trend-down">Baixa${timeframe}</span>`;
+  }
+  return `<span class="trend-badge trend-unknown">Indisponível${timeframe}</span>`;
+}
+
+function openModal(modal) {
+  if (!(modal instanceof HTMLElement)) return;
+  modal.classList.remove("hidden");
+}
+
+function closeModal(modal) {
+  if (!(modal instanceof HTMLElement)) return;
+  modal.classList.add("hidden");
+}
+
+function setSelectPlaceholder(selectEl, label) {
+  if (!(selectEl instanceof HTMLSelectElement)) return;
+  const option = selectEl.querySelector("option[value=\"\"]");
+  if (option) option.textContent = label;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatSwapReason(reason) {
+  switch (reason) {
+    case "native-sol":
+      return "Já é SOL";
+    case "non-fungible":
+      return "Token sem decimais (NFT)";
+    case "excluded":
+      return "Excluído";
+    case "invalid-amount":
+      return "Quantidade inválida";
+    case "no-quote":
+      return "Sem rota";
+    case "below-min":
+      return "Abaixo do mínimo";
+    case "swap-failed":
+      return "Falha na swap";
+    case "api-error":
+      return "Erro na API";
+    case "not-allowed":
+      return "Nao permitido";
+    case "missing-api-key":
+      return "Sem API key";
+    case "no-route":
+      return "Sem rota";
+    case "no-tokens":
+      return "Sem tokens";
+    case "failed":
+      return "Falhas durante a conversão";
+    default:
+      return reason ? String(reason) : "-";
+  }
+}
+
+function formatSwapStatus(status) {
+  if (status === "swapped") return "OK";
+  if (status === "failed") return "Falhou";
+  return "Ignorado";
+}
+
+function truncateText(value, max = 120) {
+  if (!value) return "";
+  const text = String(value);
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1)}…`;
+}
+
+function formatSwapDetailReasonShort(detail) {
+  const base = formatSwapReason(detail?.reason);
+  if (detail?.error) {
+    return `${base} - ${truncateText(detail.error, 120)}`;
+  }
+  return base;
+}
+
+function formatSwapDetailReason(detail) {
+  const base = formatSwapReason(detail?.reason);
+  const extra = detail?.error ? ` - ${String(detail.error)}` : "";
+  return `${base}${extra}`;
+}
+
+function showSwapResultModal(data) {
+  if (!swapResultModal || !swapResultSummary || !swapResultList) return;
+  swapErrorDetails = [];
+  const swaps = Number(data?.swaps ?? 0);
+  const failed = Number(data?.failed ?? 0);
+  const totalSol = Number(data?.totalOutLamports ?? 0) / 1_000_000_000;
+  const reasonLabel = data?.reason ? formatSwapReason(data.reason) : null;
+  const summaryParts = [
+    `Swaps: ${swaps}`,
+    `Falhas: ${failed}`,
+    `SOL estimado: ${formatNumber(totalSol, 6)}`
+  ];
+  if (reasonLabel) {
+    summaryParts.push(`Motivo: ${reasonLabel}`);
+  }
+  if (data?.error) {
+    summaryParts.push(`Erro: ${data.error}`);
+  }
+  swapResultSummary.textContent = summaryParts.join(" | ");
+
+  const details = Array.isArray(data?.details) ? data.details : [];
+  if (!details.length) {
+    swapResultList.innerHTML = "<div class=\"subtitle\">Sem detalhes por token.</div>";
+  } else {
+    const rows = details.map((detail) => {
+      const mint = escapeHtml(shortMint(detail.mint));
+      const amount = formatNumber(detail.amountInUi ?? 0, 6);
+      const statusLabel = escapeHtml(formatSwapStatus(detail.status));
+      const reason = escapeHtml(formatSwapDetailReasonShort(detail));
+      let action = "";
+      if (detail?.error) {
+        const idx = swapErrorDetails.push(String(detail.error)) - 1;
+        action = ` <button type="button" class="ghost mini-btn" data-error-index="${idx}">Ver log</button>`;
+      }
+      return `
+        <tr>
+          <td>${mint}</td>
+          <td>${amount}</td>
+          <td>${statusLabel}</td>
+          <td>${reason}${action}</td>
+        </tr>
+      `;
+    }).join("");
+    swapResultList.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Mint</th>
+            <th>Qtd</th>
+            <th>Status</th>
+            <th>Motivo</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+  openModal(swapResultModal);
+}
+
+function closeSwapResultModal() {
+  closeModal(swapResultModal);
+}
+
+function openSwapErrorModal(text) {
+  if (!swapErrorModal || !swapErrorText) return;
+  swapErrorText.textContent = text || "-";
+  openModal(swapErrorModal);
+}
+
+function closeSwapErrorModal() {
+  closeModal(swapErrorModal);
+}
+
+async function copyErrorText(text) {
+  const value = text || "";
+  if (!value) return;
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+  } catch {
+    // fallback below
+  }
+  const temp = document.createElement("textarea");
+  temp.value = value;
+  document.body.appendChild(temp);
+  temp.select();
+  document.execCommand("copy");
+  document.body.removeChild(temp);
+}
+
+function openEditPoolModal(pool) {
+  if (!editPoolModal || !pool) return;
+  if (editPoolError) {
+    editPoolError.textContent = "";
+    editPoolError.classList.add("hidden");
+  }
+  const overrides = pool.overrides ?? {};
+  const defaultRange = cachedConfig?.rangeWidthPct ?? "-";
+  const defaultBudget = cachedConfig?.budgetUsd ?? "-";
+  const defaultExitToken = cachedConfig?.preferredExitToken ?? null;
+  const defaultExitBias = cachedConfig?.rangeExitBiasPct ?? "-";
+  const defaultTrendEnabled = cachedConfig?.trendEnabled ?? false;
+  const defaultTrendTimeframe = cachedConfig?.trendTimeframe ?? "1m";
+  const defaultTrendUp = cachedConfig?.trendTargetUp ?? "sol";
+  const defaultTrendDown = cachedConfig?.trendTargetDown ?? "other";
+  const tokenInfo = getTokenInfo(pool);
+
+  if (editPoolIdInput) editPoolIdInput.value = pool.id ?? "";
+  if (editPoolRangeInput) {
+    editPoolRangeInput.value = overrides.rangeWidthPct ?? "";
+    editPoolRangeInput.placeholder = `Padrão (${defaultRange})`;
+  }
+  if (editPoolBudgetInput) {
+    editPoolBudgetInput.value = overrides.budgetUsd ?? "";
+    editPoolBudgetInput.placeholder = `Padrão (${defaultBudget})`;
+  }
+  if (editPoolExitTokenInput) {
+    updateExitTokenSelectHints(editPoolExitTokenInput, tokenInfo);
+    editPoolExitTokenInput.value = overrides.preferredExitToken ?? "";
+    const exitLabel = formatExitToken(defaultExitToken, tokenInfo);
+    setSelectPlaceholder(editPoolExitTokenInput, `Padrão (${exitLabel === "-" ? "Sem" : exitLabel})`);
+  }
+  if (editPoolExitBiasInput) {
+    editPoolExitBiasInput.value = overrides.rangeExitBiasPct ?? "";
+    editPoolExitBiasInput.placeholder = `Padrão (${formatNumber(defaultExitBias, 2)})`;
+  }
+  if (editPoolTrendEnabledInput) {
+    editPoolTrendEnabledInput.value = overrides.trendEnabled === undefined ? "" : String(overrides.trendEnabled);
+    setSelectPlaceholder(editPoolTrendEnabledInput, `Padrão (${defaultTrendEnabled ? "Sim" : "Não"})`);
+  }
+  if (editPoolTrendTimeframeInput) {
+    editPoolTrendTimeframeInput.value = overrides.trendTimeframe ?? "";
+    setSelectPlaceholder(editPoolTrendTimeframeInput, `Padrão (${defaultTrendTimeframe})`);
+  }
+  if (editPoolTrendUpInput) {
+    updateTrendTargetSelectHints(editPoolTrendUpInput, tokenInfo);
+    editPoolTrendUpInput.value = overrides.trendTargetUp ?? "";
+    setSelectPlaceholder(editPoolTrendUpInput, `Padrão (${formatTrendTargetLabel(defaultTrendUp, tokenInfo)})`);
+  }
+  if (editPoolTrendDownInput) {
+    updateTrendTargetSelectHints(editPoolTrendDownInput, tokenInfo);
+    editPoolTrendDownInput.value = overrides.trendTargetDown ?? "";
+    setSelectPlaceholder(editPoolTrendDownInput, `Padrão (${formatTrendTargetLabel(defaultTrendDown, tokenInfo)})`);
+  }
+
+  updateTrendHint(editPoolTrendHint, tokenInfo);
+
+  openModal(editPoolModal);
+}
+
+function closeEditPoolModal() {
+  closeModal(editPoolModal);
+}
+
 function renderHistory(items) {
   const filteredItems = applyHistoryTypeFilter(items);
   if (!filteredItems || filteredItems.length === 0) {
     selectedHistoryIds.clear();
-    historyBody.innerHTML = "<tr><td colspan=\"13\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"15\">Sem eventos ainda</td></tr>";
     updateHistorySelectionState();
     return;
   }
@@ -266,6 +701,7 @@ function renderHistory(items) {
         <td data-col="close">${formatCloseTimestamp(item)}</td>
         <td data-col="type">${typeLabel}</td>
         <td data-col="action">${actionLabel}</td>
+        <td data-col="trend">${formatTrendDirection(item.trendDirection)}</td>
         <td data-col="price">${formatNumber(item.price, 8)}</td>
         <td data-col="targetRange">${formatRange(item.targetRange)}</td>
         <td data-col="mint">${item.positionMint ?? "-"}</td>
@@ -289,7 +725,7 @@ function renderPools(data, config) {
   cachedPools = pools;
   cachedConfig = config;
   if (!pools.length) {
-    poolsBody.innerHTML = "<tr><td colspan=\"10\">Sem pools cadastradas</td></tr>";
+    poolsBody.innerHTML = "<tr><td colspan=\"13\">Sem pools cadastradas</td></tr>";
     return;
   }
   const rows = pools.map((pool) => {
@@ -301,10 +737,21 @@ function renderPools(data, config) {
       : "<button class=\"primary\" data-action=\"start\" data-id=\"" + pool.id + "\">Iniciar</button>";
     const rangeDisplay = pool.overrides?.rangeWidthPct ?? null;
     const budgetDisplay = pool.overrides?.budgetUsd ?? null;
+    const exitTokenDisplay = pool.overrides?.preferredExitToken ?? null;
+    const exitBiasDisplay = pool.overrides?.rangeExitBiasPct ?? null;
     const defaultRange = config?.rangeWidthPct ?? "-";
     const defaultBudget = config?.budgetUsd ?? "-";
+    const defaultExitToken = config?.preferredExitToken ?? null;
+    const defaultExitBias = config?.rangeExitBiasPct ?? "-";
+    const poolTokenInfo = getTokenInfo(pool);
     const rangeLabel = rangeDisplay == null ? `Padrão (${defaultRange})` : Number(rangeDisplay).toFixed(2);
     const budgetLabel = budgetDisplay == null ? `Padrão (${defaultBudget})` : Number(budgetDisplay).toFixed(2);
+    const exitTokenLabel = exitTokenDisplay == null
+      ? `Padrão (${formatExitToken(defaultExitToken, poolTokenInfo)})`
+      : formatExitToken(exitTokenDisplay, poolTokenInfo);
+    const exitBiasLabel = exitBiasDisplay == null
+      ? `Padrão (${formatNumber(defaultExitBias, 2)})`
+      : formatNumber(exitBiasDisplay, 2);
     const createdAt = formatTimestamp(pool.createdAt);
     return `
       <tr>
@@ -312,6 +759,9 @@ function renderPools(data, config) {
         <td>${createdAt}</td>
         <td>${pool.whirlpoolAddress}</td>
         <td>${rangeLabel}</td>
+        <td>${exitTokenLabel}</td>
+        <td>${exitBiasLabel}</td>
+        <td>${formatTrendBadge(pool)}</td>
         <td>${budgetLabel}</td>
         <td>${statusLabel}</td>
         <td>${lastActionLabel}</td>
@@ -351,7 +801,7 @@ function renderResults(data) {
         <td>${formatNumber(pool.lastPrice, 8)}</td>
         <td>${formatNumber(pool.positionValueUsd, 2)}</td>
         <td>${formatNumber(pool.positionPnlUsd, 2)}</td>
-        <td>${formatNumber(pool.positionPnlSol, 6)}</td>
+        <td>${formatNumber(pool.positionPnlSol, 4)}</td>
       </tr>
     `;
   });
@@ -404,6 +854,24 @@ async function updateUI() {
     statusBadge.textContent = status.running ? "Rodando" : "Parado";
     statusBadge.classList.toggle("running", status.running);
     statusBadge.classList.toggle("stopped", !status.running);
+
+    const tokenInfo = getTokenInfo(config);
+    updateExitTokenSelectHints(poolExitTokenInput, tokenInfo);
+    if (poolTrendUpInput) {
+      updateTrendTargetSelectHints(poolTrendUpInput, tokenInfo);
+      setSelectPlaceholder(poolTrendUpInput, `Padrão (${formatTrendTargetLabel(config.trendTargetUp, tokenInfo)})`);
+    }
+    if (poolTrendDownInput) {
+      updateTrendTargetSelectHints(poolTrendDownInput, tokenInfo);
+      setSelectPlaceholder(poolTrendDownInput, `Padrão (${formatTrendTargetLabel(config.trendTargetDown, tokenInfo)})`);
+    }
+    if (poolTrendEnabledInput) {
+      setSelectPlaceholder(poolTrendEnabledInput, `Padrão (${config.trendEnabled ? "Sim" : "Não"})`);
+    }
+    if (poolTrendTimeframeInput) {
+      setSelectPlaceholder(poolTrendTimeframeInput, `Padrão (${config.trendTimeframe ?? "1m"})`);
+    }
+    updateTrendHint(poolTrendHint, tokenInfo);
 
     renderHistory(history);
     renderPools(pools, config);
@@ -470,25 +938,18 @@ if (swapToSolBtn) {
     if (!ok) return;
     const res = await fetch("/api/swap-wallet-to-sol", { method: "POST" });
     const data = await res.json().catch(() => null);
-  if (!res.ok || !data?.ok) {
-    const msg = data?.error ?? data?.reason ?? "Falha ao converter tokens para SOL.";
-    window.alert(msg);
-    return;
-  }
-  const totalSol = Number(data.totalOutLamports ?? 0) / 1_000_000_000;
-  let reasonLabel = null;
-  if (data?.reason === "no-tokens") {
-    reasonLabel = "Sem tokens para converter.";
-  } else if (data?.reason === "no-route") {
-    reasonLabel = "Sem rota disponivel para conversao.";
-  }
-  const message = [
-    `Swaps: ${data.swaps ?? 0}`,
-    `Falhas: ${data.failed ?? 0}`,
-    `SOL estimado: ${formatNumber(totalSol, 6)}`,
-    reasonLabel
-  ].filter(Boolean).join("\n");
-    window.alert(message);
+    if (!res.ok) {
+      const fallback = data?.error ?? "Falha ao converter tokens para SOL.";
+      showSwapResultModal({ ...(data ?? {}), error: fallback });
+      updateUI();
+      return;
+    }
+    if (!data?.ok) {
+      showSwapResultModal(data);
+      updateUI();
+      return;
+    }
+    showSwapResultModal(data);
     updateUI();
   });
 }
@@ -497,12 +958,52 @@ addPoolBtn.addEventListener("click", async () => {
   const name = poolNameInput.value.trim();
   const address = poolAddressInput.value.trim();
   const rangeWidthPct = parseOptionalNumber(poolRangeInput.value);
+  const rangeExitBiasPct = parseOptionalNumber(poolExitBiasInput?.value);
+  const preferredExitToken = poolExitTokenInput?.value?.trim();
+  const trendEnabledRaw = poolTrendEnabledInput?.value ?? "";
+  const trendTimeframeRaw = poolTrendTimeframeInput?.value ?? "";
+  const trendTargetUpRaw = poolTrendUpInput?.value ?? "";
+  const trendTargetDownRaw = poolTrendDownInput?.value ?? "";
   const budgetUsd = parseOptionalNumber(poolBudgetInput.value);
   poolError.classList.add("hidden");
   try {
     const overrides = {};
     if (rangeWidthPct !== undefined) {
       overrides.rangeWidthPct = rangeWidthPct;
+    }
+    if (rangeExitBiasPct !== undefined) {
+      overrides.rangeExitBiasPct = rangeExitBiasPct;
+    }
+    if (preferredExitToken) {
+      overrides.preferredExitToken = preferredExitToken;
+    }
+    if (trendEnabledRaw) {
+      const parsed = parseTrendEnabledInput(trendEnabledRaw);
+      if (parsed === null) {
+        throw new Error("Tendência inválida. Use Sim ou Não.");
+      }
+      overrides.trendEnabled = parsed;
+    }
+    if (trendTimeframeRaw) {
+      const parsed = parseTrendTimeframeInput(trendTimeframeRaw);
+      if (!parsed) {
+        throw new Error("Timeframe de tendência inválido.");
+      }
+      overrides.trendTimeframe = parsed;
+    }
+    if (trendTargetUpRaw) {
+      const parsed = parseTrendTargetInput(trendTargetUpRaw);
+      if (!parsed) {
+        throw new Error("Target de alta inválido.");
+      }
+      overrides.trendTargetUp = parsed;
+    }
+    if (trendTargetDownRaw) {
+      const parsed = parseTrendTargetInput(trendTargetDownRaw);
+      if (!parsed) {
+        throw new Error("Target de baixa inválido.");
+      }
+      overrides.trendTargetDown = parsed;
     }
     if (budgetUsd !== undefined) {
       overrides.budgetUsd = budgetUsd;
@@ -519,6 +1020,12 @@ addPoolBtn.addEventListener("click", async () => {
     poolNameInput.value = "";
     poolAddressInput.value = "";
     poolRangeInput.value = "";
+    if (poolExitTokenInput) poolExitTokenInput.value = "";
+    if (poolExitBiasInput) poolExitBiasInput.value = "";
+    if (poolTrendEnabledInput) poolTrendEnabledInput.value = "";
+    if (poolTrendTimeframeInput) poolTrendTimeframeInput.value = "";
+    if (poolTrendUpInput) poolTrendUpInput.value = "";
+    if (poolTrendDownInput) poolTrendDownInput.value = "";
     poolBudgetInput.value = "";
     updateUI();
   } catch (err) {
@@ -526,6 +1033,164 @@ addPoolBtn.addEventListener("click", async () => {
     poolError.classList.remove("hidden");
   }
 });
+
+if (editPoolForm) {
+  editPoolForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!editPoolIdInput) return;
+    const id = editPoolIdInput.value;
+    if (!id) return;
+    if (editPoolError) {
+      editPoolError.textContent = "";
+      editPoolError.classList.add("hidden");
+    }
+
+    const overrides = {};
+
+    const rangeRaw = editPoolRangeInput?.value?.trim() ?? "";
+    if (!rangeRaw) {
+      overrides.rangeWidthPct = null;
+    } else {
+      const parsed = parseOptionalNumber(rangeRaw);
+      if (parsed === undefined) {
+        if (editPoolError) {
+          editPoolError.textContent = "Range % inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.rangeWidthPct = parsed;
+    }
+
+    const budgetRaw = editPoolBudgetInput?.value?.trim() ?? "";
+    if (!budgetRaw) {
+      overrides.budgetUsd = null;
+    } else {
+      const parsed = parseOptionalNumber(budgetRaw);
+      if (parsed === undefined) {
+        if (editPoolError) {
+          editPoolError.textContent = "Budget USD inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.budgetUsd = parsed;
+    }
+
+    const exitTokenRaw = editPoolExitTokenInput?.value?.trim() ?? "";
+    if (!exitTokenRaw) {
+      overrides.preferredExitToken = null;
+    } else {
+      const parsed = parseExitTokenInput(exitTokenRaw);
+      if (!parsed) {
+        if (editPoolError) {
+          editPoolError.textContent = "Saída preferida inválida. Use tokenA ou tokenB.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.preferredExitToken = parsed;
+    }
+
+    const exitBiasRaw = editPoolExitBiasInput?.value?.trim() ?? "";
+    if (!exitBiasRaw) {
+      overrides.rangeExitBiasPct = null;
+    } else {
+      const parsed = parseOptionalNumber(exitBiasRaw);
+      if (parsed === undefined) {
+        if (editPoolError) {
+          editPoolError.textContent = "Bias % inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.rangeExitBiasPct = parsed;
+    }
+
+    const trendEnabledRaw = editPoolTrendEnabledInput?.value ?? "";
+    if (!trendEnabledRaw) {
+      overrides.trendEnabled = null;
+    } else {
+      const parsed = parseTrendEnabledInput(trendEnabledRaw);
+      if (parsed === null) {
+        if (editPoolError) {
+          editPoolError.textContent = "Tendência inválida. Use Sim ou Não.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.trendEnabled = parsed;
+    }
+
+    const trendTimeframeRaw = editPoolTrendTimeframeInput?.value ?? "";
+    if (!trendTimeframeRaw) {
+      overrides.trendTimeframe = null;
+    } else {
+      const parsed = parseTrendTimeframeInput(trendTimeframeRaw);
+      if (!parsed) {
+        if (editPoolError) {
+          editPoolError.textContent = "Timeframe de tendência inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.trendTimeframe = parsed;
+    }
+
+    const trendUpRaw = editPoolTrendUpInput?.value ?? "";
+    if (!trendUpRaw) {
+      overrides.trendTargetUp = null;
+    } else {
+      const parsed = parseTrendTargetInput(trendUpRaw);
+      if (!parsed) {
+        if (editPoolError) {
+          editPoolError.textContent = "Target de alta inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.trendTargetUp = parsed;
+    }
+
+    const trendDownRaw = editPoolTrendDownInput?.value ?? "";
+    if (!trendDownRaw) {
+      overrides.trendTargetDown = null;
+    } else {
+      const parsed = parseTrendTargetInput(trendDownRaw);
+      if (!parsed) {
+        if (editPoolError) {
+          editPoolError.textContent = "Target de baixa inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.trendTargetDown = parsed;
+    }
+
+    try {
+      const res = await fetch(`/api/pools/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ overrides })
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) {
+        if (editPoolError) {
+          editPoolError.textContent = data?.error ?? "Erro ao atualizar pool.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      closeEditPoolModal();
+      updateUI();
+    } catch (err) {
+      if (editPoolError) {
+        editPoolError.textContent = err instanceof Error ? err.message : String(err);
+        editPoolError.classList.remove("hidden");
+      }
+    }
+  });
+}
 
 async function handlePoolAction(action, id) {
   if (action === "select") {
@@ -565,40 +1230,8 @@ async function handlePoolAction(action, id) {
   if (action === "edit") {
     const pool = cachedPools.find((item) => item.id === id);
     if (!pool) return;
-    const currentRange = pool.overrides?.rangeWidthPct ?? "";
-    const currentBudget = pool.overrides?.budgetUsd ?? "";
-    const defaultRange = cachedConfig?.rangeWidthPct ?? "-";
-    const defaultBudget = cachedConfig?.budgetUsd ?? "-";
-    const rangeInput = window.prompt(
-      `Range % (vazio = manter, "default" = usar padrão ${defaultRange})`,
-      String(currentRange)
-    );
-    if (rangeInput === null) return;
-    const budgetInput = window.prompt(
-      `Budget USD (vazio = manter, "default" = usar padrão ${defaultBudget}, 0 = desativar)`,
-      String(currentBudget)
-    );
-    if (budgetInput === null) return;
-
-    const overrides = {};
-    if (rangeInput.trim().toLowerCase() === "default") {
-      overrides.rangeWidthPct = null;
-    } else if (rangeInput.trim() !== "") {
-      overrides.rangeWidthPct = parseOptionalNumber(rangeInput);
-    }
-
-    if (budgetInput.trim().toLowerCase() === "default") {
-      overrides.budgetUsd = null;
-    } else if (budgetInput.trim() !== "") {
-      overrides.budgetUsd = parseOptionalNumber(budgetInput);
-    }
-
-    await fetch(`/api/pools/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ overrides })
-    });
-    updateUI();
+    openEditPoolModal(pool);
+    return;
   }
 }
 
@@ -619,6 +1252,47 @@ function closeActiveActionMenu() {
     details.open = false;
   }
   activeActionMenu = null;
+}
+
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const closeType = target.getAttribute("data-close");
+  if (closeType === "edit") {
+    closeEditPoolModal();
+  } else if (closeType === "swap") {
+    closeSwapResultModal();
+  } else if (closeType === "swap-error") {
+    closeSwapErrorModal();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeEditPoolModal();
+    closeSwapResultModal();
+    closeSwapErrorModal();
+  }
+});
+
+if (swapResultList) {
+  swapResultList.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const button = target.closest("[data-error-index]");
+    if (!(button instanceof HTMLElement)) return;
+    const raw = button.getAttribute("data-error-index");
+    const idx = raw ? Number(raw) : Number.NaN;
+    if (!Number.isFinite(idx)) return;
+    const text = swapErrorDetails[idx] ?? "";
+    openSwapErrorModal(text);
+  });
+}
+
+if (swapErrorCopy) {
+  swapErrorCopy.addEventListener("click", () => {
+    copyErrorText(swapErrorText?.textContent ?? "");
+  });
 }
 
 function positionActionMenu(menu, summary) {

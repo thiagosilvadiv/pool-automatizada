@@ -148,7 +148,37 @@ header h1 {
   color: var(--text);
 }
 
+.field textarea {
+  background: #0f1419;
+  border: 1px solid #2c3a4a;
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+  resize: vertical;
+  min-height: 160px;
+}
+
+.field select {
+  background: #0f1419;
+  border: 1px solid #2c3a4a;
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+}
+
 .field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(54, 211, 153, 0.15);
+}
+
+.field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(54, 211, 153, 0.15);
+}
+
+.field select:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(54, 211, 153, 0.15);
@@ -260,6 +290,12 @@ button.ghost {
   color: var(--text);
 }
 
+button.mini-btn {
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 8px;
+}
+
 button.ghost.danger {
   background: transparent;
   border-color: rgba(255, 107, 107, 0.6);
@@ -297,6 +333,195 @@ button.danger:not(.ghost):hover {
 .badge.stopped {
   background: rgba(255, 107, 107, 0.15);
   color: var(--danger);
+}
+
+.trend-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: #2c3a4a;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.trend-badge.trend-up {
+  background: rgba(54, 211, 153, 0.2);
+  color: var(--accent);
+}
+
+.trend-badge.trend-down {
+  background: rgba(255, 107, 107, 0.2);
+  color: var(--danger);
+}
+
+.trend-badge.trend-off,
+.trend-badge.trend-unknown {
+  background: rgba(154, 167, 181, 0.2);
+  color: var(--muted);
+}
+
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid #2c3a4a;
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.link-btn.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.chart-wrap {
+  position: relative;
+  min-height: 520px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #243142;
+  background: #0f1419;
+}
+
+.chart-frame {
+  width: 100%;
+  height: 640px;
+  border: 0;
+}
+
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 14px;
+  background: rgba(15, 20, 25, 0.6);
+}
+
+.chart-empty.hidden {
+  display: none;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 12, 16, 0.7);
+}
+
+.modal-card {
+  position: relative;
+  z-index: 1;
+  width: min(720px, 92vw);
+  max-height: 90vh;
+  overflow: auto;
+  background: var(--panel);
+  border-radius: 16px;
+  border: 1px solid #243142;
+  padding: 20px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.icon-btn {
+  background: transparent;
+  border: 1px solid #2c3a4a;
+  color: var(--text);
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  padding: 0;
+}
+
+.modal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.modal-grid .hint {
+  grid-column: 1 / -1;
+}
+
+.modal-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.modal-summary {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 12px;
+}
+
+.modal-list table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.modal-list th,
+.modal-list td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #243142;
+}
+
+.modal-list th {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+}
+
+.error-log {
+  background: #0f1419;
+  border: 1px solid #243142;
+  border-radius: 12px;
+  padding: 12px;
+  color: var(--text);
+  font-size: 12px;
+  white-space: pre-wrap;
+  max-height: 50vh;
+  overflow: auto;
 }
 
 .grid {
@@ -377,5 +602,8 @@ tbody tr:nth-child(even) {
   .field,
   .field.grow {
     width: 100%;
+  }
+  .chart-frame {
+    height: 420px;
   }
 }

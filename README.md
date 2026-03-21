@@ -107,6 +107,8 @@ REDIS_PREFIX=orca-bot
 - `rpcUrl`: endpoint RPC
 - `whirlpoolAddress`: endereço do Whirlpool
 - `rangeWidthPct`: largura da faixa (ex.: `1.0` = ±1%)
+- `rangeExitBiasPct`: reduz o PnL negativo em % no **token escolhido** (ex.: `10` = perda 10% menor)
+- `preferredExitToken`: token preferido para saída (`tokenA`, `tokenB` ou `null`)
 - `slippageBps`: slippage máximo em bps (ex.: `50` = 0,50%)
 - `pollIntervalMs`: intervalo de verificação
 - `outOfRangeConfirmSec`: tempo (segundos) que o preço deve ficar fora da faixa antes de re-range
@@ -119,3 +121,15 @@ REDIS_PREFIX=orca-bot
 - `budgetUsd`: orçamento em USD para limitar o valor alocado na posição (ou `null`)
 - `pythSolUsdFeedId`: feed ID hex da Pyth (ex.: `0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d`)
 - `priceStaleMaxSec`: idade máxima (segundos) para o preço da Pyth
+- `trendEnabled`: ativa leitura de tendência via GeckoTerminal (true/false)
+- `trendTimeframe`: timeframe do indicador (`1m`, `5m`, `30m`, `1h`)
+- `trendTargetUp`: alvo quando tendência é alta (`sol`, `other`, `tokenA`, `tokenB`)
+- `trendTargetDown`: alvo quando tendência é baixa (`sol`, `other`, `tokenA`, `tokenB`)
+- `trendFallback`: o que fazer se tendência estiver ausente/velha (`manual`, `neutral`, `last`)
+- `trendStaleSec`: idade máxima (segundos) para considerar o sinal válido
+- `trendNetworkId`: id da rede no GeckoTerminal (ex.: `solana`)
+
+Exemplo de faixa assimétrica por valor:
+
+- `RANGE_WIDTH_PCT=1` e `RANGE_EXIT_BIAS_PCT=10` → o PnL negativo (no token escolhido) fica ~10% menor que o positivo.
+- `preferredExitToken=tokenA` fixa o lado inferior e usa tokenA como referência de PnL; `preferredExitToken=tokenB` fixa o lado superior e usa tokenB como referência.

@@ -7,7 +7,15 @@ import { Config } from "./config.js";
 import { OrcaBot } from "./orca.js";
 import { BotRunner } from "./runner.js";
 import { logger } from "./logger.js";
-import { createHistoryStore, createPoolsStore, PoolsStore, PoolsState } from "./storage.js";
+import {
+  createHistoryStore,
+  createPoolsStore,
+  createSwapAllowlistStore,
+  PoolsStore,
+  PoolsState,
+  SwapAllowlistStore
+} from "./storage.js";
+import { getTrendSnapshot } from "./trend.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,6 +30,12 @@ export type PoolEntry = {
 export type PoolOverrides = {
   rangeWidthPct?: number;
   budgetUsd?: number | null;
+  rangeExitBiasPct?: number;
+  preferredExitToken?: "tokenA" | "tokenB" | null;
+  trendEnabled?: boolean;
+  trendTimeframe?: "1m" | "5m" | "30m" | "1h";
+  trendTargetUp?: "sol" | "other" | "tokenA" | "tokenB";
+  trendTargetDown?: "sol" | "other" | "tokenA" | "tokenB";
 };
 
 export type PoolSummary = {
@@ -38,6 +52,15 @@ export type PoolSummary = {
   positionPnlUsd: number | null;
   positionValueSol: number | null;
   positionPnlSol: number | null;
+  tokenAMint: string | null;
+  tokenBMint: string | null;
+  isTokenASol: boolean | null;
+  isTokenBSol: boolean | null;
+  trendDirection: "up" | "down" | null;
+  trendUpdatedAt: string | null;
+  trendTimeframe: "1m" | "5m" | "30m" | "1h" | null;
+  trendEnabled: boolean;
+  trendStale: boolean;
   overrides: PoolOverrides | null;
 };
 
@@ -58,6 +81,7 @@ export class PoolManager {
   private connection: any;
   private wallet: any;
   private poolsStore!: PoolsStore<PoolEntry>;
+  private swapAllowlistStore!: SwapAllowlistStore;
   private pools = new Map<string, PoolRecord>();
   private entries: PoolEntry[] = [];
   private selectedPoolId: string | null = null;
@@ -65,6 +89,8 @@ export class PoolManager {
   private autoCloseTimer: NodeJS.Timeout | null = null;
   private closeEmptyInFlight = false;
   private lastLowSolAutoCloseAt: number | null = null;
+  private swapAllowlist: string[] = [];
+  private swapAllowlistUpdatedAt: string | null = null;
 
   constructor(baseConfig: Config, connection: any, wallet: any) {
     this.baseConfig = baseConfig;
@@ -74,7 +100,25 @@ export class PoolManager {
 
   async init(): Promise<void> {
     this.poolsStore = await createPoolsStore<PoolEntry>();
+    this.swapAllowlistStore = await createSwapAllowlistStore();
+    await this.loadSwapAllowlist();
     await this.loadPools();
+  }
+
+  getSwapAllowlist(): { mints: string[]; updatedAt: string | null } {
+    return { mints: [...this.swapAllowlist], updatedAt: this.swapAllowlistUpdatedAt };
+  }
+
+  async setSwapAllowlist(mints: string[]): Promise<{ mints: string[]; updatedAt: string }> {
+    const normalized = this.normalizeSwapAllowlist(mints);
+    const updatedAt = new Date().toISOString();
+    this.swapAllowlist = normalized;
+    this.swapAllowlistUpdatedAt = updatedAt;
+    await this.swapAllowlistStore.save({ mints: normalized, updatedAt });
+    for (const record of this.pools.values()) {
+      record.runner.updateSwapAllowlist(normalized);
+    }
+    return { mints: normalized, updatedAt };
   }
 
   getSelectedPoolId(): string | null {
@@ -85,10 +129,39 @@ export class PoolManager {
     return [...this.entries];
   }
 
-  listSummaries(): PoolSummary[] {
-    return this.entries.map((entry) => {
+  async listSummaries(): Promise<PoolSummary[]> {
+    return Promise.all(this.entries.map(async (entry) => {
       const record = this.pools.get(entry.id);
       const status = record?.runner.getStatus();
+      const poolConfig: Config = {
+        ...this.baseConfig,
+        whirlpoolAddress: entry.whirlpoolAddress,
+        ...(entry.overrides ?? {})
+      };
+      const trendEnabled = Boolean(poolConfig.trendEnabled);
+      let trendDirection: "up" | "down" | null = null;
+      let trendUpdatedAt: string | null = null;
+      let trendTimeframe: "1m" | "5m" | "30m" | "1h" | null = trendEnabled ? poolConfig.trendTimeframe : null;
+      let trendStale = false;
+      if (trendEnabled) {
+        try {
+          const snapshot = await getTrendSnapshot({
+            networkId: poolConfig.trendNetworkId,
+            poolAddress: entry.whirlpoolAddress,
+            timeframe: poolConfig.trendTimeframe,
+            staleSec: poolConfig.trendStaleSec
+          });
+          trendDirection = snapshot?.direction ?? null;
+          trendUpdatedAt = snapshot?.updatedAt ?? null;
+          trendTimeframe = snapshot?.timeframe ?? poolConfig.trendTimeframe ?? null;
+          trendStale = snapshot?.stale ?? false;
+        } catch (err) {
+          trendDirection = null;
+          trendUpdatedAt = null;
+          trendTimeframe = poolConfig.trendTimeframe ?? null;
+          trendStale = true;
+        }
+      }
       return {
         id: entry.id,
         name: entry.name,
@@ -103,9 +176,18 @@ export class PoolManager {
         positionPnlUsd: status?.positionPnlUsd ?? null,
         positionValueSol: status?.positionValue ?? null,
         positionPnlSol: status?.positionPnl ?? null,
+        tokenAMint: status?.tokenAMint ?? null,
+        tokenBMint: status?.tokenBMint ?? null,
+        isTokenASol: status?.isTokenASol ?? null,
+        isTokenBSol: status?.isTokenBSol ?? null,
+        trendDirection,
+        trendUpdatedAt,
+        trendTimeframe,
+        trendEnabled,
+        trendStale,
         overrides: entry.overrides ?? null
       };
-    });
+    }));
   }
 
   async selectPool(id: string): Promise<void> {
@@ -273,7 +355,7 @@ export class PoolManager {
     return { ok: result.ok, reason: result.reason };
   }
 
-  async swapWalletToSolSelected(): Promise<{ ok: boolean; reason?: string; swaps: number; failed: number; totalOutLamports: number }> {
+  async swapWalletToSolSelected(): Promise<{ ok: boolean; reason?: string; swaps: number; failed: number; totalOutLamports: number; details: any[] }> {
     if (!this.selectedPoolId) {
       throw new Error("No pool selected");
     }
@@ -284,7 +366,8 @@ export class PoolManager {
       reason: result.reason,
       swaps: result.swaps,
       failed: result.failed,
-      totalOutLamports: result.totalOutLamports
+      totalOutLamports: result.totalOutLamports,
+      details: result.details ?? []
     };
   }
 
@@ -508,9 +591,11 @@ export class PoolManager {
         await this.maybeCloseEmptyAccountsOnLowSol();
       }
     });
+    bot.setSwapAllowlist(this.swapAllowlist);
     const historyStore = await createHistoryStore(entry.id);
     const runner = new BotRunner(bot, poolConfig, { historyStore });
     await runner.init();
+    runner.updateSwapAllowlist(this.swapAllowlist);
     this.pools.set(entry.id, { entry, runner });
   }
 
@@ -520,6 +605,26 @@ export class PoolManager {
       pools: this.entries
     };
     await this.poolsStore.save(payload);
+  }
+
+  private async loadSwapAllowlist(): Promise<void> {
+    try {
+      const state = await this.swapAllowlistStore.load();
+      const rawMints = Array.isArray(state?.mints) ? state?.mints : [];
+      this.swapAllowlist = this.normalizeSwapAllowlist(rawMints);
+      this.swapAllowlistUpdatedAt = state?.updatedAt ?? null;
+    } catch (err) {
+      logger.warn({ err }, "failed to load swap allowlist");
+      this.swapAllowlist = [];
+      this.swapAllowlistUpdatedAt = null;
+    }
+  }
+
+  private normalizeSwapAllowlist(mints: string[]): string[] {
+    const normalized = Array.isArray(mints)
+      ? mints.map((mint) => String(mint).trim()).filter((mint) => mint.length > 0)
+      : [];
+    return Array.from(new Set(normalized));
   }
 
   private normalizeOverrides(overrides?: PoolOverrides): PoolOverrides | undefined {
@@ -542,6 +647,65 @@ export class PoolManager {
         throw new Error("budgetUsd override must be >= 0");
       }
       normalized.budgetUsd = value === 0 ? null : value;
+    }
+
+    if (overrides.rangeExitBiasPct != null) {
+      const value = Number(overrides.rangeExitBiasPct);
+      if (!Number.isFinite(value) || value < 0 || value >= 100) {
+        throw new Error("rangeExitBiasPct override must be between 0 and 99.9");
+      }
+      normalized.rangeExitBiasPct = value;
+    }
+
+    if (overrides.preferredExitToken != null) {
+      const value = String(overrides.preferredExitToken);
+      if (value !== "tokenA" && value !== "tokenB") {
+        throw new Error("preferredExitToken override must be tokenA or tokenB");
+      }
+      normalized.preferredExitToken = value as "tokenA" | "tokenB";
+    }
+
+    if (overrides.trendEnabled != null) {
+      const raw = overrides.trendEnabled as unknown;
+      let value: boolean | null = null;
+      if (typeof raw === "boolean") {
+        value = raw;
+      } else if (typeof raw === "string") {
+        const normalizedValue = String(raw).trim().toLowerCase();
+        if (["1", "true", "yes", "on", "sim"].includes(normalizedValue)) {
+          value = true;
+        } else if (["0", "false", "no", "off", "nao"].includes(normalizedValue)) {
+          value = false;
+        }
+      }
+      if (value === null) {
+        throw new Error("trendEnabled override must be boolean");
+      }
+      normalized.trendEnabled = value;
+    }
+
+    if (overrides.trendTimeframe != null) {
+      const value = String(overrides.trendTimeframe).trim().toLowerCase();
+      if (!["1m", "5m", "30m", "1h"].includes(value)) {
+        throw new Error("trendTimeframe override must be 1m, 5m, 30m, or 1h");
+      }
+      normalized.trendTimeframe = value as PoolOverrides["trendTimeframe"];
+    }
+
+    if (overrides.trendTargetUp != null) {
+      const value = String(overrides.trendTargetUp).trim().toLowerCase();
+      if (!["sol", "other", "tokena", "tokenb", "token_a", "token_b"].includes(value)) {
+        throw new Error("trendTargetUp override must be sol, other, tokenA, or tokenB");
+      }
+      normalized.trendTargetUp = value.startsWith("token") ? (value.replace("_", "").toLowerCase() === "tokena" ? "tokenA" : "tokenB") : (value as PoolOverrides["trendTargetUp"]);
+    }
+
+    if (overrides.trendTargetDown != null) {
+      const value = String(overrides.trendTargetDown).trim().toLowerCase();
+      if (!["sol", "other", "tokena", "tokenb", "token_a", "token_b"].includes(value)) {
+        throw new Error("trendTargetDown override must be sol, other, tokenA, or tokenB");
+      }
+      normalized.trendTargetDown = value.startsWith("token") ? (value.replace("_", "").toLowerCase() === "tokena" ? "tokenA" : "tokenB") : (value as PoolOverrides["trendTargetDown"]);
     }
 
     return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -574,6 +738,89 @@ export class PoolManager {
           throw new Error("budgetUsd override must be >= 0");
         }
         next.budgetUsd = value === 0 ? null : value;
+      }
+    }
+
+    if ("rangeExitBiasPct" in updates) {
+      if (updates.rangeExitBiasPct == null) {
+        delete next.rangeExitBiasPct;
+      } else {
+        const value = Number(updates.rangeExitBiasPct);
+        if (!Number.isFinite(value) || value < 0 || value >= 100) {
+          throw new Error("rangeExitBiasPct override must be between 0 and 99.9");
+        }
+        next.rangeExitBiasPct = value;
+      }
+    }
+
+    if ("preferredExitToken" in updates) {
+      if (updates.preferredExitToken == null) {
+        delete next.preferredExitToken;
+      } else {
+        const value = String(updates.preferredExitToken);
+        if (value !== "tokenA" && value !== "tokenB") {
+          throw new Error("preferredExitToken override must be tokenA or tokenB");
+        }
+        next.preferredExitToken = value as "tokenA" | "tokenB";
+      }
+    }
+
+    if ("trendEnabled" in updates) {
+      if (updates.trendEnabled == null) {
+        delete next.trendEnabled;
+      } else {
+        const raw = updates.trendEnabled as unknown;
+        let value: boolean | null = null;
+        if (typeof raw === "boolean") {
+          value = raw;
+        } else if (typeof raw === "string") {
+          const normalizedValue = String(raw).trim().toLowerCase();
+          if (["1", "true", "yes", "on", "sim"].includes(normalizedValue)) {
+            value = true;
+          } else if (["0", "false", "no", "off", "nao"].includes(normalizedValue)) {
+            value = false;
+          }
+        }
+        if (value === null) {
+          throw new Error("trendEnabled override must be boolean");
+        }
+        next.trendEnabled = value;
+      }
+    }
+
+    if ("trendTimeframe" in updates) {
+      if (updates.trendTimeframe == null) {
+        delete next.trendTimeframe;
+      } else {
+        const value = String(updates.trendTimeframe).trim().toLowerCase();
+        if (!["1m", "5m", "30m", "1h"].includes(value)) {
+          throw new Error("trendTimeframe override must be 1m, 5m, 30m, or 1h");
+        }
+        next.trendTimeframe = value as PoolOverrides["trendTimeframe"];
+      }
+    }
+
+    if ("trendTargetUp" in updates) {
+      if (updates.trendTargetUp == null) {
+        delete next.trendTargetUp;
+      } else {
+        const value = String(updates.trendTargetUp).trim().toLowerCase();
+        if (!["sol", "other", "tokena", "tokenb", "token_a", "token_b"].includes(value)) {
+          throw new Error("trendTargetUp override must be sol, other, tokenA, or tokenB");
+        }
+        next.trendTargetUp = value.startsWith("token") ? (value.replace("_", "").toLowerCase() === "tokena" ? "tokenA" : "tokenB") : (value as PoolOverrides["trendTargetUp"]);
+      }
+    }
+
+    if ("trendTargetDown" in updates) {
+      if (updates.trendTargetDown == null) {
+        delete next.trendTargetDown;
+      } else {
+        const value = String(updates.trendTargetDown).trim().toLowerCase();
+        if (!["sol", "other", "tokena", "tokenb", "token_a", "token_b"].includes(value)) {
+          throw new Error("trendTargetDown override must be sol, other, tokenA, or tokenB");
+        }
+        next.trendTargetDown = value.startsWith("token") ? (value.replace("_", "").toLowerCase() === "tokena" ? "tokenA" : "tokenB") : (value as PoolOverrides["trendTargetDown"]);
       }
     }
 

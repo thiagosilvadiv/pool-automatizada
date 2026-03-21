@@ -1,11 +1,17 @@
 import fs from "fs";
 import path from "path";
 
+import type { TrendFallback, TrendTarget, TrendTimeframe } from "./trend.js";
+
+const MAX_SLIPPAGE_BPS = 10_000;
+
 export type Config = {
   network: string;
   rpcUrl: string;
   whirlpoolAddress: string;
   rangeWidthPct: number;
+  rangeExitBiasPct: number;
+  preferredExitToken: "tokenA" | "tokenB" | null;
   slippageBps: number;
   pollIntervalMs: number;
   outOfRangeConfirmSec: number;
@@ -28,6 +34,7 @@ export type Config = {
   autoSwapFeesToUsdcTargetMint: string;
   jupiterApiKey: string | null;
   jupiterApiUrl: string;
+  jupiterExcludeDexes: string[];
   dryRun: boolean;
   minSolBalance: number;
   maxTokenA: number | null;
@@ -37,6 +44,13 @@ export type Config = {
   budgetUsd: number | null;
   pythSolUsdFeedId: string | null;
   priceStaleMaxSec: number | null;
+  trendEnabled: boolean;
+  trendTimeframe: TrendTimeframe;
+  trendTargetUp: TrendTarget;
+  trendTargetDown: TrendTarget;
+  trendFallback: TrendFallback;
+  trendStaleSec: number;
+  trendNetworkId: string;
 };
 
 function parseEnvNumber(value: string | undefined): number | undefined {
@@ -53,6 +67,80 @@ function parseEnvBool(value: string | undefined): boolean | undefined {
 function parseEnvList(value: string | undefined): string[] | undefined {
   if (value == null || value.trim() === "") return undefined;
   return value.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
+}
+
+function parseTrendTimeframe(value: unknown): TrendTimeframe | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "1m") return "1m";
+  if (trimmed === "5m") return "5m";
+  if (trimmed === "30m") return "30m";
+  if (trimmed === "1h") return "1h";
+  return undefined;
+}
+
+function parseTrendTarget(value: unknown): TrendTarget | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "sol") return "sol";
+  if (trimmed === "other") return "other";
+  if (trimmed === "tokena" || trimmed === "token_a") return "tokenA";
+  if (trimmed === "tokenb" || trimmed === "token_b") return "tokenB";
+  return undefined;
+}
+
+function parseTrendFallback(value: unknown): TrendFallback | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "manual") return "manual";
+  if (trimmed === "neutral") return "neutral";
+  if (trimmed === "last") return "last";
+  return undefined;
+}
+
+function parseExitToken(value: unknown): "tokenA" | "tokenB" | null | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const lower = trimmed.toLowerCase();
+  if (lower === "tokena" || lower === "a" || lower === "token_a") return "tokenA";
+  if (lower === "tokenb" || lower === "b" || lower === "token_b") return "tokenB";
+  return undefined;
+}
+
+function timeframeToSeconds(timeframe: TrendTimeframe): number {
+  switch (timeframe) {
+    case "1m":
+      return 60;
+    case "5m":
+      return 300;
+    case "30m":
+      return 1800;
+    case "1h":
+      return 3600;
+    default:
+      return 60;
+  }
+}
+
+function inferTrendNetworkId(network: string): string {
+  const value = (network || "").trim().toLowerCase();
+  if (value.includes("sol")) return "solana";
+  if (value.includes("eth")) return "eth";
+  if (value.includes("polygon")) return "polygon_pos";
+  if (value.includes("bsc") || value.includes("binance")) return "bsc";
+  if (value.includes("avax") || value.includes("avalanche")) return "avax";
+  if (value.includes("arbitrum")) return "arbitrum";
+  if (value.includes("optimism")) return "optimism";
+  if (value.includes("base")) return "base";
+  return "solana";
 }
 
 function readConfigFile(configPath: string): Partial<Config> {
@@ -74,11 +162,83 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     data = readConfigFile(envPath);
   }
 
+  const envExitTokenRaw = process.env.PREFERRED_EXIT_TOKEN ?? "";
+  const envExitToken = parseExitToken(envExitTokenRaw);
+  if (envExitTokenRaw && !envExitToken) {
+    throw new Error("PREFERRED_EXIT_TOKEN must be tokenA or tokenB");
+  }
+  const dataExitTokenRaw = (data as any).preferredExitToken;
+  const dataExitToken = parseExitToken(dataExitTokenRaw);
+  if (dataExitTokenRaw != null && dataExitToken === undefined) {
+    throw new Error("preferredExitToken must be tokenA or tokenB");
+  }
+
+  const envTrendTimeframeRaw = process.env.TREND_TIMEFRAME ?? "";
+  const envTrendTimeframe = parseTrendTimeframe(envTrendTimeframeRaw);
+  if (envTrendTimeframeRaw && !envTrendTimeframe) {
+    throw new Error("TREND_TIMEFRAME must be 1m, 5m, 30m, or 1h");
+  }
+  const dataTrendTimeframeRaw = (data as any).trendTimeframe;
+  const dataTrendTimeframe = parseTrendTimeframe(dataTrendTimeframeRaw);
+  if (dataTrendTimeframeRaw != null && dataTrendTimeframe === undefined) {
+    throw new Error("trendTimeframe must be 1m, 5m, 30m, or 1h");
+  }
+
+  const envTrendTargetUpRaw = process.env.TREND_TARGET_UP ?? "";
+  const envTrendTargetUp = parseTrendTarget(envTrendTargetUpRaw);
+  if (envTrendTargetUpRaw && !envTrendTargetUp) {
+    throw new Error("TREND_TARGET_UP must be sol, other, tokenA, or tokenB");
+  }
+  const dataTrendTargetUpRaw = (data as any).trendTargetUp;
+  const dataTrendTargetUp = parseTrendTarget(dataTrendTargetUpRaw);
+  if (dataTrendTargetUpRaw != null && dataTrendTargetUp === undefined) {
+    throw new Error("trendTargetUp must be sol, other, tokenA, or tokenB");
+  }
+
+  const envTrendTargetDownRaw = process.env.TREND_TARGET_DOWN ?? "";
+  const envTrendTargetDown = parseTrendTarget(envTrendTargetDownRaw);
+  if (envTrendTargetDownRaw && !envTrendTargetDown) {
+    throw new Error("TREND_TARGET_DOWN must be sol, other, tokenA, or tokenB");
+  }
+  const dataTrendTargetDownRaw = (data as any).trendTargetDown;
+  const dataTrendTargetDown = parseTrendTarget(dataTrendTargetDownRaw);
+  if (dataTrendTargetDownRaw != null && dataTrendTargetDown === undefined) {
+    throw new Error("trendTargetDown must be sol, other, tokenA, or tokenB");
+  }
+
+  const envTrendFallbackRaw = process.env.TREND_FALLBACK ?? "";
+  const envTrendFallback = parseTrendFallback(envTrendFallbackRaw);
+  if (envTrendFallbackRaw && !envTrendFallback) {
+    throw new Error("TREND_FALLBACK must be manual, neutral, or last");
+  }
+  const dataTrendFallbackRaw = (data as any).trendFallback;
+  const dataTrendFallback = parseTrendFallback(dataTrendFallbackRaw);
+  if (dataTrendFallbackRaw != null && dataTrendFallback === undefined) {
+    throw new Error("trendFallback must be manual, neutral, or last");
+  }
+
+  const resolvedTrendTimeframe = envTrendTimeframe
+    ?? dataTrendTimeframe
+    ?? "1m";
+  const defaultStaleSec = timeframeToSeconds(resolvedTrendTimeframe) * 3;
+  const trendStaleSec = parseEnvNumber(process.env.TREND_STALE_SEC)
+    ?? (data as any).trendStaleSec
+    ?? defaultStaleSec;
+
+  const trendNetworkId = (process.env.TREND_NETWORK_ID ?? (data as any).trendNetworkId ?? "").trim()
+    || inferTrendNetworkId(process.env.NETWORK ?? data.network ?? "mainnet-beta");
+
   const config: Config = {
     network: process.env.NETWORK ?? data.network ?? "mainnet-beta",
     rpcUrl: process.env.RPC_URL ?? data.rpcUrl ?? "",
     whirlpoolAddress: process.env.WHIRLPOOL_ADDRESS ?? data.whirlpoolAddress ?? "",
     rangeWidthPct: parseEnvNumber(process.env.RANGE_WIDTH_PCT) ?? Number(data.rangeWidthPct ?? 1),
+    rangeExitBiasPct: parseEnvNumber(process.env.RANGE_EXIT_BIAS_PCT)
+      ?? (data.rangeExitBiasPct == null ? undefined : Number(data.rangeExitBiasPct))
+      ?? 0,
+    preferredExitToken: envExitToken
+      ?? dataExitToken
+      ?? null,
     slippageBps: parseEnvNumber(process.env.SLIPPAGE_BPS) ?? Number(data.slippageBps ?? 50),
     pollIntervalMs: parseEnvNumber(process.env.POLL_INTERVAL_MS) ?? Number(data.pollIntervalMs ?? 30000),
     outOfRangeConfirmSec: parseEnvNumber(process.env.OUT_OF_RANGE_CONFIRM_SEC) ?? Number(data.outOfRangeConfirmSec ?? 0),
@@ -123,6 +283,13 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? "",
     jupiterApiKey: process.env.JUPITER_API_KEY ?? data.jupiterApiKey ?? null,
     jupiterApiUrl: process.env.JUPITER_API_URL ?? data.jupiterApiUrl ?? "https://api.jup.ag",
+    jupiterExcludeDexes: parseEnvList(process.env.JUPITER_EXCLUDE_DEXES)
+      ?? (Array.isArray((data as any).jupiterExcludeDexes)
+        ? (data as any).jupiterExcludeDexes.map((item: any) => String(item).trim()).filter((item: string) => item)
+        : (typeof (data as any).jupiterExcludeDexes === "string"
+          ? parseEnvList((data as any).jupiterExcludeDexes)
+          : null))
+      ?? [],
     dryRun: parseEnvBool(process.env.DRY_RUN) ?? Boolean(data.dryRun ?? false),
     minSolBalance: parseEnvNumber(process.env.MIN_SOL_BALANCE) ?? Number(data.minSolBalance ?? 0.02),
     maxTokenA: parseEnvNumber(process.env.MAX_TOKEN_A) ?? data.maxTokenA ?? null,
@@ -131,7 +298,20 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     positionMint: process.env.POSITION_MINT ?? data.positionMint ?? null,
     budgetUsd: parseEnvNumber(process.env.BUDGET_USD) ?? (data.budgetUsd == null ? null : Number(data.budgetUsd)),
     pythSolUsdFeedId: process.env.PYTH_SOL_USD_FEED_ID ?? data.pythSolUsdFeedId ?? null,
-    priceStaleMaxSec: parseEnvNumber(process.env.PRICE_STALE_MAX_SEC) ?? (data.priceStaleMaxSec == null ? 120 : Number(data.priceStaleMaxSec))
+    priceStaleMaxSec: parseEnvNumber(process.env.PRICE_STALE_MAX_SEC) ?? (data.priceStaleMaxSec == null ? 120 : Number(data.priceStaleMaxSec)),
+    trendEnabled: parseEnvBool(process.env.TREND_ENABLED) ?? Boolean((data as any).trendEnabled ?? false),
+    trendTimeframe: resolvedTrendTimeframe,
+    trendTargetUp: envTrendTargetUp
+      ?? dataTrendTargetUp
+      ?? "sol",
+    trendTargetDown: envTrendTargetDown
+      ?? dataTrendTargetDown
+      ?? "other",
+    trendFallback: envTrendFallback
+      ?? dataTrendFallback
+      ?? "manual",
+    trendStaleSec: Number(trendStaleSec),
+    trendNetworkId
   };
 
   if (!configPath && !envJson && !envPath && !config.rpcUrl) {
@@ -147,8 +327,18 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   if (!Number.isFinite(config.rangeWidthPct) || config.rangeWidthPct <= 0) {
     throw new Error("rangeWidthPct must be > 0");
   }
-  if (!Number.isFinite(config.slippageBps) || config.slippageBps < 0) {
-    throw new Error("slippageBps must be >= 0");
+  if (!Number.isFinite(config.rangeExitBiasPct)
+    || config.rangeExitBiasPct < 0
+    || config.rangeExitBiasPct >= 100) {
+    throw new Error("rangeExitBiasPct must be between 0 and 99.9");
+  }
+  if (config.preferredExitToken != null
+    && config.preferredExitToken !== "tokenA"
+    && config.preferredExitToken !== "tokenB") {
+    throw new Error("preferredExitToken must be tokenA, tokenB, or null");
+  }
+  if (!Number.isFinite(config.slippageBps) || config.slippageBps < 0 || config.slippageBps > MAX_SLIPPAGE_BPS) {
+    throw new Error(`slippageBps must be between 0 and ${MAX_SLIPPAGE_BPS}`);
   }
   if (!Number.isFinite(config.pollIntervalMs) || config.pollIntervalMs < 1000) {
     throw new Error("pollIntervalMs must be >= 1000");
@@ -162,8 +352,10 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   if (!Number.isFinite(config.autoSolMaxInputPct) || config.autoSolMaxInputPct < 0 || config.autoSolMaxInputPct > 1) {
     throw new Error("autoSolMaxInputPct must be between 0 and 1");
   }
-  if (!Number.isFinite(config.autoSolSlippageBps) || config.autoSolSlippageBps < 0) {
-    throw new Error("autoSolSlippageBps must be >= 0");
+  if (!Number.isFinite(config.autoSolSlippageBps)
+    || config.autoSolSlippageBps < 0
+    || config.autoSolSlippageBps > MAX_SLIPPAGE_BPS) {
+    throw new Error(`autoSolSlippageBps must be between 0 and ${MAX_SLIPPAGE_BPS}`);
   }
   if (!Number.isFinite(config.autoSolCooldownSec) || config.autoSolCooldownSec < 0) {
     throw new Error("autoSolCooldownSec must be >= 0");
@@ -198,6 +390,24 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (config.priceStaleMaxSec !== null && (!Number.isFinite(Number(config.priceStaleMaxSec)) || Number(config.priceStaleMaxSec) < 0)) {
     throw new Error("priceStaleMaxSec must be >= 0 or null");
+  }
+  if (!Number.isFinite(config.trendStaleSec) || config.trendStaleSec < 0) {
+    throw new Error("trendStaleSec must be >= 0");
+  }
+  if (!config.trendTimeframe || !parseTrendTimeframe(config.trendTimeframe)) {
+    throw new Error("trendTimeframe must be 1m, 5m, 30m, or 1h");
+  }
+  if (!config.trendTargetUp || !parseTrendTarget(config.trendTargetUp)) {
+    throw new Error("trendTargetUp must be sol, other, tokenA, or tokenB");
+  }
+  if (!config.trendTargetDown || !parseTrendTarget(config.trendTargetDown)) {
+    throw new Error("trendTargetDown must be sol, other, tokenA, or tokenB");
+  }
+  if (!config.trendFallback || !parseTrendFallback(config.trendFallback)) {
+    throw new Error("trendFallback must be manual, neutral, or last");
+  }
+  if (config.trendEnabled && (!config.trendNetworkId || !config.trendNetworkId.trim())) {
+    throw new Error("trendNetworkId is required when trendEnabled is true");
   }
 
   return config;

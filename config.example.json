@@ -3,6 +3,8 @@
   "rpcUrl": "https://your.rpc.endpoint",
   "whirlpoolAddress": "YOUR_WHIRLPOOL_ADDRESS",
   "rangeWidthPct": 1.0,
+  "rangeExitBiasPct": 0,
+  "preferredExitToken": null,
   "slippageBps": 50,
   "pollIntervalMs": 30000,
   "outOfRangeConfirmSec": 0,
@@ -33,5 +35,12 @@
   "positionMint": null,
   "budgetUsd": null,
   "pythSolUsdFeedId": "0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d",
-  "priceStaleMaxSec": 120
+  "priceStaleMaxSec": 120,
+  "trendEnabled": false,
+  "trendTimeframe": "1m",
+  "trendTargetUp": "sol",
+  "trendTargetDown": "other",
+  "trendFallback": "manual",
+  "trendStaleSec": 180,
+  "trendNetworkId": "solana"
 }

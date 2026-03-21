@@ -159,3 +159,98 @@ export async function createPoolsStore<T>(): Promise<PoolsStore<T>> {
   const filePath = defaultHistoryFile("pools.json");
   return new FilePoolsStore<T>(filePath);
 }
+
+export type SwapAllowlistState = {
+  mints: string[];
+  updatedAt: string | null;
+};
+
+export type SwapAllowlistStore = {
+  load(): Promise<SwapAllowlistState | null>;
+  save(state: SwapAllowlistState): Promise<void>;
+};
+
+export function defaultSwapAllowlistFile(name = "swap-allowlist.json"): string {
+  return path.join(__dirname, "..", "data", name);
+}
+
+class FileSwapAllowlistStore implements SwapAllowlistStore {
+  private filePath: string;
+
+  constructor(filePath: string) {
+    this.filePath = filePath;
+  }
+
+  async load(): Promise<SwapAllowlistState | null> {
+    try {
+      const raw = await fs.readFile(this.filePath, "utf8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return { mints: parsed.map((item) => String(item)), updatedAt: null };
+      }
+      if (parsed && typeof parsed === "object") {
+        const mints = Array.isArray((parsed as any).mints)
+          ? (parsed as any).mints.map((item: any) => String(item))
+          : [];
+        const updatedAt = typeof (parsed as any).updatedAt === "string" ? (parsed as any).updatedAt : null;
+        return { mints, updatedAt };
+      }
+      return { mints: [], updatedAt: null };
+    } catch {
+      return null;
+    }
+  }
+
+  async save(state: SwapAllowlistState): Promise<void> {
+    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    await fs.writeFile(this.filePath, JSON.stringify(state, null, 2), "utf8");
+  }
+}
+
+class RedisSwapAllowlistStore implements SwapAllowlistStore {
+  private key: string;
+
+  constructor(key: string) {
+    this.key = key;
+  }
+
+  async load(): Promise<SwapAllowlistState | null> {
+    const client = await getRedisClient();
+    if (!client) {
+      return null;
+    }
+    const raw = await client.get(this.key);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return { mints: parsed.map((item) => String(item)), updatedAt: null };
+    }
+    if (parsed && typeof parsed === "object") {
+      const mints = Array.isArray((parsed as any).mints)
+        ? (parsed as any).mints.map((item: any) => String(item))
+        : [];
+      const updatedAt = typeof (parsed as any).updatedAt === "string" ? (parsed as any).updatedAt : null;
+      return { mints, updatedAt };
+    }
+    return { mints: [], updatedAt: null };
+  }
+
+  async save(state: SwapAllowlistState): Promise<void> {
+    const client = await getRedisClient();
+    if (!client) {
+      throw new Error("Redis not configured");
+    }
+    await client.set(this.key, JSON.stringify(state));
+  }
+}
+
+export async function createSwapAllowlistStore(): Promise<SwapAllowlistStore> {
+  const client = await getRedisClient();
+  if (client) {
+    return new RedisSwapAllowlistStore(getRedisKey("swap-allowlist"));
+  }
+  const filePath = defaultSwapAllowlistFile();
+  return new FileSwapAllowlistStore(filePath);
+}

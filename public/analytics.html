@@ -13,6 +13,8 @@
         <p class="subtitle">Resumo de performance e histórico filtrado por data.</p>
         <nav class="nav">
           <a href="/">Painel</a>
+          <a href="/charts.html">Gráficos</a>
+          <a href="/allowlist.html">Tokens Permitidos</a>
         </nav>
       </header>
 
@@ -39,6 +41,7 @@
           <label><input type="checkbox" data-col="close" checked /> Fechamento</label>
           <label><input type="checkbox" data-col="type" checked /> Tipo</label>
           <label><input type="checkbox" data-col="action" checked /> Ação</label>
+          <label><input type="checkbox" data-col="trend" checked /> Tendência</label>
           <label><input type="checkbox" data-col="price" checked /> Preço</label>
           <label><input type="checkbox" data-col="targetRange" checked /> Faixa alvo</label>
           <label><input type="checkbox" data-col="mint" checked /> Mint posição</label>
@@ -111,6 +114,7 @@
                 <th data-col="close">Fechamento</th>
                 <th data-col="type">Tipo</th>
                 <th data-col="action">Ação</th>
+                <th data-col="trend">Tendência</th>
                 <th data-col="price">Preço</th>
                 <th data-col="targetRange">Faixa alvo</th>
                 <th data-col="mint">Mint posição</th>
@@ -122,7 +126,7 @@
               </tr>
             </thead>
             <tbody id="historyBody">
-              <tr><td colspan="13">Sem eventos ainda</td></tr>
+              <tr><td colspan="14">Sem eventos ainda</td></tr>
             </tbody>
             </table>
           </div>

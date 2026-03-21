@@ -74,6 +74,7 @@ export type HistoryEvent = {
   positionClosedAt: string | null;
   actionType: string | null;
   action: string | null;
+  trendDirection: "up" | "down" | null;
   price: number | null;
   solUsdPrice: number | null;
   budgetUsd: number | null;
@@ -118,6 +119,7 @@ export class BotRunner {
   private eventIdSeed = Math.floor(Math.random() * 1_000_000);
   private openedAtByMint = new Map<string, string>();
   private entryByMint = new Map<string, number>();
+  private trendByMint = new Map<string, "up" | "down">();
 
   constructor(bot: OrcaBot, config: Config, options: { historyStore: HistoryStore }) {
     this.bot = bot;
@@ -184,9 +186,9 @@ export class BotRunner {
     }
   }
 
-  async swapWalletToSolNow(): Promise<{ ok: boolean; reason?: string; swaps: number; failed: number; totalOutLamports: number; status: RunnerStatus }> {
+  async swapWalletToSolNow(): Promise<{ ok: boolean; reason?: string; swaps: number; failed: number; totalOutLamports: number; details: any[]; status: RunnerStatus }> {
     if (this.inFlight) {
-      return { ok: false, reason: "busy", swaps: 0, failed: 0, totalOutLamports: 0, status: this.getStatus() };
+      return { ok: false, reason: "busy", swaps: 0, failed: 0, totalOutLamports: 0, details: [], status: this.getStatus() };
     }
     this.inFlight = true;
     try {
@@ -201,6 +203,7 @@ export class BotRunner {
         swaps: result.swaps,
         failed: result.failed,
         totalOutLamports: result.totalOutLamports,
+        details: result.details ?? [],
         status: this.getStatus()
       };
     } catch (err) {
@@ -212,6 +215,7 @@ export class BotRunner {
         swaps: 0,
         failed: 0,
         totalOutLamports: 0,
+        details: [],
         status: this.getStatus()
       };
     } finally {
@@ -241,6 +245,10 @@ export class BotRunner {
     }
   }
 
+  updateSwapAllowlist(mints: string[]): void {
+    this.bot.setSwapAllowlist(mints);
+  }
+
   getHistory(): HistoryEvent[] {
     return [...this.history].reverse();
   }
@@ -250,6 +258,7 @@ export class BotRunner {
     this.lastEventPortfolioValue = null;
     this.lastEventPortfolioUsd = null;
     this.entryByMint = new Map();
+    this.trendByMint = new Map();
     await this.historyStore.clear();
   }
 
@@ -274,8 +283,28 @@ export class BotRunner {
         }
       }
     }
+    const trendByMint = new Map<string, "up" | "down">();
+    for (const item of this.history) {
+      if (!item.positionMint) {
+        continue;
+      }
+      if (item.action === "open-position" && (item.trendDirection === "up" || item.trendDirection === "down")) {
+        trendByMint.set(item.positionMint, item.trendDirection);
+      }
+      if (item.action === "close-position") {
+        trendByMint.delete(item.positionMint);
+      }
+    }
     this.entryByMint = entryByMint;
+    this.trendByMint = trendByMint;
     await this.saveHistory();
+  }
+
+  private resolveTrendForMint(mint: string | null, fallback: "up" | "down" | null): "up" | "down" | null {
+    if (!mint) {
+      return fallback ?? null;
+    }
+    return this.trendByMint.get(mint) ?? fallback ?? null;
   }
 
   private schedule(): void {
@@ -357,11 +386,17 @@ export class BotRunner {
       mergedPositionFeesUsd = null;
     }
 
+    const trendNow = status.trendDirection ?? null;
+
     if (!status.lastAction || status.lastAction === "no-action") {
       if (status.positionMint) {
         const timestamp = new Date().toISOString();
         const openedAt = mergedPositionMint ? this.openedAtByMint.get(mergedPositionMint) ?? null : null;
         const actionType = resolveActionType("resume-position");
+        const trendForMint = this.resolveTrendForMint(mergedPositionMint, trendNow);
+        if (mergedPositionMint && trendNow && !this.trendByMint.has(mergedPositionMint)) {
+          this.trendByMint.set(mergedPositionMint, trendNow);
+        }
         this.pushEvent({
           id: this.createEventId(timestamp),
           timestamp,
@@ -369,6 +404,7 @@ export class BotRunner {
           positionClosedAt: null,
           actionType,
           action: "resume-position",
+          trendDirection: trendForMint,
           price: status.lastPrice,
           solUsdPrice: status.solUsdPrice,
           budgetUsd: status.budgetUsd,
@@ -426,6 +462,7 @@ export class BotRunner {
         closePnlUsd -= txFeeUsd;
       }
 
+      const trendForClose = this.resolveTrendForMint(closeMint, trendNow);
       const closeEvent: HistoryEvent = {
         id: this.createEventId(timestamp),
         timestamp,
@@ -433,6 +470,7 @@ export class BotRunner {
         positionClosedAt: timestamp,
         actionType: resolveActionType("close-position"),
         action: "close-position",
+        trendDirection: trendForClose,
         price: status.lastPrice,
         solUsdPrice: status.solUsdPrice,
         budgetUsd: status.budgetUsd,
@@ -462,12 +500,18 @@ export class BotRunner {
         pnlDeltaUsd: null
       };
       this.pushEvent(closeEvent);
+      if (closeMint) {
+        this.trendByMint.delete(closeMint);
+      }
 
       const openMint = status.positionMint ?? null;
       let openOpenedAt = openMint ? this.openedAtByMint.get(openMint) ?? null : null;
       if (openMint) {
         this.openedAtByMint.set(openMint, timestamp);
         openOpenedAt = timestamp;
+      }
+      if (openMint && trendNow) {
+        this.trendByMint.set(openMint, trendNow);
       }
       const openEvent: HistoryEvent = {
         id: this.createEventId(timestamp),
@@ -476,6 +520,7 @@ export class BotRunner {
         positionClosedAt: null,
         actionType: resolveActionType("open-position"),
         action: "open-position",
+        trendDirection: trendNow,
         price: status.lastPrice,
         solUsdPrice: status.solUsdPrice,
         budgetUsd: status.budgetUsd,
@@ -523,7 +568,11 @@ export class BotRunner {
     if (action === "close-position" && mergedPositionMint) {
       positionOpenedAt = this.openedAtByMint.get(mergedPositionMint) ?? positionOpenedAt;
     }
+    if (action === "open-position" && mergedPositionMint && trendNow) {
+      this.trendByMint.set(mergedPositionMint, trendNow);
+    }
     const actionType = resolveActionType(action);
+    const eventTrend = this.resolveTrendForMint(mergedPositionMint, trendNow);
     const event: HistoryEvent = {
       id: this.createEventId(timestamp),
       timestamp,
@@ -531,6 +580,7 @@ export class BotRunner {
       positionClosedAt: action === "close-position" ? timestamp : null,
       actionType,
       action,
+      trendDirection: eventTrend,
       price: status.lastPrice,
       solUsdPrice: status.solUsdPrice,
       budgetUsd: status.budgetUsd,
@@ -560,6 +610,9 @@ export class BotRunner {
       pnlDeltaUsd
     };
     this.pushEvent(event);
+    if (action === "close-position" && mergedPositionMint) {
+      this.trendByMint.delete(mergedPositionMint);
+    }
   }
 
   private pushEvent(event: HistoryEvent): void {
@@ -632,6 +685,13 @@ export class BotRunner {
             mutated = true;
           }
           let next: HistoryEvent = { ...raw, id };
+          const normalizedTrend = raw.trendDirection === "up" || raw.trendDirection === "down" ? raw.trendDirection : null;
+          if (normalizedTrend !== (raw as any).trendDirection) {
+            next = { ...next, trendDirection: normalizedTrend };
+            mutated = true;
+          } else if (next.trendDirection == null) {
+            next = { ...next, trendDirection: normalizedTrend };
+          }
           const entryUsd = typeof raw.positionEntryUsd === "number" ? raw.positionEntryUsd : null;
           const feesUsd = typeof raw.positionFeesUsd === "number" ? raw.positionFeesUsd : null;
           const budgetUsd = typeof raw.budgetUsd === "number" ? raw.budgetUsd : null;
@@ -658,6 +718,7 @@ export class BotRunner {
             normalized.push(next);
           });
           const openedByMint = new Map<string, string>();
+          const trendByMint = new Map<string, "up" | "down">();
           let previousMint: string | null = null;
           for (let i = 0; i < normalized.length; i += 1) {
             let next = normalized[i];
@@ -690,20 +751,32 @@ export class BotRunner {
               }
             }
 
-            if (next.positionMint) {
+            const mint = next.positionMint ?? null;
+            if (mint) {
               if (next.action === "open-position" || (next.action === "rebalanced" && rebalanceTrusted)) {
-                openedByMint.set(next.positionMint, next.timestamp);
+                openedByMint.set(mint, next.timestamp);
                 if (!next.positionOpenedAt || next.positionOpenedAt !== next.timestamp) {
                   next = { ...next, positionOpenedAt: next.timestamp };
                   mutated = true;
                 }
+                if (next.trendDirection === "up" || next.trendDirection === "down") {
+                  trendByMint.set(mint, next.trendDirection);
+                }
               } else {
-                const openedAt = openedByMint.get(next.positionMint) ?? null;
+                const openedAt = openedByMint.get(mint) ?? null;
                 if (openedAt && next.positionOpenedAt !== openedAt) {
                   next = { ...next, positionOpenedAt: openedAt };
                   mutated = true;
                 }
+                const storedTrend = trendByMint.get(mint) ?? null;
+                if (storedTrend && next.trendDirection !== storedTrend) {
+                  next = { ...next, trendDirection: storedTrend };
+                  mutated = true;
+                }
               }
+            }
+            if (next.positionMint && next.action === "close-position") {
+              trendByMint.delete(next.positionMint);
             }
 
             normalized[i] = next;
@@ -724,6 +797,7 @@ export class BotRunner {
           this.history = normalized;
           this.openedAtByMint = openedByMint;
           this.entryByMint = entryByMint;
+          this.trendByMint = trendByMint;
           if (mutated) {
             await this.saveHistory();
           }

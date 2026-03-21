@@ -121,15 +121,36 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
+  app.get("/api/swap-allowlist", (_req: Request, res: Response) => {
+    res.json(poolManager.getSwapAllowlist());
+  });
+
+  app.put("/api/swap-allowlist", async (req: Request, res: Response) => {
+    try {
+      const raw = req.body?.mints;
+      if (!Array.isArray(raw)) {
+        res.status(400).json({ ok: false, error: "mints must be an array" });
+        return;
+      }
+      const result = await poolManager.setSwapAllowlist(raw.map((item) => String(item)));
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   app.get("/api/config", (_req: Request, res: Response) => {
     const selectedId = poolManager.getSelectedPoolId();
     const selected = poolManager.listPools().find((entry) => entry.id === selectedId) ?? null;
+    const selectedStatus = poolManager.getSelectedStatus();
     res.json({
       network: config.network,
       whirlpoolAddress: selected?.whirlpoolAddress ?? null,
       poolName: selected?.name ?? null,
       selectedPoolId: selectedId,
       rangeWidthPct: config.rangeWidthPct,
+      rangeExitBiasPct: config.rangeExitBiasPct,
+      preferredExitToken: config.preferredExitToken,
       slippageBps: config.slippageBps,
       pollIntervalMs: config.pollIntervalMs,
       outOfRangeConfirmSec: config.outOfRangeConfirmSec,
@@ -138,14 +159,26 @@ export async function startServer(config: Config): Promise<void> {
       minSolBalance: config.minSolBalance,
       budgetUsd: config.budgetUsd,
       pythSolUsdFeedId: config.pythSolUsdFeedId,
-      priceStaleMaxSec: config.priceStaleMaxSec
+      priceStaleMaxSec: config.priceStaleMaxSec,
+      trendEnabled: config.trendEnabled,
+      trendTimeframe: config.trendTimeframe,
+      trendTargetUp: config.trendTargetUp,
+      trendTargetDown: config.trendTargetDown,
+      trendFallback: config.trendFallback,
+      trendStaleSec: config.trendStaleSec,
+      trendNetworkId: config.trendNetworkId,
+      tokenAMint: selectedStatus?.tokenAMint ?? null,
+      tokenBMint: selectedStatus?.tokenBMint ?? null,
+      isTokenASol: selectedStatus?.isTokenASol ?? null,
+      isTokenBSol: selectedStatus?.isTokenBSol ?? null
     });
   });
 
-  app.get("/api/pools", (_req: Request, res: Response) => {
+  app.get("/api/pools", async (_req: Request, res: Response) => {
+    const pools = await poolManager.listSummaries();
     res.json({
       selectedPoolId: poolManager.getSelectedPoolId(),
-      pools: poolManager.listSummaries()
+      pools
     });
   });
 
@@ -222,8 +255,8 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
-  app.get("/api/results", (_req: Request, res: Response) => {
-    res.json(poolManager.listSummaries());
+  app.get("/api/results", async (_req: Request, res: Response) => {
+    res.json(await poolManager.listSummaries());
   });
 
   app.get("/api/history", (_req: Request, res: Response) => {

@@ -9,6 +9,8 @@ import { logger } from "./logger.js";
 import { calculateRange, isPriceOutOfRange, Range } from "./strategy.js";
 import { WalletLike } from "./solana.js";
 import { getSolUsdPrice } from "./pyth.js";
+import { getTrendSnapshot } from "./trend.js";
+import type { TrendDirection, TrendTarget, TrendTimeframe } from "./trend.js";
 
 const whirlpools = whirlpoolsSdk as any;
 const common = commonSdk as any;
@@ -66,10 +68,31 @@ export type BotStatus = {
   eventPositionEntryUsd: number | null;
   eventPositionFeesUsd: number | null;
   eventPositionExitUsd: number | null;
+  tokenAMint: string | null;
+  tokenBMint: string | null;
+  isTokenASol: boolean | null;
+  isTokenBSol: boolean | null;
   lastOpenTokenA: number | null;
   lastOpenTokenB: number | null;
   lastCloseTokenA: number | null;
   lastCloseTokenB: number | null;
+  trendDirection: TrendDirection | null;
+  trendTimeframe: TrendTimeframe | null;
+  trendUpdatedAt: string | null;
+  trendPreferredExitToken: "tokenA" | "tokenB" | null;
+  trendStale: boolean | null;
+};
+
+type SwapWalletToSolDetail = {
+  mint: string;
+  amountInRaw: string;
+  amountInUi: number;
+  decimals: number;
+  status: "swapped" | "failed" | "skipped";
+  reason?: string;
+  error?: string;
+  outLamports?: number;
+  signature?: string | null;
 };
 
 type SwapWalletToSolResult = {
@@ -77,11 +100,15 @@ type SwapWalletToSolResult = {
   failed: number;
   totalOutLamports: number;
   reason?: string;
+  details: SwapWalletToSolDetail[];
 };
 
 export class OrcaBot {
   private static topupInFlight = false;
   private static lastTopupAt: number | null = null;
+  private static jupiterQueue: Promise<void> = Promise.resolve();
+  private static jupiterNextAllowedAt = 0;
+  private static readonly jupiterMinIntervalMs = 1100;
 
   private connection: Connection;
   private wallet: WalletLike;
@@ -102,6 +129,8 @@ export class OrcaBot {
   private lastRebalanceAt: number | null = null;
   private missingPositionSince: number | null = null;
   private onLowSol?: () => Promise<void>;
+  private lastTrendPreferredExitToken: "tokenA" | "tokenB" | null = null;
+  private swapAllowlist: Set<string> | null = null;
   private lastStatus: BotStatus = {
     running: false,
     lastAction: null,
@@ -134,11 +163,30 @@ export class OrcaBot {
     eventPositionEntryUsd: null,
     eventPositionFeesUsd: null,
     eventPositionExitUsd: null,
+    tokenAMint: null,
+    tokenBMint: null,
+    isTokenASol: null,
+    isTokenBSol: null,
     lastOpenTokenA: null,
     lastOpenTokenB: null,
     lastCloseTokenA: null,
-    lastCloseTokenB: null
+    lastCloseTokenB: null,
+    trendDirection: null,
+    trendTimeframe: null,
+    trendUpdatedAt: null,
+    trendPreferredExitToken: null,
+    trendStale: null
   };
+
+  private getExitSide(preferredExitToken: "tokenA" | "tokenB" | null): "lower" | "upper" | undefined {
+    if (preferredExitToken === "tokenA") {
+      return "lower";
+    }
+    if (preferredExitToken === "tokenB") {
+      return "upper";
+    }
+    return undefined;
+  }
 
   private constructor(ctx: any, client: any, botCtx: BotContext) {
     this.ctx = ctx;
@@ -147,6 +195,74 @@ export class OrcaBot {
     this.wallet = botCtx.wallet;
     this.config = botCtx.config;
     this.onLowSol = botCtx.onLowSol;
+  }
+
+  private resolveTrendTarget(target: TrendTarget): "tokenA" | "tokenB" | null {
+    if (target === "tokenA" || target === "tokenB") {
+      return target;
+    }
+    if (!this.poolState) {
+      return null;
+    }
+    if (target === "sol") {
+      if (this.poolState.isTokenASol) return "tokenA";
+      if (this.poolState.isTokenBSol) return "tokenB";
+      return null;
+    }
+    if (target === "other") {
+      if (this.poolState.isTokenASol) return "tokenB";
+      if (this.poolState.isTokenBSol) return "tokenA";
+      return null;
+    }
+    return null;
+  }
+
+  private resolveTrendFallback(manual: "tokenA" | "tokenB" | null): "tokenA" | "tokenB" | null {
+    if (this.config.trendFallback === "neutral") {
+      return null;
+    }
+    if (this.config.trendFallback === "last") {
+      return this.lastTrendPreferredExitToken ?? manual;
+    }
+    return manual;
+  }
+
+  private resolvePreferredExitToken(trendDirection: TrendDirection | null, trendStale: boolean | null): "tokenA" | "tokenB" | null {
+    const manual = this.config.preferredExitToken ?? null;
+    if (!this.config.trendEnabled) {
+      return manual;
+    }
+    if (!trendDirection || trendStale) {
+      return this.resolveTrendFallback(manual);
+    }
+    const target = trendDirection === "up" ? this.config.trendTargetUp : this.config.trendTargetDown;
+    const resolved = this.resolveTrendTarget(target);
+    if (resolved) {
+      this.lastTrendPreferredExitToken = resolved;
+      return resolved;
+    }
+    return this.resolveTrendFallback(manual);
+  }
+
+  private async updateTrendStatus(): Promise<{ direction: TrendDirection | null; stale: boolean | null }> {
+    this.lastStatus.trendDirection = null;
+    this.lastStatus.trendTimeframe = null;
+    this.lastStatus.trendUpdatedAt = null;
+    this.lastStatus.trendStale = null;
+    if (!this.config.trendEnabled) {
+      return { direction: null, stale: null };
+    }
+    const snapshot = await getTrendSnapshot({
+      networkId: this.config.trendNetworkId,
+      poolAddress: this.config.whirlpoolAddress,
+      timeframe: this.config.trendTimeframe,
+      staleSec: this.config.trendStaleSec
+    });
+    this.lastStatus.trendDirection = snapshot?.direction ?? null;
+    this.lastStatus.trendTimeframe = snapshot?.timeframe ?? this.config.trendTimeframe ?? null;
+    this.lastStatus.trendUpdatedAt = snapshot?.updatedAt ?? null;
+    this.lastStatus.trendStale = snapshot?.stale ?? false;
+    return { direction: this.lastStatus.trendDirection, stale: this.lastStatus.trendStale };
   }
 
   static async create(botCtx: BotContext): Promise<OrcaBot> {
@@ -166,6 +282,10 @@ export class OrcaBot {
     this.lastStatus.eventPositionExitUsd = null;
     this.resetActionFee();
     await this.refreshPoolState();
+    const trendSnapshot = await this.updateTrendStatus();
+    const preferredExitToken = this.resolvePreferredExitToken(trendSnapshot.direction, trendSnapshot.stale);
+    this.lastStatus.trendPreferredExitToken = preferredExitToken;
+    const exitSide = this.getExitSide(preferredExitToken);
 
     const solBalance = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
     this.lastStatus.solBalance = solBalance;
@@ -193,7 +313,10 @@ export class OrcaBot {
         await this.loadExistingPosition();
         if (this.currentPosition) {
           const price = await this.getCurrentPrice();
-          const range = calculateRange(price, this.config.rangeWidthPct);
+          const range = calculateRange(price, this.config.rangeWidthPct, {
+            exitBiasPct: this.config.rangeExitBiasPct,
+            exitSide
+          });
           const solUsdPrice = await this.tryGetSolUsdPrice();
           this.lastStatus.lastPrice = price;
           this.lastStatus.targetRange = range;
@@ -215,7 +338,10 @@ export class OrcaBot {
       }
     }
     const price = await this.getCurrentPrice();
-    const range = calculateRange(price, this.config.rangeWidthPct);
+    const range = calculateRange(price, this.config.rangeWidthPct, {
+      exitBiasPct: this.config.rangeExitBiasPct,
+      exitSide
+    });
     this.lastStatus.lastPrice = price;
     this.lastStatus.targetRange = range;
     const solUsdPrice = await this.tryGetSolUsdPrice();
@@ -395,20 +521,21 @@ export class OrcaBot {
     return { ok: result.performed, reason: result.reason };
   }
 
-  async swapWalletToSolNow(): Promise<{ ok: boolean; reason?: string; swaps: number; failed: number; totalOutLamports: number }> {
+  async swapWalletToSolNow(): Promise<{ ok: boolean; reason?: string; swaps: number; failed: number; totalOutLamports: number; details: SwapWalletToSolDetail[] }> {
     this.lastStatus.running = true;
     this.resetActionFee();
     const result = await this.swapWalletToSol("manual");
     if (result.swaps > 0) {
       this.lastStatus.lastAction = "manual-swap-to-sol";
     }
-    const ok = result.reason !== "missing-api-key";
+    const ok = result.reason !== "missing-api-key" && !(result.swaps === 0 && result.failed > 0);
     return {
       ok,
       reason: result.reason,
       swaps: result.swaps,
       failed: result.failed,
-      totalOutLamports: result.totalOutLamports
+      totalOutLamports: result.totalOutLamports,
+      details: result.details
     };
   }
 
@@ -450,6 +577,11 @@ export class OrcaBot {
       isTokenASol: tokenMintA.equals(NATIVE_MINT),
       isTokenBSol: tokenMintB.equals(NATIVE_MINT)
     };
+
+    this.lastStatus.tokenAMint = tokenMintA.toBase58();
+    this.lastStatus.tokenBMint = tokenMintB.toBase58();
+    this.lastStatus.isTokenASol = this.poolState.isTokenASol;
+    this.lastStatus.isTokenBSol = this.poolState.isTokenBSol;
   }
 
   private async getCurrentPrice(): Promise<number> {
@@ -1072,9 +1204,86 @@ export class OrcaBot {
     this.lastStatus.lastError = stringifyError(err);
   }
 
+  setSwapAllowlist(mints: string[]): void {
+    const normalized = Array.isArray(mints)
+      ? mints.map((mint) => String(mint).trim()).filter((mint) => mint.length > 0)
+      : [];
+    this.swapAllowlist = normalized.length ? new Set(normalized) : null;
+  }
+
   updateConfig(config: Config): void {
     this.config = config;
     this.outOfRangeSince = null;
+  }
+
+  private async waitForJupiterSlot(): Promise<() => void> {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const previous = OrcaBot.jupiterQueue;
+    OrcaBot.jupiterQueue = previous.then(() => gate);
+    await previous;
+
+    const delay = Math.max(0, OrcaBot.jupiterNextAllowedAt - Date.now());
+    if (delay > 0) {
+      await sleep(delay);
+    }
+    OrcaBot.jupiterNextAllowedAt = Date.now() + OrcaBot.jupiterMinIntervalMs;
+    return () => release();
+  }
+
+  private async jupiterRequest(
+    url: string,
+    init: RequestInit,
+    options?: { retries?: number }
+  ): Promise<{ res: Response; text: string }> {
+    const retries = Math.max(0, options?.retries ?? 0);
+    let attempt = 0;
+    while (true) {
+      const release = await this.waitForJupiterSlot();
+      try {
+        const res = await fetch(url, init);
+        const text = await res.text().catch(() => "");
+        if ([429, 502, 503, 504].includes(res.status)) {
+          if (attempt < retries) {
+            const retryAfter = res.headers.get("retry-after");
+            let delay = 800 * Math.pow(2, attempt);
+            if (retryAfter) {
+              const parsed = Number(retryAfter);
+              if (Number.isFinite(parsed) && parsed > 0) {
+                delay = parsed * 1000;
+              }
+            }
+            attempt += 1;
+            await sleep(delay);
+            continue;
+          }
+        }
+        return { res, text };
+      } catch (err) {
+        if (attempt < retries) {
+          const delay = 800 * Math.pow(2, attempt);
+          attempt += 1;
+          await sleep(delay);
+          continue;
+        }
+        throw err;
+      } finally {
+        release();
+      }
+    }
+  }
+
+  private isSwapAllowed(mint: string): boolean {
+    if (!this.swapAllowlist || this.swapAllowlist.size === 0) {
+      return true;
+    }
+    return this.swapAllowlist.has(mint);
+  }
+
+  private isSwapAllowlistActive(): boolean {
+    return Boolean(this.swapAllowlist && this.swapAllowlist.size > 0);
   }
 
   private async tryGetSolUsdPrice(): Promise<number | null> {
@@ -1128,18 +1337,24 @@ export class OrcaBot {
     return { tokenA, tokenB };
   }
 
-  private async getWalletTokens(): Promise<Array<{ mint: string; rawAmount: number; uiAmount: number; decimals: number }>> {
+  private async getWalletTokens(): Promise<Array<{ mint: string; rawAmount: string; rawAmountBigint: bigint; uiAmount: number; decimals: number }>> {
     const tokenAccounts = await this.connection.getParsedTokenAccountsByOwner(
       this.wallet.publicKey,
       { programId: TOKEN_PROGRAM_ID }
     );
     return tokenAccounts.value.map((acct) => {
       const info = acct.account.data.parsed.info;
-      const amount = Number(info.tokenAmount?.amount ?? 0);
+      const amountStr = String(info.tokenAmount?.amount ?? "0");
+      let amount = 0n;
+      try {
+        amount = BigInt(amountStr);
+      } catch {
+        amount = 0n;
+      }
       const decimals = Number(info.tokenAmount?.decimals ?? 0);
       const uiAmount = Number(info.tokenAmount?.uiAmount ?? 0);
-      return { mint: String(info.mint), rawAmount: amount, uiAmount, decimals };
-    }).filter((item) => Number.isFinite(item.rawAmount) && item.rawAmount > 0);
+      return { mint: String(info.mint), rawAmount: amountStr, rawAmountBigint: amount, uiAmount, decimals };
+    }).filter((item) => item.rawAmountBigint > 0n);
   }
 
   private async maybeTopUpSol(reason: "auto" | "manual", solBalance: number): Promise<{ performed: boolean; reason?: string }> {
@@ -1175,62 +1390,73 @@ export class OrcaBot {
     try {
       const allTokens = await this.getWalletTokens();
       const whitelist = new Set(this.config.autoSolSwapMints.map((mint) => mint.trim()).filter((mint) => mint));
-      const candidates = allTokens.filter((token) => {
+      const baseTokens = allTokens.filter((token) => {
         if (token.mint === NATIVE_MINT.toBase58()) {
           return false;
         }
         if (token.decimals === 0) {
           return false;
         }
+        return true;
+      });
+
+      const allowlisted = this.isSwapAllowlistActive()
+        ? baseTokens.filter((token) => this.isSwapAllowed(token.mint))
+        : baseTokens;
+
+      const candidates = allowlisted.filter((token) => {
         if (this.config.autoSolAllowAll) {
           return true;
         }
         return whitelist.has(token.mint);
-      }).sort((a, b) => b.rawAmount - a.rawAmount);
+      }).sort((a, b) => {
+        if (a.rawAmountBigint === b.rawAmountBigint) return 0;
+        return a.rawAmountBigint > b.rawAmountBigint ? -1 : 1;
+      });
 
       if (!candidates.length) {
-        logger.warn("sol topup skipped: whitelist empty or no eligible tokens");
-        return { performed: false, reason: "whitelist-empty" };
+        const reason = this.isSwapAllowlistActive() && allowlisted.length === 0 ? "not-allowed" : "whitelist-empty";
+        logger.warn({ reason }, "sol topup skipped: no eligible tokens");
+        return { performed: false, reason };
       }
 
-      let remainingLamports = neededLamports;
+      let remainingLamports = BigInt(neededLamports);
       let swaps = 0;
 
       for (const token of candidates) {
-        if (remainingLamports <= 0) {
+        if (remainingLamports <= 0n) {
           break;
         }
-        const maxInput = Math.floor(token.rawAmount * this.config.autoSolMaxInputPct);
-        if (maxInput <= 0) {
+        const maxInput = applyPctToBigInt(token.rawAmountBigint, this.config.autoSolMaxInputPct);
+        if (maxInput <= 0n) {
           continue;
         }
         let quote = await this.fetchJupiterQuoteExactIn(
           token.mint,
           NATIVE_MINT.toBase58(),
-          maxInput,
+          maxInput.toString(),
           this.config.autoSolSlippageBps
         );
         if (!quote) {
           continue;
         }
-        let outAmount = Number(quote.outAmount ?? 0);
-        if (!Number.isFinite(outAmount) || outAmount <= 0) {
+        let outAmount = BigInt(quote.outAmount ?? 0);
+        if (outAmount <= 0n) {
           continue;
         }
 
         if (outAmount > remainingLamports) {
-          const scale = remainingLamports / outAmount;
-          const adjustedIn = Math.max(1, Math.floor(maxInput * scale));
+          const adjustedIn = scaleInputAmount(maxInput, outAmount, remainingLamports);
           if (adjustedIn < maxInput) {
             const adjustedQuote = await this.fetchJupiterQuoteExactIn(
               token.mint,
               NATIVE_MINT.toBase58(),
-              adjustedIn,
+              adjustedIn.toString(),
               this.config.autoSolSlippageBps
             );
-            if (adjustedQuote && Number(adjustedQuote.outAmount ?? 0) > 0) {
+            if (adjustedQuote && BigInt(adjustedQuote.outAmount ?? 0) > 0n) {
               quote = adjustedQuote;
-              outAmount = Number(adjustedQuote.outAmount);
+              outAmount = BigInt(adjustedQuote.outAmount ?? 0);
             }
           }
         }
@@ -1240,7 +1466,7 @@ export class OrcaBot {
           OrcaBot.lastTopupAt = Date.now();
           this.lastStatus.lastAction = reason === "auto" ? "auto-sol-topup" : "manual-sol-topup";
           swaps += 1;
-          remainingLamports = Math.max(0, remainingLamports - outAmount);
+          remainingLamports = remainingLamports > outAmount ? remainingLamports - outAmount : 0n;
         }
       }
 
@@ -1263,6 +1489,42 @@ export class OrcaBot {
     amount: number | string,
     slippageBps: number
   ): Promise<any | null> {
+    const result = await this.fetchJupiterQuoteExactInDetailed(
+      inputMint,
+      outputMint,
+      amount,
+      slippageBps
+    );
+    if (!result.quote) {
+      if (result.error) {
+        logger.warn({ err: result.error }, "jupiter quote failed");
+      } else {
+        logger.warn("jupiter quote failed");
+      }
+      return null;
+    }
+    return result.quote;
+  }
+
+  private async executeJupiterSwap(quoteResponse: any): Promise<string | null> {
+    const result = await this.executeJupiterSwapDetailed(quoteResponse);
+    if (!result.sig) {
+      if (result.error) {
+        logger.warn({ err: result.error }, "jupiter swap failed");
+      } else {
+        logger.warn("jupiter swap failed");
+      }
+      return null;
+    }
+    return result.sig;
+  }
+
+  private async fetchJupiterQuoteExactInDetailed(
+    inputMint: string,
+    outputMint: string,
+    amount: number | string,
+    slippageBps: number
+  ): Promise<{ quote: any | null; error?: string }> {
     const base = this.config.jupiterApiUrl.replace(/\/+$/, "");
     const params = new URLSearchParams({
       inputMint,
@@ -1271,129 +1533,268 @@ export class OrcaBot {
       swapMode: "ExactIn",
       slippageBps: String(slippageBps)
     });
-    const res = await fetch(`${base}/swap/v1/quote?${params.toString()}`, {
-      headers: { "x-api-key": this.config.jupiterApiKey ?? "" }
-    });
-    if (!res.ok) {
-      logger.warn({ status: res.status }, "jupiter quote failed");
-      return null;
+    if (Array.isArray(this.config.jupiterExcludeDexes) && this.config.jupiterExcludeDexes.length > 0) {
+      params.set("excludeDexes", this.config.jupiterExcludeDexes.join(","));
     }
-    return res.json();
+    try {
+      const { res, text } = await this.jupiterRequest(
+        `${base}/swap/v1/quote?${params.toString()}`,
+        { headers: { "x-api-key": this.config.jupiterApiKey ?? "" } },
+        { retries: 2 }
+      );
+      if (!res.ok) {
+        return { quote: null, error: formatJupiterError(res.status, text) };
+      }
+      if (!text) {
+        return { quote: null, error: "Resposta vazia" };
+      }
+      try {
+        return { quote: JSON.parse(text) };
+      } catch {
+        return { quote: null, error: "JSON invalido" };
+      }
+    } catch (err) {
+      return { quote: null, error: stringifyError(err) };
+    }
   }
 
-  private async executeJupiterSwap(quoteResponse: any): Promise<string | null> {
+  private async executeJupiterSwapDetailed(quoteResponse: any): Promise<{ sig: string | null; error?: string }> {
     const base = this.config.jupiterApiUrl.replace(/\/+$/, "");
-    const res = await fetch(`${base}/swap/v1/swap`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": this.config.jupiterApiKey ?? ""
-      },
-      body: JSON.stringify({
-        quoteResponse,
-        userPublicKey: this.wallet.publicKey.toBase58(),
-        wrapAndUnwrapSol: true
-      })
-    });
-    if (!res.ok) {
-      logger.warn({ status: res.status }, "jupiter swap failed");
-      return null;
+    try {
+      const { res, text } = await this.jupiterRequest(
+        `${base}/swap/v1/swap`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": this.config.jupiterApiKey ?? ""
+          },
+          body: JSON.stringify({
+            quoteResponse,
+            userPublicKey: this.wallet.publicKey.toBase58(),
+            wrapAndUnwrapSol: true
+          })
+        },
+        { retries: 2 }
+      );
+      if (!res.ok) {
+        return { sig: null, error: formatJupiterError(res.status, text) };
+      }
+      if (!text) {
+        return { sig: null, error: "Resposta vazia" };
+      }
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        return { sig: null, error: "JSON invalido" };
+      }
+      const swapTx = data?.swapTransaction;
+      if (!swapTx) {
+        return { sig: null, error: "swapTransaction ausente" };
+      }
+      const tx = VersionedTransaction.deserialize(Buffer.from(swapTx, "base64"));
+      const signed = await this.wallet.signTransaction(tx);
+      const sig = await this.connection.sendRawTransaction(signed.serialize(), { maxRetries: 2 });
+      await this.connection.confirmTransaction(sig, "confirmed");
+      const feeLamports = await this.fetchTxFeeLamports(sig);
+      this.addActionFee(feeLamports);
+      return { sig };
+    } catch (err) {
+      const logs = await extractSendTxLogs(err);
+      const message = formatErrorWithLogs(stringifyError(err), logs);
+      return { sig: null, error: message };
     }
-    const data = await res.json();
-    const swapTx = data?.swapTransaction;
-    if (!swapTx) {
-      logger.warn("jupiter swap response missing swapTransaction");
-      return null;
-    }
-    const tx = VersionedTransaction.deserialize(Buffer.from(swapTx, "base64"));
-    const signed = await this.wallet.signTransaction(tx);
-    const sig = await this.connection.sendRawTransaction(signed.serialize(), { maxRetries: 2 });
-    await this.connection.confirmTransaction(sig, "confirmed");
-    const feeLamports = await this.fetchTxFeeLamports(sig);
-    this.addActionFee(feeLamports);
-    return sig;
   }
 
   private async swapWalletToSol(reason: "auto" | "manual"): Promise<SwapWalletToSolResult> {
+    const details: SwapWalletToSolDetail[] = [];
     if (!this.config.jupiterApiKey) {
       logger.warn("swap-to-sol skipped: missing Jupiter API key");
-      return { swaps: 0, failed: 0, totalOutLamports: 0, reason: "missing-api-key" };
+      return { swaps: 0, failed: 0, totalOutLamports: 0, reason: "missing-api-key", details };
     }
 
     const tokens = await this.getWalletTokens();
+    if (!tokens.length) {
+      return { swaps: 0, failed: 0, totalOutLamports: 0, reason: "no-tokens", details };
+    }
     const excludeSet = new Set(
       (this.config.autoSwapToSolExcludeMints ?? [])
         .map((mint) => String(mint).trim())
         .filter((mint) => mint)
     );
-    const candidates = tokens.filter((token) => {
-      if (token.mint === NATIVE_MINT.toBase58()) {
-        return false;
-      }
-      if (token.decimals === 0) {
-        return false;
-      }
-      if (excludeSet.has(token.mint)) {
-        return false;
-      }
-      return true;
-    });
-    if (!candidates.length) {
-      return { swaps: 0, failed: 0, totalOutLamports: 0, reason: "no-tokens" };
-    }
     const minOutLamports = Math.max(
       0,
       Math.floor((this.config.autoSwapToSolMinOutSol ?? 0) * LAMPORTS_PER_SOL)
     );
-
+    const minOutLamportsBigint = BigInt(minOutLamports);
     let swaps = 0;
     let failed = 0;
     let totalOutLamports = 0;
+    let totalOutLamportsBigint = 0n;
+    let blocked = 0;
 
-    for (const token of candidates) {
-      const amountIn = Math.floor(token.rawAmount);
-      if (!Number.isFinite(amountIn) || amountIn <= 0) {
+    for (const token of tokens) {
+      const baseDetail: SwapWalletToSolDetail = {
+        mint: token.mint,
+        amountInRaw: token.rawAmount,
+        amountInUi: token.uiAmount,
+        decimals: token.decimals,
+        status: "skipped"
+      };
+      if (token.mint === NATIVE_MINT.toBase58()) {
+        details.push({ ...baseDetail, reason: "native-sol" });
+        continue;
+      }
+      if (token.decimals === 0) {
+        details.push({ ...baseDetail, reason: "non-fungible" });
+        continue;
+      }
+      if (this.isSwapAllowlistActive() && !this.isSwapAllowed(token.mint)) {
+        blocked += 1;
+        details.push({ ...baseDetail, reason: "not-allowed" });
+        continue;
+      }
+      if (excludeSet.has(token.mint)) {
+        details.push({ ...baseDetail, reason: "excluded" });
+        continue;
+      }
+      const amountIn = token.rawAmountBigint;
+      if (amountIn <= 0n) {
+        details.push({ ...baseDetail, reason: "invalid-amount" });
+        continue;
+      }
+      if (!isValidU64(amountIn)) {
+        details.push({ ...baseDetail, status: "failed", reason: "invalid-amount", error: "amountIn out of u64 range" });
         continue;
       }
       try {
-        const quote = await this.fetchJupiterQuoteExactIn(
+        const quoteResult = await this.fetchJupiterQuoteExactInDetailed(
           token.mint,
           NATIVE_MINT.toBase58(),
-          amountIn,
+          amountIn.toString(),
           this.config.autoSolSlippageBps
         );
-        if (!quote) {
+        if (!quoteResult.quote) {
+          failed += 1;
+          details.push({
+            ...baseDetail,
+            status: "failed",
+            reason: quoteResult.error ? "api-error" : "no-quote",
+            error: quoteResult.error ?? undefined
+          });
           continue;
         }
-        const outAmount = Number(quote.outAmount ?? 0);
-        if (!Number.isFinite(outAmount) || outAmount <= 0) {
+
+        const quoteInAmount = parseU64(quoteResult.quote.inAmount ?? amountIn.toString());
+        const quoteOutAmount = parseU64(quoteResult.quote.outAmount ?? "0");
+        if (!quoteInAmount || !quoteOutAmount) {
+          failed += 1;
+          details.push({
+            ...baseDetail,
+            status: "failed",
+            reason: "no-quote",
+            error: "quote inAmount/outAmount invalid or out of u64 range"
+          });
           continue;
         }
-        if (outAmount < minOutLamports) {
+        if (quoteInAmount !== amountIn) {
+          logger.warn(
+            { amountIn: amountIn.toString(), quoteInAmount: quoteInAmount.toString() },
+            "jupiter quote inAmount differs from requested amountIn"
+          );
+        }
+
+        const outAmountNumber = toSafeNumber(quoteOutAmount);
+        if (outAmountNumber == null) {
+          logger.warn(
+            { outAmount: quoteOutAmount.toString() },
+            "jupiter quote outAmount exceeds JS safe integer; omitting outLamports"
+          );
+        }
+        if (quoteOutAmount <= 0n) {
+          failed += 1;
+          details.push({ ...baseDetail, status: "failed", reason: "no-quote", error: "outAmount invalido" });
           continue;
         }
-        const sig = await this.executeJupiterSwap(quote);
-        if (sig) {
+        if (quoteOutAmount < minOutLamportsBigint) {
+          failed += 1;
+          details.push({
+            ...baseDetail,
+            status: "failed",
+            reason: "below-min",
+            outLamports: outAmountNumber ?? undefined
+          });
+          continue;
+        }
+
+        const routePlan = summarizeJupiterRoutePlan(quoteResult.quote);
+        logger.info(
+          {
+            inputMint: token.mint,
+            outputMint: NATIVE_MINT.toBase58(),
+            amountIn: amountIn.toString(),
+            decimals: token.decimals,
+            slippageBps: this.config.autoSolSlippageBps,
+            excludeDexes: this.config.jupiterExcludeDexes ?? [],
+            quoteInAmount: quoteInAmount.toString(),
+            quoteOutAmount: quoteOutAmount.toString(),
+            routePlan
+          },
+          "jupiter swap context"
+        );
+
+        const swapResult = await this.executeJupiterSwapDetailed(quoteResult.quote);
+        if (swapResult.sig) {
           swaps += 1;
-          totalOutLamports += outAmount;
+          if (outAmountNumber != null) {
+            totalOutLamports += outAmountNumber;
+          }
+          totalOutLamportsBigint += quoteOutAmount;
+          details.push({
+            ...baseDetail,
+            status: "swapped",
+            reason: "ok",
+            outLamports: outAmountNumber ?? undefined,
+            signature: swapResult.sig
+          });
         } else {
           failed += 1;
+          details.push({
+            ...baseDetail,
+            status: "failed",
+            reason: swapResult.error ? "api-error" : "swap-failed",
+            error: swapResult.error ?? undefined,
+            outLamports: outAmountNumber ?? undefined
+          });
         }
       } catch (err) {
         failed += 1;
         logger.warn({ err, mint: token.mint }, "swap-to-sol failed for token");
+        details.push({
+          ...baseDetail,
+          status: "failed",
+          reason: "api-error",
+          error: stringifyError(err)
+        });
       }
     }
 
     let finalReason = undefined;
-    if (swaps === 0 && failed === 0) {
-      finalReason = "no-route";
+    if (swaps === 0) {
+      if (failed > 0) {
+        finalReason = "failed";
+      } else if (blocked > 0) {
+        finalReason = "not-allowed";
+      } else {
+        finalReason = "no-route";
+      }
     }
     logger.info(
-      { reason, swaps, failed, totalOutLamports, finalReason },
+      { reason, swaps, failed, totalOutLamports, totalOutLamportsBigint: totalOutLamportsBigint.toString(), finalReason },
       "swap-to-sol complete"
     );
-    return { swaps, failed, totalOutLamports, reason: finalReason };
+    return { swaps, failed, totalOutLamports, reason: finalReason, details };
   }
 
   private async updatePortfolioSnapshot(price: number, solUsdPrice: number | null): Promise<void> {
@@ -1493,6 +1894,11 @@ export class OrcaBot {
       }
       this.lastStatus.positionPnl = positionValueTokenBWithFees - this.initialPositionValue;
     }
+    const pnlBasis = positionValueSolWithFees != null ? portfolioValueSol : portfolioValueTokenB;
+    if (this.lastStatus.positionPnl != null && !isMagnitudeSane(this.lastStatus.positionPnl, pnlBasis)) {
+      logger.warn({ pnl: this.lastStatus.positionPnl, basis: pnlBasis }, "position pnl out of expected range");
+      this.lastStatus.positionPnl = null;
+    }
 
     this.lastStatus.positionFeesUsd = (feesValueSol != null && solUsdPrice)
       ? feesValueSol * solUsdPrice
@@ -1533,6 +1939,14 @@ export class OrcaBot {
       }
     } else {
       this.lastStatus.positionEntryUsd = null;
+      this.lastStatus.positionPnlUsd = null;
+    }
+    if (this.lastStatus.positionPnlUsd != null
+      && !isUsdMagnitudeSane(this.lastStatus.positionPnlUsd, budgetUsd, portfolioUsd)) {
+      logger.warn(
+        { pnlUsd: this.lastStatus.positionPnlUsd, budgetUsd, portfolioUsd },
+        "position pnl usd out of expected range"
+      );
       this.lastStatus.positionPnlUsd = null;
     }
   }
@@ -1808,6 +2222,10 @@ export class OrcaBot {
       if (token.mint === targetMint) {
         continue;
       }
+      if (this.isSwapAllowlistActive() && !this.isSwapAllowed(token.mint)) {
+        logger.info({ mint: token.mint }, "swap-fees-to-usdc skipped: mint not allowed");
+        continue;
+      }
       let amountUi = token.uiAmount;
       if (token.mint === NATIVE_MINT.toBase58()) {
         if (availableSol <= 0) {
@@ -1903,6 +2321,38 @@ function normalizeTokenAmount(raw: any, decimals: number): number {
   return toNumber(raw);
 }
 
+function applyPctToBigInt(amount: bigint, pct: number): bigint {
+  if (!Number.isFinite(pct) || pct <= 0) {
+    return 0n;
+  }
+  if (pct >= 1) {
+    return amount;
+  }
+  const scale = 1_000_000n;
+  const pctScaled = BigInt(Math.max(0, Math.round(pct * 1_000_000)));
+  if (pctScaled <= 0n) {
+    return 0n;
+  }
+  const result = (amount * pctScaled) / scale;
+  return result > 0n ? result : 0n;
+}
+
+function scaleInputAmount(maxInput: bigint, outAmount: bigint, targetOut: bigint): bigint {
+  if (outAmount <= 0n || targetOut <= 0n) {
+    return 0n;
+  }
+  const result = (maxInput * targetOut) / outAmount;
+  return result > 0n ? result : 0n;
+}
+
+function sleep(ms: number): Promise<void> {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+
 function toNumber(value: any): number {
   if (typeof value === "number") {
     return value;
@@ -1978,6 +2428,24 @@ function isEntryUsdSane(
   return true;
 }
 
+function isMagnitudeSane(value: number, reference: number | null, maxFactor = 10, maxFallback = 1_000_000): boolean {
+  if (!Number.isFinite(value)) {
+    return false;
+  }
+  const abs = Math.abs(value);
+  if (reference != null && reference > 0) {
+    return abs <= reference * maxFactor;
+  }
+  return abs <= maxFallback;
+}
+
+function isUsdMagnitudeSane(value: number, budgetUsd: number | null, portfolioUsd: number | null): boolean {
+  const budget = Number.isFinite(budgetUsd ?? NaN) ? Number(budgetUsd) : null;
+  const portfolio = Number.isFinite(portfolioUsd ?? NaN) ? Number(portfolioUsd) : null;
+  const reference = Math.max(budget ?? 0, portfolio ?? 0) || null;
+  return isMagnitudeSane(value, reference);
+}
+
 function stringifyError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
@@ -1985,7 +2453,114 @@ function stringifyError(err: unknown): string {
   return String(err);
 }
 
+const MAX_U64 = 18_446_744_073_709_551_615n;
+
+function isValidU64(value: bigint): boolean {
+  return value > 0n && value <= MAX_U64;
+}
+
+function parseU64(value: unknown): bigint | null {
+  if (value == null) {
+    return null;
+  }
+  try {
+    const parsed = BigInt(value as any);
+    return isValidU64(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function toSafeNumber(value: bigint): number | null {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return null;
+  }
+  return Number(value);
+}
+
+function summarizeJupiterRoutePlan(quote: any): Array<{ label: string | null; ammKey: string | null; inMint: string | null; outMint: string | null }> {
+  const plan = Array.isArray(quote?.routePlan) ? quote.routePlan : [];
+  return plan.map((step: any) => {
+    const info = step?.swapInfo ?? step?.swap ?? step ?? {};
+    const label = info?.label ?? info?.ammName ?? info?.ammLabel ?? null;
+    const ammKey = info?.ammKey ?? null;
+    const inMint = info?.inputMint ?? null;
+    const outMint = info?.outputMint ?? null;
+    return { label, ammKey, inMint, outMint };
+  });
+}
+
+function truncateLogs(logs: string[], max = 40): string[] {
+  if (!Array.isArray(logs)) {
+    return [];
+  }
+  return logs.slice(0, Math.max(0, max));
+}
+
+function formatErrorWithLogs(message: string, logs: string[] | null): string {
+  if (!logs || logs.length === 0) {
+    return message;
+  }
+  const truncated = truncateLogs(logs);
+  const suffix = logs.length > truncated.length ? " ...[truncated]" : "";
+  return `${message} | logs: ${truncated.join(" | ")}${suffix}`;
+}
+
+async function extractSendTxLogs(err: unknown): Promise<string[] | null> {
+  if (!err || typeof err !== "object") {
+    return null;
+  }
+  const anyErr = err as any;
+  if (Array.isArray(anyErr.logs)) {
+    return anyErr.logs;
+  }
+  if (typeof anyErr.getLogs === "function") {
+    try {
+      const logs = await anyErr.getLogs();
+      return Array.isArray(logs) ? logs : null;
+    } catch {
+      return null;
+    }
+  }
+  if (anyErr.name === "SendTransactionError" && Array.isArray(anyErr?.txLogs)) {
+    return anyErr.txLogs;
+  }
+  return null;
+}
+
 function isPriceSlippageError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return msg.includes("0x17b5") || msg.includes("PriceSlippageOutOfBounds");
+}
+
+function parseJupiterErrorMessage(text: string): string | null {
+  if (!text) return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed);
+    const direct = typeof parsed === "string" ? parsed : null;
+    const message = parsed?.error?.message ?? parsed?.error ?? parsed?.message ?? parsed?.msg ?? direct;
+    if (typeof message === "string" && message.trim()) {
+      return message.trim();
+    }
+    return trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
+function formatJupiterError(status: number | null, body: string): string {
+  const message = parseJupiterErrorMessage(body);
+  if (status != null && status > 0) {
+    return message ? `HTTP ${status}: ${message}` : `HTTP ${status}`;
+  }
+  return message ?? "Erro na API";
+}
+
+function truncateJupiterError(value: string, max = 160): string {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1)}…`;
 }

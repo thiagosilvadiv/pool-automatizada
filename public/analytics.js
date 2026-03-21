@@ -50,6 +50,7 @@ const analyticsColumnDefaults = {
   close: true,
   type: true,
   action: true,
+  trend: true,
   price: true,
   targetRange: true,
   mint: true,
@@ -121,6 +122,12 @@ function formatCloseTimestamp(item) {
   return formatTimestamp(item.positionClosedAt);
 }
 
+function formatTrendDirection(value) {
+  if (value === "up") return "Alta";
+  if (value === "down") return "Baixa";
+  return "-";
+}
+
 function toDateInputValue(date) {
   const tzOffset = date.getTimezoneOffset() * 60000;
   const local = new Date(date.getTime() - tzOffset);
@@ -142,7 +149,7 @@ async function fetchHistory(poolId) {
 
 function renderHistory(items) {
   if (!items || items.length === 0) {
-    historyBody.innerHTML = "<tr><td colspan=\"12\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"14\">Sem eventos ainda</td></tr>";
     return;
   }
   const limit = analyticsRowLimit ?? 30;
@@ -156,6 +163,7 @@ function renderHistory(items) {
         <td data-col="close">${formatCloseTimestamp(item)}</td>
         <td data-col="type">${typeLabel}</td>
         <td data-col="action">${actionLabel}</td>
+        <td data-col="trend">${formatTrendDirection(item.trendDirection)}</td>
         <td data-col="price">${formatNumber(item.price, 8)}</td>
         <td data-col="targetRange">${formatRange(item.targetRange)}</td>
         <td data-col="mint">${item.positionMint ?? "-"}</td>
