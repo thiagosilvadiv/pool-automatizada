@@ -33,7 +33,7 @@ export type PoolOverrides = {
   rangeExitBiasPct?: number;
   preferredExitToken?: "tokenA" | "tokenB" | null;
   trendEnabled?: boolean;
-  trendTimeframe?: "1m" | "5m" | "30m" | "1h";
+  trendTimeframe?: "1m" | "5m" | "15m" | "30m" | "1h";
   trendTargetUp?: "sol" | "other" | "tokenA" | "tokenB";
   trendTargetDown?: "sol" | "other" | "tokenA" | "tokenB";
 };
@@ -58,7 +58,7 @@ export type PoolSummary = {
   isTokenBSol: boolean | null;
   trendDirection: "up" | "down" | null;
   trendUpdatedAt: string | null;
-  trendTimeframe: "1m" | "5m" | "30m" | "1h" | null;
+  trendTimeframe: "1m" | "5m" | "15m" | "30m" | "1h" | null;
   trendEnabled: boolean;
   trendStale: boolean;
   overrides: PoolOverrides | null;
@@ -125,6 +125,18 @@ export class PoolManager {
     return this.selectedPoolId;
   }
 
+  getPoolConfig(id: string): Config | null {
+    const entry = this.entries.find((item) => item.id === id);
+    if (!entry) {
+      return null;
+    }
+    return {
+      ...this.baseConfig,
+      whirlpoolAddress: entry.whirlpoolAddress,
+      ...(entry.overrides ?? {})
+    };
+  }
+
   listPools(): PoolEntry[] {
     return [...this.entries];
   }
@@ -141,7 +153,7 @@ export class PoolManager {
       const trendEnabled = Boolean(poolConfig.trendEnabled);
       let trendDirection: "up" | "down" | null = null;
       let trendUpdatedAt: string | null = null;
-      let trendTimeframe: "1m" | "5m" | "30m" | "1h" | null = trendEnabled ? poolConfig.trendTimeframe : null;
+      let trendTimeframe: "1m" | "5m" | "15m" | "30m" | "1h" | null = trendEnabled ? poolConfig.trendTimeframe : null;
       let trendStale = false;
       if (trendEnabled) {
         try {
@@ -149,7 +161,8 @@ export class PoolManager {
             networkId: poolConfig.trendNetworkId,
             poolAddress: entry.whirlpoolAddress,
             timeframe: poolConfig.trendTimeframe,
-            staleSec: poolConfig.trendStaleSec
+            staleSec: poolConfig.trendStaleSec,
+            cacheSec: poolConfig.trendCacheSec
           });
           trendDirection = snapshot?.direction ?? null;
           trendUpdatedAt = snapshot?.updatedAt ?? null;
@@ -686,8 +699,8 @@ export class PoolManager {
 
     if (overrides.trendTimeframe != null) {
       const value = String(overrides.trendTimeframe).trim().toLowerCase();
-      if (!["1m", "5m", "30m", "1h"].includes(value)) {
-        throw new Error("trendTimeframe override must be 1m, 5m, 30m, or 1h");
+      if (!["1m", "5m", "15m", "30m", "1h"].includes(value)) {
+        throw new Error("trendTimeframe override must be 1m, 5m, 15m, 30m, or 1h");
       }
       normalized.trendTimeframe = value as PoolOverrides["trendTimeframe"];
     }
@@ -793,8 +806,8 @@ export class PoolManager {
         delete next.trendTimeframe;
       } else {
         const value = String(updates.trendTimeframe).trim().toLowerCase();
-        if (!["1m", "5m", "30m", "1h"].includes(value)) {
-          throw new Error("trendTimeframe override must be 1m, 5m, 30m, or 1h");
+        if (!["1m", "5m", "15m", "30m", "1h"].includes(value)) {
+          throw new Error("trendTimeframe override must be 1m, 5m, 15m, 30m, or 1h");
         }
         next.trendTimeframe = value as PoolOverrides["trendTimeframe"];
       }

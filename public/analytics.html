@@ -103,6 +103,44 @@
       </section>
 
       <section class="panel">
+        <div class="row row-between">
+          <h2>Performance por periodo</h2>
+          <span class="badge">Fechamentos</span>
+        </div>
+        <div class="row wrap">
+          <div class="field">
+            <label for="perfGroup">Agrupar por</label>
+            <select id="perfGroup">
+              <option value="day">Dia</option>
+              <option value="week">Semana</option>
+              <option value="month">Mes</option>
+            </select>
+          </div>
+          <div class="performance-metrics">
+            <span class="label">Metricas:</span>
+            <label><input type="checkbox" data-series="fees" checked /> Taxas</label>
+            <label><input type="checkbox" data-series="pnl" checked /> PnL</label>
+            <label><input type="checkbox" data-series="pnlNet" checked /> PnL sem taxas</label>
+            <label><input type="checkbox" data-series="pnlCum" checked /> PnL acumulado</label>
+            <label><input type="checkbox" data-series="pnlNetCum" checked /> PnL sem taxas acumulado</label>
+          </div>
+        </div>
+        <div class="performance-wrap">
+          <canvas id="perfCanvas" class="performance-canvas"></canvas>
+          <div id="perfEmpty" class="chart-empty hidden">Sem dados no periodo</div>
+          <div id="perfTooltip" class="performance-tooltip hidden"></div>
+        </div>
+        <div class="performance-legend">
+          <span><i class="legend-swatch fees"></i> Taxas</span>
+          <span><i class="legend-swatch pnl"></i> PnL</span>
+          <span><i class="legend-swatch pnlNet"></i> PnL sem taxas</span>
+          <span><i class="legend-swatch pnlCum"></i> PnL acumulado</span>
+          <span><i class="legend-swatch pnlNetCum"></i> PnL sem taxas acumulado</span>
+        </div>
+        <p class="hint">Grafico usa eventos de fechamento (PnL realizado).</p>
+      </section>
+
+      <section class="panel">
         <h2>Histórico filtrado</h2>
         <div class="table-wrap">
           <div class="table-scroll">

@@ -6,6 +6,7 @@ import { Config } from "./config.js";
 import { buildConnection, buildWallet, loadKeypair } from "./solana.js";
 import { logger } from "./logger.js";
 import { PoolManager } from "./pool-manager.js";
+import { getTrendSeries } from "./trend.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -180,6 +181,36 @@ export async function startServer(config: Config): Promise<void> {
       selectedPoolId: poolManager.getSelectedPoolId(),
       pools
     });
+  });
+
+  app.get("/api/trend-series/:id", async (req: Request, res: Response) => {
+    try {
+      const rawId = String(req.params.id ?? "").trim();
+      const poolId = rawId === "selected" ? poolManager.getSelectedPoolId() : rawId;
+      if (!poolId) {
+        res.status(404).json({ error: "Pool not found" });
+        return;
+      }
+      const config = poolManager.getPoolConfig(poolId);
+      if (!config) {
+        res.status(404).json({ error: "Pool not found" });
+        return;
+      }
+      const force = String(req.query.force ?? "").toLowerCase();
+      const bypassCache = force === "1" || force === "true" || force === "yes";
+      const series = await getTrendSeries({
+        networkId: config.trendNetworkId,
+        poolAddress: config.whirlpoolAddress,
+        timeframe: config.trendTimeframe,
+        staleSec: config.trendStaleSec,
+        cacheSec: config.trendCacheSec,
+        bypassCache,
+        limit: 240
+      });
+      res.json({ ok: true, poolId, series });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   app.post("/api/pools", async (req: Request, res: Response) => {

@@ -404,7 +404,7 @@ function parseTrendTimeframeInput(value) {
   if (value == null) return undefined;
   const trimmed = String(value).trim().toLowerCase();
   if (!trimmed) return undefined;
-  if (["1m", "5m", "30m", "1h"].includes(trimmed)) return trimmed;
+  if (["1m", "5m", "15m", "30m", "1h"].includes(trimmed)) return trimmed;
   return null;
 }
 

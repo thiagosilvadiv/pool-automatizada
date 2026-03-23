@@ -1,9 +1,25 @@
-export type TrendTimeframe = "1m" | "5m" | "30m" | "1h";
+export type TrendTimeframe = "1m" | "5m" | "15m" | "30m" | "1h";
 export type TrendDirection = "up" | "down";
 export type TrendTarget = "sol" | "other" | "tokenA" | "tokenB";
 export type TrendFallback = "manual" | "neutral" | "last";
 
 export type TrendSnapshot = {
+  direction: TrendDirection | null;
+  updatedAt: string | null;
+  timeframe: TrendTimeframe;
+  lastCandleAt: number | null;
+  stale: boolean;
+  error?: string;
+};
+
+export type TrendSeries = {
+  candles: Candle[];
+  basis: number[];
+  basisOpen: number[];
+  basisClose: number[];
+  upper: number[];
+  lower: number[];
+  signal: Array<TrendDirection | null>;
   direction: TrendDirection | null;
   updatedAt: string | null;
   timeframe: TrendTimeframe;
@@ -51,13 +67,14 @@ const DEFAULT_PARAMS: TrendParams = {
 
 const BASE_URL = "https://api.geckoterminal.com/api/v2";
 
-type TrendCacheEntry = {
+type TrendCacheEntry<T> = {
   fetchedAt: number;
-  result: TrendSnapshot | null;
-  inFlight?: Promise<TrendSnapshot | null>;
+  result: T | null;
+  inFlight?: Promise<T | null>;
 };
 
-const trendCache = new Map<string, TrendCacheEntry>();
+const trendCache = new Map<string, TrendCacheEntry<TrendSnapshot>>();
+const trendSeriesCache = new Map<string, TrendCacheEntry<TrendSeries>>();
 
 export function timeframeToSeconds(timeframe: TrendTimeframe): number {
   switch (timeframe) {
@@ -65,6 +82,8 @@ export function timeframeToSeconds(timeframe: TrendTimeframe): number {
       return 60;
     case "5m":
       return 300;
+    case "15m":
+      return 900;
     case "30m":
       return 1800;
     case "1h":
@@ -80,6 +99,8 @@ function timeframeToApi(timeframe: TrendTimeframe): { path: "minute" | "hour"; a
       return { path: "minute", aggregate: 1, seconds: 60 };
     case "5m":
       return { path: "minute", aggregate: 5, seconds: 300 };
+    case "15m":
+      return { path: "minute", aggregate: 15, seconds: 900 };
     case "30m":
       return { path: "minute", aggregate: 30, seconds: 1800 };
     case "1h":
@@ -184,6 +205,9 @@ export function parseOhlcvList(raw: unknown): Candle[] {
     if (!isValidOhlc(open, high, low, close) || !Number.isFinite(timestamp)) {
       continue;
     }
+    if (open <= 0 || high <= 0 || low <= 0 || close <= 0) {
+      continue;
+    }
     parsed.push({
       t: timestamp,
       open,
@@ -197,12 +221,42 @@ export function parseOhlcvList(raw: unknown): Candle[] {
   return parsed;
 }
 
+function smaSeries(values: number[], length: number): number[] {
+  const result: number[] = [];
+  if (length <= 1) {
+    return values.map((value) => (Number.isFinite(value) ? value : Number.NaN));
+  }
+  let sum = 0;
+  let count = 0;
+  for (let i = 0; i < values.length; i += 1) {
+    const value = values[i];
+    if (Number.isFinite(value)) {
+      sum += value;
+      count += 1;
+    }
+    if (i >= length) {
+      const drop = values[i - length];
+      if (Number.isFinite(drop)) {
+        sum -= drop;
+        count -= 1;
+      }
+    }
+    if (i < length - 1 || count < length) {
+      result.push(Number.NaN);
+    } else {
+      result.push(sum / length);
+    }
+  }
+  return result;
+}
+
 function emaSeries(values: number[], length: number): number[] {
   const result: number[] = [];
   if (length <= 1) {
     return values.map((value) => (Number.isFinite(value) ? value : Number.NaN));
   }
   const k = 2 / (length + 1);
+  const sma = smaSeries(values, length);
   let prev: number | null = null;
   for (const value of values) {
     if (!Number.isFinite(value)) {
@@ -210,7 +264,14 @@ function emaSeries(values: number[], length: number): number[] {
       continue;
     }
     if (prev === null) {
-      prev = value;
+      const seed = sma[result.length];
+      if (Number.isFinite(seed)) {
+        prev = seed;
+        result.push(prev);
+        continue;
+      }
+      result.push(Number.NaN);
+      continue;
     } else {
       prev = value * k + prev * (1 - k);
     }
@@ -252,9 +313,37 @@ function almaSeries(values: number[], length: number, offset: number, sigma: num
   return result;
 }
 
+function rmaSeries(values: number[], length: number): number[] {
+  const result: number[] = [];
+  if (length <= 1) {
+    return values.map((value) => (Number.isFinite(value) ? value : Number.NaN));
+  }
+  let prev: number | null = null;
+  for (let i = 0; i < values.length; i += 1) {
+    const value = values[i];
+    if (!Number.isFinite(value)) {
+      result.push(Number.NaN);
+      continue;
+    }
+    if (prev === null) {
+      const seed = smaSeries(values.slice(0, i + 1), length).at(-1);
+      if (Number.isFinite(seed ?? NaN)) {
+        prev = seed as number;
+        result.push(prev);
+        continue;
+      }
+      result.push(Number.NaN);
+      continue;
+    }
+    prev = (prev * (length - 1) + value) / length;
+    result.push(prev);
+  }
+  return result;
+}
+
 function atrSeries(highs: number[], lows: number[], closes: number[], length: number): number[] {
   const result: number[] = [];
-  let prevAtr: number | null = null;
+  const trValues: number[] = [];
   for (let i = 0; i < highs.length; i += 1) {
     const high = highs[i];
     const low = lows[i];
@@ -270,14 +359,11 @@ function atrSeries(highs: number[], lows: number[], closes: number[], length: nu
       result.push(Number.NaN);
       continue;
     }
-    if (prevAtr === null) {
-      prevAtr = tr;
-    } else if (i < length) {
-      prevAtr = (prevAtr * i + tr) / (i + 1);
-    } else {
-      prevAtr = (prevAtr * (length - 1) + tr) / length;
-    }
-    result.push(prevAtr);
+    trValues.push(tr);
+  }
+  const rma = rmaSeries(trValues, length);
+  for (const value of rma) {
+    result.push(value);
   }
   return result;
 }
@@ -295,14 +381,60 @@ function basisFrom(
   return emaSeries(base, params.basisSmooth);
 }
 
+function filterClosedCandles(candles: Candle[], timeframe: TrendTimeframe): Candle[] {
+  if (!Array.isArray(candles) || candles.length === 0) {
+    return [];
+  }
+  const tfMs = timeframeToSeconds(timeframe) * 1000;
+  const last = candles[candles.length - 1];
+  if (!last || !Number.isFinite(last.t)) {
+    return candles;
+  }
+  const now = Date.now();
+  const age = now - last.t;
+  if (!Number.isFinite(age) || age < 0) {
+    return candles.slice(0, -1);
+  }
+  // If the latest candle is very recent, treat it as in-progress and drop it.
+  // This reduces false flips while still allowing near-real-time updates.
+  if (age < tfMs * 0.2) {
+    return candles.slice(0, -1);
+  }
+  return candles;
+}
+
 export function computeBOSWavesDirection(
   candles: Candle[],
   params?: Partial<TrendParams>
 ): TrendDirection | null {
+  const series = computeBOSWavesSeries(candles, params);
+  return series.direction;
+}
+
+export function computeBOSWavesSeries(
+  candles: Candle[],
+  params?: Partial<TrendParams>
+): {
+  basis: number[];
+  basisOpen: number[];
+  basisClose: number[];
+  upper: number[];
+  lower: number[];
+  signal: Array<TrendDirection | null>;
+  direction: TrendDirection | null;
+} {
   const settings: TrendParams = { ...DEFAULT_PARAMS, ...(params ?? {}) };
   const minBars = Math.max(settings.len, settings.mfLen, settings.atrLen) + 5;
   if (!Array.isArray(candles) || candles.length < minBars) {
-    return null;
+    return {
+      basis: [],
+      basisOpen: [],
+      basisClose: [],
+      upper: [],
+      lower: [],
+      signal: [],
+      direction: null
+    };
   }
   const opens = candles.map((c) => c.open);
   const highs = candles.map((c) => c.high);
@@ -341,8 +473,10 @@ export function computeBOSWavesDirection(
         sumAbs -= Math.abs(drop);
       }
     }
-    if (i < settings.mfLen - 1 || !Number.isFinite(sumAbs) || sumAbs === 0) {
+    if (i < settings.mfLen - 1 || !Number.isFinite(sumAbs)) {
       mf.push(Number.NaN);
+    } else if (sumAbs === 0) {
+      mf.push(0);
     } else {
       mf.push(sum / sumAbs);
     }
@@ -368,55 +502,79 @@ export function computeBOSWavesDirection(
   }
 
   let lastSignal: number | null = null;
-  let prevClose: number | null = null;
-  let prevUpper: number | null = null;
-  let prevLower: number | null = null;
+  const signalSeries: Array<TrendDirection | null> = [];
 
   for (let i = 0; i < closes.length; i += 1) {
     const close = closes[i];
     const basis = basisMain[i];
     const upper = upperBand[i];
     const lower = lowerBand[i];
+    const prevClose = i > 0 ? closes[i - 1] : Number.NaN;
+    const prevUpper = i > 0 ? upperBand[i - 1] : Number.NaN;
+    const prevLower = i > 0 ? lowerBand[i - 1] : Number.NaN;
+    const closeOk = Number.isFinite(close);
+    const upperOk = Number.isFinite(upper);
+    const lowerOk = Number.isFinite(lower);
+    const basisOk = Number.isFinite(basis);
+    const prevCloseOk = Number.isFinite(prevClose);
+    const prevUpperOk = Number.isFinite(prevUpper);
+    const prevLowerOk = Number.isFinite(prevLower);
 
-    if (lastSignal === null && Number.isFinite(close) && Number.isFinite(basis)) {
-      lastSignal = close >= basis ? 1 : -1;
-    }
+    const longCond = closeOk
+      && upperOk
+      && prevCloseOk
+      && prevUpperOk
+      && prevClose <= prevUpper
+      && close > upper;
+    const shortCond = closeOk
+      && lowerOk
+      && prevCloseOk
+      && prevLowerOk
+      && prevClose >= prevLower
+      && close < lower;
 
-    if (
-      Number.isFinite(close)
-      && Number.isFinite(upper)
-      && Number.isFinite(lower)
-      && prevClose !== null
-      && prevUpper !== null
-      && prevLower !== null
-    ) {
-      const longCond = prevClose <= prevUpper && close > upper;
-      const shortCond = prevClose >= prevLower && close < lower;
-      if (longCond) {
-        lastSignal = 1;
-      } else if (shortCond) {
-        lastSignal = -1;
+    let prevLS: number | null = lastSignal;
+    if (prevLS === null) {
+      if (closeOk && basisOk) {
+        prevLS = close >= basis ? 1 : -1;
+      } else {
+        prevLS = null;
       }
     }
 
-    if (Number.isFinite(close)) {
-      prevClose = close;
+    if (longCond) {
+      lastSignal = 1;
+    } else if (shortCond) {
+      lastSignal = -1;
+    } else {
+      lastSignal = prevLS;
     }
-    if (Number.isFinite(upper)) {
-      prevUpper = upper;
-    }
-    if (Number.isFinite(lower)) {
-      prevLower = lower;
+
+    if (lastSignal === 1) {
+      signalSeries.push("up");
+    } else if (lastSignal === -1) {
+      signalSeries.push("down");
+    } else {
+      signalSeries.push(null);
     }
   }
 
+  let direction: TrendDirection | null = null;
   if (lastSignal === 1) {
-    return "up";
+    direction = "up";
+  } else if (lastSignal === -1) {
+    direction = "down";
   }
-  if (lastSignal === -1) {
-    return "down";
-  }
-  return null;
+
+  return {
+    basis: basisMain,
+    basisOpen,
+    basisClose,
+    upper: upperBand,
+    lower: lowerBand,
+    signal: signalSeries,
+    direction
+  };
 }
 
 export async function getTrendSnapshot(options: {
@@ -424,14 +582,16 @@ export async function getTrendSnapshot(options: {
   poolAddress: string;
   timeframe: TrendTimeframe;
   staleSec: number;
+  cacheSec?: number | null;
 }): Promise<TrendSnapshot | null> {
-  const { networkId, poolAddress, timeframe, staleSec } = options;
+  const { networkId, poolAddress, timeframe, staleSec, cacheSec } = options;
   if (!networkId || !poolAddress) {
     return null;
   }
   const key = `${networkId}:${poolAddress}:${timeframe}`;
   const now = Date.now();
-  const ttlMs = timeframeToSeconds(timeframe) * 1000;
+  const cacheSeconds = Number.isFinite(cacheSec ?? NaN) ? Math.max(0, Number(cacheSec)) : timeframeToSeconds(timeframe);
+  const ttlMs = cacheSeconds * 1000;
   const existing = trendCache.get(key);
   if (existing?.inFlight) {
     return existing.inFlight;
@@ -443,7 +603,8 @@ export async function getTrendSnapshot(options: {
   const fetchPromise = (async (): Promise<TrendSnapshot | null> => {
     try {
       const candles = await fetchOhlcv(networkId, poolAddress, timeframe);
-      if (!candles.length) {
+      const closed = filterClosedCandles(candles, timeframe);
+      if (!closed.length) {
         return {
           direction: null,
           updatedAt: null,
@@ -452,10 +613,10 @@ export async function getTrendSnapshot(options: {
           stale: true
         };
       }
-      const lastCandleAt = candles[candles.length - 1]?.t ?? null;
+      const lastCandleAt = closed[closed.length - 1]?.t ?? null;
       const updatedAt = lastCandleAt ? new Date(lastCandleAt).toISOString() : null;
       const stale = lastCandleAt ? (now - lastCandleAt > staleSec * 1000) : true;
-      const direction = stale ? null : computeBOSWavesDirection(candles);
+      const direction = stale ? null : computeBOSWavesDirection(closed);
       return {
         direction,
         updatedAt,
@@ -486,3 +647,100 @@ export async function getTrendSnapshot(options: {
   return result;
 }
 
+export async function getTrendSeries(options: {
+  networkId: string;
+  poolAddress: string;
+  timeframe: TrendTimeframe;
+  staleSec: number;
+  cacheSec?: number | null;
+  bypassCache?: boolean;
+  limit?: number;
+}): Promise<TrendSeries | null> {
+  const { networkId, poolAddress, timeframe, staleSec, cacheSec, limit, bypassCache } = options;
+  if (!networkId || !poolAddress) {
+    return null;
+  }
+  const key = `${networkId}:${poolAddress}:${timeframe}:series`;
+  const now = Date.now();
+  const cacheSeconds = Number.isFinite(cacheSec ?? NaN) ? Math.max(0, Number(cacheSec)) : timeframeToSeconds(timeframe);
+  const ttlMs = cacheSeconds * 1000;
+  const existing = trendSeriesCache.get(key);
+  if (!bypassCache) {
+    if (existing?.inFlight) {
+      return existing.inFlight as Promise<TrendSeries | null>;
+    }
+    if (existing && now - existing.fetchedAt < ttlMs) {
+      return existing.result as TrendSeries | null;
+    }
+  }
+
+  const fetchPromise = (async (): Promise<TrendSeries | null> => {
+    try {
+      const allCandles = await fetchOhlcv(networkId, poolAddress, timeframe);
+      const closedAll = filterClosedCandles(allCandles, timeframe);
+      const candles = Number.isFinite(limit ?? NaN) && (limit ?? 0) > 0
+        ? closedAll.slice(-Number(limit))
+        : closedAll;
+      if (!candles.length) {
+        return {
+          candles: [],
+          basis: [],
+          basisOpen: [],
+        basisClose: [],
+        upper: [],
+        lower: [],
+        signal: [],
+        direction: null,
+        updatedAt: null,
+        timeframe,
+        lastCandleAt: null,
+        stale: true
+      };
+    }
+      const lastCandleAt = candles[candles.length - 1]?.t ?? null;
+      const updatedAt = lastCandleAt ? new Date(lastCandleAt).toISOString() : null;
+      const stale = lastCandleAt ? (now - lastCandleAt > staleSec * 1000) : true;
+      const series = computeBOSWavesSeries(candles);
+      return {
+        candles,
+        basis: series.basis,
+        basisOpen: series.basisOpen,
+        basisClose: series.basisClose,
+        upper: series.upper,
+        lower: series.lower,
+        signal: series.signal,
+        direction: stale ? null : series.direction,
+        updatedAt,
+        timeframe,
+        lastCandleAt,
+        stale
+      };
+    } catch (err) {
+      const previous = (existing?.result as TrendSeries | null) ?? null;
+      const error = err instanceof Error ? err.message : String(err);
+      if (previous) {
+        return { ...previous, stale: true, error };
+      }
+      return {
+        candles: [],
+        basis: [],
+        basisOpen: [],
+        basisClose: [],
+        upper: [],
+        lower: [],
+        signal: [],
+        direction: null,
+        updatedAt: null,
+        timeframe,
+        lastCandleAt: null,
+        stale: true,
+        error
+      };
+    }
+  })();
+
+  trendSeriesCache.set(key, { fetchedAt: now, result: existing?.result ?? null, inFlight: fetchPromise });
+  const result = await fetchPromise;
+  trendSeriesCache.set(key, { fetchedAt: Date.now(), result });
+  return result;
+}
