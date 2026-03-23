@@ -256,7 +256,8 @@ export class OrcaBot {
       networkId: this.config.trendNetworkId,
       poolAddress: this.config.whirlpoolAddress,
       timeframe: this.config.trendTimeframe,
-      staleSec: this.config.trendStaleSec
+      staleSec: this.config.trendStaleSec,
+      cacheSec: this.config.trendCacheSec
     });
     this.lastStatus.trendDirection = snapshot?.direction ?? null;
     this.lastStatus.trendTimeframe = snapshot?.timeframe ?? this.config.trendTimeframe ?? null;

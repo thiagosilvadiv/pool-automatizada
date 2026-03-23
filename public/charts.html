@@ -40,6 +40,19 @@
           ></iframe>
           <div id="chartEmpty" class="chart-empty">Selecione uma pool para ver o gráfico.</div>
         </div>
+        <div class="indicator-panel">
+          <div class="row wrap row-between indicator-header">
+            <div class="field">
+              <label>Indicador (BOS Waves)</label>
+              <div id="indicatorMeta" class="indicator-meta">-</div>
+            </div>
+            <button id="indicatorRefresh" class="ghost" type="button">Atualizar</button>
+          </div>
+          <div class="indicator-wrap">
+            <canvas id="indicatorCanvas" class="indicator-canvas"></canvas>
+            <div id="indicatorEmpty" class="chart-empty">Sem dados para o indicador.</div>
+          </div>
+        </div>
       </section>
     </main>
     <script src="charts.js"></script>

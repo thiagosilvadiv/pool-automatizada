@@ -50,6 +50,7 @@ export type Config = {
   trendTargetDown: TrendTarget;
   trendFallback: TrendFallback;
   trendStaleSec: number;
+  trendCacheSec: number | null;
   trendNetworkId: string;
 };
 
@@ -76,6 +77,7 @@ function parseTrendTimeframe(value: unknown): TrendTimeframe | undefined {
   if (!trimmed) return undefined;
   if (trimmed === "1m") return "1m";
   if (trimmed === "5m") return "5m";
+  if (trimmed === "15m") return "15m";
   if (trimmed === "30m") return "30m";
   if (trimmed === "1h") return "1h";
   return undefined;
@@ -176,12 +178,12 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const envTrendTimeframeRaw = process.env.TREND_TIMEFRAME ?? "";
   const envTrendTimeframe = parseTrendTimeframe(envTrendTimeframeRaw);
   if (envTrendTimeframeRaw && !envTrendTimeframe) {
-    throw new Error("TREND_TIMEFRAME must be 1m, 5m, 30m, or 1h");
+    throw new Error("TREND_TIMEFRAME must be 1m, 5m, 15m, 30m, or 1h");
   }
   const dataTrendTimeframeRaw = (data as any).trendTimeframe;
   const dataTrendTimeframe = parseTrendTimeframe(dataTrendTimeframeRaw);
   if (dataTrendTimeframeRaw != null && dataTrendTimeframe === undefined) {
-    throw new Error("trendTimeframe must be 1m, 5m, 30m, or 1h");
+    throw new Error("trendTimeframe must be 1m, 5m, 15m, 30m, or 1h");
   }
 
   const envTrendTargetUpRaw = process.env.TREND_TARGET_UP ?? "";
@@ -224,6 +226,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const trendStaleSec = parseEnvNumber(process.env.TREND_STALE_SEC)
     ?? (data as any).trendStaleSec
     ?? defaultStaleSec;
+  const trendCacheSec = parseEnvNumber(process.env.TREND_CACHE_SEC)
+    ?? (data as any).trendCacheSec
+    ?? null;
 
   const trendNetworkId = (process.env.TREND_NETWORK_ID ?? (data as any).trendNetworkId ?? "").trim()
     || inferTrendNetworkId(process.env.NETWORK ?? data.network ?? "mainnet-beta");
@@ -311,6 +316,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? dataTrendFallback
       ?? "manual",
     trendStaleSec: Number(trendStaleSec),
+    trendCacheSec: Number.isFinite(Number(trendCacheSec)) ? Number(trendCacheSec) : null,
     trendNetworkId
   };
 
@@ -393,6 +399,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.trendStaleSec) || config.trendStaleSec < 0) {
     throw new Error("trendStaleSec must be >= 0");
+  }
+  if (config.trendCacheSec !== null && (!Number.isFinite(config.trendCacheSec) || config.trendCacheSec < 0)) {
+    throw new Error("trendCacheSec must be >= 0 or null");
   }
   if (!config.trendTimeframe || !parseTrendTimeframe(config.trendTimeframe)) {
     throw new Error("trendTimeframe must be 1m, 5m, 30m, or 1h");

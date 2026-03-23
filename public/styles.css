@@ -413,6 +413,134 @@ button.danger:not(.ghost):hover {
   display: none;
 }
 
+.indicator-panel {
+  margin-top: 24px;
+}
+
+.indicator-header {
+  align-items: center;
+  gap: 16px;
+}
+
+.indicator-meta {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.indicator-wrap {
+  position: relative;
+  margin-top: 12px;
+  height: 320px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #243142;
+  background: #0f1419;
+}
+
+.indicator-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.performance-metrics {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.performance-metrics .label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.performance-wrap {
+  position: relative;
+  height: 280px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid #243142;
+  background: #0f1419;
+}
+
+.performance-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.performance-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.performance-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(15, 20, 25, 0.95);
+  border: 1px solid #243142;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  box-shadow: 0 10px 20px rgba(0,0,0,0.35);
+  max-width: 220px;
+  z-index: 5;
+}
+
+.performance-tooltip .title {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--muted);
+}
+
+.performance-tooltip .line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 6px;
+}
+
+.legend-swatch.fees {
+  background: #f6c343;
+}
+
+.legend-swatch.pnl {
+  background: #36d399;
+}
+
+.legend-swatch.pnlNet {
+  background: #4ea1ff;
+}
+
+.legend-swatch.pnlCum {
+  background: #36d399;
+  opacity: 0.6;
+}
+
+.legend-swatch.pnlNetCum {
+  background: #4ea1ff;
+  opacity: 0.6;
+}
+
 .hint {
   font-size: 12px;
   color: var(--muted);

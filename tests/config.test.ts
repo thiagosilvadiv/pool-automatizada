@@ -47,6 +47,7 @@ describe("config", () => {
   it("accepts valid trendTimeframe", () => {
     expect(() => loadWith({ trendTimeframe: "1m" })).not.toThrow();
     expect(() => loadWith({ trendTimeframe: "1h" })).not.toThrow();
+    expect(() => loadWith({ trendTimeframe: "15m" })).not.toThrow();
   });
 
   it("rejects invalid trendTimeframe", () => {
@@ -67,5 +68,14 @@ describe("config", () => {
 
   it("rejects negative trendStaleSec", () => {
     expect(() => loadWith({ trendStaleSec: -1 })).toThrow();
+  });
+
+  it("accepts valid trendCacheSec", () => {
+    expect(() => loadWith({ trendCacheSec: 0 })).not.toThrow();
+    expect(() => loadWith({ trendCacheSec: 60 })).not.toThrow();
+  });
+
+  it("rejects invalid trendCacheSec", () => {
+    expect(() => loadWith({ trendCacheSec: -1 })).toThrow();
   });
 });
