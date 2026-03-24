@@ -649,8 +649,11 @@ export class BotRunner {
         this.entryByMint.set(event.positionMint, event.positionEntryUsd);
       }
     }
-    if (this.history.length > 200) {
-      this.history.shift();
+    const maxHistory = Number.isFinite(this.config.historyMaxEvents)
+      ? Math.floor(this.config.historyMaxEvents)
+      : 0;
+    if (maxHistory > 0 && this.history.length > maxHistory) {
+      this.history.splice(0, this.history.length - maxHistory);
     }
     if (event.portfolioValue != null) {
       this.lastEventPortfolioValue = event.portfolioValue;
@@ -793,6 +796,13 @@ export class BotRunner {
                 entryByMint.set(item.positionMint, item.positionEntryUsd);
               }
             }
+          }
+          const maxHistory = Number.isFinite(this.config.historyMaxEvents)
+            ? Math.floor(this.config.historyMaxEvents)
+            : 0;
+          if (maxHistory > 0 && normalized.length > maxHistory) {
+            normalized.splice(0, normalized.length - maxHistory);
+            mutated = true;
           }
           this.history = normalized;
           this.openedAtByMint = openedByMint;

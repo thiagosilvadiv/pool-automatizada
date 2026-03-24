@@ -14,6 +14,7 @@ export type Config = {
   preferredExitToken: "tokenA" | "tokenB" | null;
   slippageBps: number;
   pollIntervalMs: number;
+  historyMaxEvents: number;
   outOfRangeConfirmSec: number;
   rebalanceCooldownSec: number;
   autoSolTopupEnabled: boolean;
@@ -246,6 +247,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? null,
     slippageBps: parseEnvNumber(process.env.SLIPPAGE_BPS) ?? Number(data.slippageBps ?? 50),
     pollIntervalMs: parseEnvNumber(process.env.POLL_INTERVAL_MS) ?? Number(data.pollIntervalMs ?? 30000),
+    historyMaxEvents: parseEnvNumber(process.env.HISTORY_MAX_EVENTS) ?? Number((data as any).historyMaxEvents ?? 200),
     outOfRangeConfirmSec: parseEnvNumber(process.env.OUT_OF_RANGE_CONFIRM_SEC) ?? Number(data.outOfRangeConfirmSec ?? 0),
     rebalanceCooldownSec: parseEnvNumber(process.env.REBALANCE_COOLDOWN_SEC) ?? Number(data.rebalanceCooldownSec ?? 300),
     autoSolTopupEnabled: parseEnvBool(process.env.AUTO_SOL_TOPUP_ENABLED) ?? Boolean(data.autoSolTopupEnabled ?? false),
@@ -348,6 +350,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.pollIntervalMs) || config.pollIntervalMs < 1000) {
     throw new Error("pollIntervalMs must be >= 1000");
+  }
+  if (!Number.isFinite(config.historyMaxEvents) || config.historyMaxEvents < 0) {
+    throw new Error("historyMaxEvents must be >= 0");
   }
   if (!Number.isFinite(config.outOfRangeConfirmSec) || config.outOfRangeConfirmSec < 0) {
     throw new Error("outOfRangeConfirmSec must be >= 0");
