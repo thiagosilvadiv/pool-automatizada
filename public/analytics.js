@@ -722,7 +722,7 @@ async function refresh() {
     const typeFiltered = applyAnalyticsTypeFilter(filtered);
     renderHistory(typeFiltered);
     updateSummary(typeFiltered, { aggregate: selectedId === ALL_POOLS_ID });
-    updatePerformance(filtered);
+    updatePerformance(typeFiltered);
   } catch (err) {
     errorBox.textContent = err instanceof Error ? err.message : String(err);
     errorBox.classList.remove("hidden");
