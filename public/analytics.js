@@ -185,6 +185,20 @@ function sumNumeric(items, key) {
   return items.reduce((acc, item) => acc + (Number(item?.[key]) || 0), 0);
 }
 
+function averageNumeric(items, key) {
+  if (!Array.isArray(items)) return null;
+  let sum = 0;
+  let count = 0;
+  items.forEach((item) => {
+    const value = Number(item?.[key]);
+    if (Number.isFinite(value) && value > 0) {
+      sum += value;
+      count += 1;
+    }
+  });
+  return count > 0 ? sum / count : null;
+}
+
 function getPerfPeriodDays(items) {
   const start = startInput?.value ? new Date(startInput.value) : null;
   const end = endInput?.value ? new Date(endInput.value) : null;
@@ -546,16 +560,20 @@ function aggregatePerformance(items, group) {
       date: group === "month" ? startOfMonth(date)
         : group === "week" ? startOfWeek(date)
           : startOfDay(date),
-      entryUsd: 0,
+      entrySum: 0,
+      entryCount: 0,
       fees: 0,
       pnl: 0,
       pnlNet: 0
     };
     const fees = Number(item.positionFeesUsd) || 0;
     const pnl = Number(item.positionPnlUsd) || 0;
-    const entryUsd = Number(item.positionEntryUsd) || 0;
+    const entryUsd = Number(item.positionEntryUsd);
     bucket.fees += fees;
-    bucket.entryUsd += entryUsd;
+    if (Number.isFinite(entryUsd) && entryUsd > 0) {
+      bucket.entrySum += entryUsd;
+      bucket.entryCount += 1;
+    }
     bucket.pnl += pnl;
     bucket.pnlNet += pnl - fees;
     buckets.set(key, bucket);
@@ -571,7 +589,7 @@ function aggregatePerformance(items, group) {
     return {
       label: labelForBucket(entry.date, group),
       fees: entry.fees,
-      feeYieldPct: entry.entryUsd > 0 ? (entry.fees / entry.entryUsd) * 100 : null,
+      feeYieldPct: entry.entryCount > 0 ? (entry.fees / (entry.entrySum / entry.entryCount)) * 100 : null,
       pnl: entry.pnl,
       pnlNet: entry.pnlNet,
       feesCum: runningFees,
@@ -760,8 +778,8 @@ function updatePerformanceStats(items) {
     ? items.filter((item) => item?.action === "close-position")
     : [];
   const totalFeesUsd = sumNumeric(closeItems, "positionFeesUsd");
-  const totalEntryUsd = sumNumeric(closeItems, "positionEntryUsd");
-  const feeYieldPct = totalEntryUsd > 0 ? (totalFeesUsd / totalEntryUsd) * 100 : null;
+  const avgEntryUsd = averageNumeric(closeItems, "positionEntryUsd");
+  const feeYieldPct = avgEntryUsd != null ? (totalFeesUsd / avgEntryUsd) * 100 : null;
   const periodDays = getPerfPeriodDays(closeItems);
   perfDailyYieldPct = feeYieldPct != null ? feeYieldPct / periodDays : null;
 
