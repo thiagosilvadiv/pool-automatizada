@@ -87,17 +87,19 @@ let analyticsRowLimit = loadAnalyticsRowLimit();
 const perfMetricDefaults = {
   fees: true,
   feesCum: true,
+  feeYieldPct: true,
   pnl: true,
   pnlNet: true,
   pnlCum: true,
   pnlNetCum: true
 };
 
-const perfMetricOrder = ["fees", "feesCum", "pnl", "pnlNet", "pnlCum", "pnlNetCum"];
+const perfMetricOrder = ["fees", "feesCum", "feeYieldPct", "pnl", "pnlNet", "pnlCum", "pnlNetCum"];
 
 const perfMetricLabels = {
   fees: "Taxas",
   feesCum: "Taxas acumuladas",
+  feeYieldPct: "Rendimento da taxa (%)",
   pnl: "PnL",
   pnlNet: "PnL sem taxas",
   pnlCum: "PnL acumulado",
@@ -107,6 +109,7 @@ const perfMetricLabels = {
 const perfMetricColors = {
   fees: "#f6c343",
   feesCum: "rgba(246, 195, 67, 0.65)",
+  feeYieldPct: "#f97316",
   pnl: "#36d399",
   pnlNet: "#4ea1ff",
   pnlCum: "#36d399",
@@ -224,6 +227,19 @@ function updatePerfCalculator() {
   const fees = capital * (roi / 100);
   perfCalcFees.textContent = formatNumber(fees, 2);
   perfCalcRoi.textContent = `${formatNumber(roi, 2)}%`;
+}
+
+function isPercentMetric(key) {
+  return key === "feeYieldPct";
+}
+
+function formatMetricValue(key, value) {
+  if (value === null || value === undefined) return "-";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "-";
+  const formatted = formatNumber(num, 2);
+  if (formatted === "-") return formatted;
+  return isPercentMetric(key) ? `${formatted}%` : formatted;
 }
 
 function toDateInputValue(date) {
@@ -530,13 +546,16 @@ function aggregatePerformance(items, group) {
       date: group === "month" ? startOfMonth(date)
         : group === "week" ? startOfWeek(date)
           : startOfDay(date),
+      entryUsd: 0,
       fees: 0,
       pnl: 0,
       pnlNet: 0
     };
     const fees = Number(item.positionFeesUsd) || 0;
     const pnl = Number(item.positionPnlUsd) || 0;
+    const entryUsd = Number(item.positionEntryUsd) || 0;
     bucket.fees += fees;
+    bucket.entryUsd += entryUsd;
     bucket.pnl += pnl;
     bucket.pnlNet += pnl - fees;
     buckets.set(key, bucket);
@@ -552,6 +571,7 @@ function aggregatePerformance(items, group) {
     return {
       label: labelForBucket(entry.date, group),
       fees: entry.fees,
+      feeYieldPct: entry.entryUsd > 0 ? (entry.fees / entry.entryUsd) * 100 : null,
       pnl: entry.pnl,
       pnlNet: entry.pnlNet,
       feesCum: runningFees,
@@ -593,11 +613,13 @@ function drawPerformanceChart(canvas, series) {
     perfChartMetrics = [];
     return;
   }
+  const percentOnly = activeMetrics.length === 1 && isPercentMetric(activeMetrics[0]);
 
   const values = [];
   series.forEach((point) => {
     activeMetrics.forEach((key) => {
-      const val = Number(point[key]);
+      const raw = point[key];
+      const val = raw === null || raw === undefined ? NaN : Number(raw);
       if (Number.isFinite(val)) values.push(val);
     });
   });
@@ -629,7 +651,8 @@ function drawPerformanceChart(canvas, series) {
     ctx.fillStyle = "rgba(255,255,255,0.6)";
     ctx.font = "11px IBM Plex Sans, Segoe UI, sans-serif";
     ctx.textAlign = "right";
-    ctx.fillText(formatNumber(value, 2), left - 8, y + 4);
+    const label = percentOnly ? `${formatNumber(value, 2)}%` : formatNumber(value, 2);
+    ctx.fillText(label, left - 8, y + 4);
   }
 
   ctx.strokeStyle = "rgba(255,255,255,0.2)";
@@ -662,7 +685,8 @@ function drawPerformanceChart(canvas, series) {
     ctx.beginPath();
     let started = false;
     points.forEach((pt) => {
-      const val = Number(pt.values[key]);
+      const raw = pt.values[key];
+      const val = raw === null || raw === undefined ? NaN : Number(raw);
       if (!Number.isFinite(val)) {
         started = false;
         return;
@@ -680,7 +704,8 @@ function drawPerformanceChart(canvas, series) {
     ctx.setLineDash([]);
 
     points.forEach((pt) => {
-      const val = Number(pt.values[key]);
+      const raw = pt.values[key];
+      const val = raw === null || raw === undefined ? NaN : Number(raw);
       if (!Number.isFinite(val)) return;
       const y = top + (1 - (val - minY) / (maxY - minY)) * plotH;
       ctx.fillStyle = perfMetricColors[key] || "#888";
@@ -703,9 +728,9 @@ function drawPerformanceChart(canvas, series) {
 function showPerfTooltip(point, x, y) {
   if (!perfTooltip) return;
   const lines = perfChartMetrics.map((key) => {
-    const val = Number(point.values[key]);
+    const val = point.values[key];
     const label = perfMetricLabels[key] ?? key;
-    const formatted = Number.isFinite(val) ? formatNumber(val, 2) : "-";
+    const formatted = formatMetricValue(key, val);
     return `<div class="line"><span>${label}</span><span>${formatted}</span></div>`;
   }).join("");
   perfTooltip.innerHTML = `<div class="title">${point.label}</div>${lines}`;
