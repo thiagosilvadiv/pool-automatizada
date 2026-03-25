@@ -118,11 +118,30 @@
           </div>
           <div class="performance-metrics">
             <span class="label">Metricas:</span>
-            <label><input type="checkbox" data-series="fees" checked /> Taxas</label>
-            <label><input type="checkbox" data-series="pnl" checked /> PnL</label>
-            <label><input type="checkbox" data-series="pnlNet" checked /> PnL sem taxas</label>
-            <label><input type="checkbox" data-series="pnlCum" checked /> PnL acumulado</label>
-            <label><input type="checkbox" data-series="pnlNetCum" checked /> PnL sem taxas acumulado</label>
+            <label class="metric-toggle is-checked">
+              <input type="checkbox" data-series="fees" checked />
+              <span>Taxas</span>
+            </label>
+            <label class="metric-toggle is-checked">
+              <input type="checkbox" data-series="feesCum" checked />
+              <span>Taxas acumuladas</span>
+            </label>
+            <label class="metric-toggle is-checked">
+              <input type="checkbox" data-series="pnl" checked />
+              <span>PnL</span>
+            </label>
+            <label class="metric-toggle is-checked">
+              <input type="checkbox" data-series="pnlNet" checked />
+              <span>PnL sem taxas</span>
+            </label>
+            <label class="metric-toggle is-checked">
+              <input type="checkbox" data-series="pnlCum" checked />
+              <span>PnL acumulado</span>
+            </label>
+            <label class="metric-toggle is-checked">
+              <input type="checkbox" data-series="pnlNetCum" checked />
+              <span>PnL sem taxas acumulado</span>
+            </label>
           </div>
         </div>
         <div class="performance-wrap">
@@ -132,10 +151,41 @@
         </div>
         <div class="performance-legend">
           <span><i class="legend-swatch fees"></i> Taxas</span>
+          <span><i class="legend-swatch feesCum"></i> Taxas acumuladas</span>
           <span><i class="legend-swatch pnl"></i> PnL</span>
           <span><i class="legend-swatch pnlNet"></i> PnL sem taxas</span>
           <span><i class="legend-swatch pnlCum"></i> PnL acumulado</span>
           <span><i class="legend-swatch pnlNetCum"></i> PnL sem taxas acumulado</span>
+        </div>
+        <div class="performance-stats">
+          <div class="stat-card">
+            <span class="stat-label">Taxas acumuladas (USD)</span>
+            <span id="perfFeesCumStat" class="stat-value">-</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Rendimento da taxa (%)</span>
+            <span id="perfFeeYieldStat" class="stat-value">-</span>
+          </div>
+        </div>
+        <div class="performance-calculator">
+          <div class="calc-header">
+            <h3>Calculadora de projecao</h3>
+            <span class="calc-meta">Base: media diaria de taxas no periodo filtrado.</span>
+          </div>
+          <div class="calc-grid">
+            <div class="field">
+              <label for="perfCalcCapital">Capital (USD)</label>
+              <input id="perfCalcCapital" type="number" min="0" step="0.01" placeholder="0.00" />
+            </div>
+            <div class="field">
+              <label for="perfCalcDays">Dias</label>
+              <input id="perfCalcDays" type="number" min="1" step="1" value="30" />
+            </div>
+            <div class="calc-results">
+              <div class="kv"><span>Taxas estimadas (USD)</span><span id="perfCalcFees">-</span></div>
+              <div class="kv"><span>ROI (%)</span><span id="perfCalcRoi">-</span></div>
+            </div>
+          </div>
         </div>
         <p class="hint">Grafico usa eventos de fechamento (PnL realizado).</p>
       </section>

@@ -12,6 +12,12 @@ const perfCanvas = document.getElementById("perfCanvas");
 const perfEmpty = document.getElementById("perfEmpty");
 const perfTooltip = document.getElementById("perfTooltip");
 const perfMetrics = document.querySelector(".performance-metrics");
+const perfFeesCumStat = document.getElementById("perfFeesCumStat");
+const perfFeeYieldStat = document.getElementById("perfFeeYieldStat");
+const perfCalcCapital = document.getElementById("perfCalcCapital");
+const perfCalcDays = document.getElementById("perfCalcDays");
+const perfCalcFees = document.getElementById("perfCalcFees");
+const perfCalcRoi = document.getElementById("perfCalcRoi");
 
 const ALL_POOLS_ID = "__all__";
 
@@ -80,16 +86,18 @@ let analyticsRowLimit = loadAnalyticsRowLimit();
 
 const perfMetricDefaults = {
   fees: true,
+  feesCum: true,
   pnl: true,
   pnlNet: true,
   pnlCum: true,
   pnlNetCum: true
 };
 
-const perfMetricOrder = ["fees", "pnl", "pnlNet", "pnlCum", "pnlNetCum"];
+const perfMetricOrder = ["fees", "feesCum", "pnl", "pnlNet", "pnlCum", "pnlNetCum"];
 
 const perfMetricLabels = {
   fees: "Taxas",
+  feesCum: "Taxas acumuladas",
   pnl: "PnL",
   pnlNet: "PnL sem taxas",
   pnlCum: "PnL acumulado",
@@ -98,6 +106,7 @@ const perfMetricLabels = {
 
 const perfMetricColors = {
   fees: "#f6c343",
+  feesCum: "rgba(246, 195, 67, 0.65)",
   pnl: "#36d399",
   pnlNet: "#4ea1ff",
   pnlCum: "#36d399",
@@ -109,6 +118,7 @@ let perfMetricVisibility = loadPerfMetricVisibility();
 let perfChartPoints = [];
 let perfChartMetrics = [];
 let analyticsPoolSelection = loadAnalyticsPoolSelection();
+let perfDailyYieldPct = null;
 
 function formatRange(range) {
   if (!range) return "-";
@@ -165,6 +175,55 @@ function formatTrendDirection(value) {
   if (value === "up") return "Alta";
   if (value === "down") return "Baixa";
   return "-";
+}
+
+function sumNumeric(items, key) {
+  if (!Array.isArray(items)) return 0;
+  return items.reduce((acc, item) => acc + (Number(item?.[key]) || 0), 0);
+}
+
+function getPerfPeriodDays(items) {
+  const start = startInput?.value ? new Date(startInput.value) : null;
+  const end = endInput?.value ? new Date(endInput.value) : null;
+  let diffMs = null;
+  if (start && end && !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+    diffMs = end.getTime() - start.getTime();
+  }
+  if (!(diffMs > 0)) {
+    const times = (items || []).map((item) => Date.parse(item?.timestamp ?? "")).filter(Number.isFinite);
+    if (times.length >= 2) {
+      diffMs = Math.max(...times) - Math.min(...times);
+    }
+  }
+  if (!Number.isFinite(diffMs) || diffMs <= 0) return 1;
+  return Math.max(1, diffMs / (24 * 60 * 60 * 1000));
+}
+
+function setMetricToggleState(input) {
+  const label = input?.closest("label");
+  if (label) {
+    label.classList.toggle("is-checked", input.checked);
+  }
+}
+
+function updatePerfCalculator() {
+  if (!perfCalcFees || !perfCalcRoi) return;
+  const capital = perfCalcCapital ? Number(perfCalcCapital.value) : NaN;
+  const days = perfCalcDays ? Number(perfCalcDays.value) : NaN;
+  if (!Number.isFinite(capital) || capital <= 0 || !Number.isFinite(days) || days <= 0) {
+    perfCalcFees.textContent = "-";
+    perfCalcRoi.textContent = "-";
+    return;
+  }
+  if (!Number.isFinite(perfDailyYieldPct ?? NaN)) {
+    perfCalcFees.textContent = "-";
+    perfCalcRoi.textContent = "-";
+    return;
+  }
+  const roi = perfDailyYieldPct * days;
+  const fees = capital * (roi / 100);
+  perfCalcFees.textContent = formatNumber(fees, 2);
+  perfCalcRoi.textContent = `${formatNumber(roi, 2)}%`;
 }
 
 function toDateInputValue(date) {
@@ -438,6 +497,7 @@ function syncPerfControls() {
       const key = input.getAttribute("data-series");
       if (!key) return;
       input.checked = perfMetricVisibility[key] !== false;
+      setMetricToggleState(input);
     });
   }
 }
@@ -484,14 +544,17 @@ function aggregatePerformance(items, group) {
   const series = Array.from(buckets.values()).sort((a, b) => a.date - b.date);
   let runningPnl = 0;
   let runningNet = 0;
+  let runningFees = 0;
   return series.map((entry) => {
     runningPnl += entry.pnl;
     runningNet += entry.pnlNet;
+    runningFees += entry.fees;
     return {
       label: labelForBucket(entry.date, group),
       fees: entry.fees,
       pnl: entry.pnl,
       pnlNet: entry.pnlNet,
+      feesCum: runningFees,
       pnlCum: runningPnl,
       pnlNetCum: runningNet
     };
@@ -591,7 +654,7 @@ function drawPerformanceChart(canvas, series) {
   ctx.lineCap = "round";
 
   activeMetrics.forEach((key) => {
-    if (key === "pnlCum" || key === "pnlNetCum") {
+    if (key === "pnlCum" || key === "pnlNetCum" || key === "feesCum") {
       ctx.setLineDash([6, 4]);
     } else {
       ctx.setLineDash([]);
@@ -667,6 +730,26 @@ function hidePerfTooltip() {
   perfTooltip.classList.add("hidden");
 }
 
+function updatePerformanceStats(items) {
+  const closeItems = Array.isArray(items)
+    ? items.filter((item) => item?.action === "close-position")
+    : [];
+  const totalFeesUsd = sumNumeric(closeItems, "positionFeesUsd");
+  const totalEntryUsd = sumNumeric(closeItems, "positionEntryUsd");
+  const feeYieldPct = totalEntryUsd > 0 ? (totalFeesUsd / totalEntryUsd) * 100 : null;
+  const periodDays = getPerfPeriodDays(closeItems);
+  perfDailyYieldPct = feeYieldPct != null ? feeYieldPct / periodDays : null;
+
+  if (perfFeesCumStat) {
+    perfFeesCumStat.textContent = closeItems.length ? formatNumber(totalFeesUsd, 2) : "-";
+  }
+  if (perfFeeYieldStat) {
+    perfFeeYieldStat.textContent = feeYieldPct != null ? `${formatNumber(feeYieldPct, 2)}%` : "-";
+  }
+
+  updatePerfCalculator();
+}
+
 async function refresh() {
   try {
     errorBox.classList.add("hidden");
@@ -731,6 +814,7 @@ async function refresh() {
 
 function updatePerformance(items) {
   if (!perfCanvas || !perfEmpty) return;
+  updatePerformanceStats(items);
   const activeMetrics = perfMetricOrder.filter((key) => perfMetricVisibility[key] !== false);
   if (!activeMetrics.length) {
     perfEmpty.textContent = "Selecione ao menos uma metrica";
@@ -828,8 +912,21 @@ if (perfMetrics) {
     const key = target.getAttribute("data-series");
     if (!key) return;
     perfMetricVisibility = { ...perfMetricVisibility, [key]: target.checked };
+    setMetricToggleState(target);
     savePerfMetricVisibility();
     refresh();
+  });
+}
+
+if (perfCalcCapital) {
+  perfCalcCapital.addEventListener("input", () => {
+    updatePerfCalculator();
+  });
+}
+
+if (perfCalcDays) {
+  perfCalcDays.addEventListener("input", () => {
+    updatePerfCalculator();
   });
 }
 
