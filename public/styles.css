@@ -460,9 +460,65 @@ button.danger:not(.ghost):hover {
   font-size: 12px;
 }
 
+.metric-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #2c3a4a;
+  background: rgba(15, 20, 25, 0.6);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.metric-toggle input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid #2c3a4a;
+  background: #0f1419;
+  position: relative;
+  margin: 0;
+}
+
+.metric-toggle input::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.metric-toggle.is-checked {
+  border-color: rgba(54, 211, 153, 0.6);
+  background: rgba(54, 211, 153, 0.12);
+  color: var(--text);
+}
+
+.metric-toggle.is-checked input {
+  border-color: var(--accent);
+}
+
+.metric-toggle.is-checked input::after {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.metric-toggle:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(54, 211, 153, 0.15);
+}
+
 .performance-wrap {
   position: relative;
-  height: 280px;
+  height: 360px;
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid #243142;
@@ -482,6 +538,83 @@ button.danger:not(.ghost):hover {
   color: var(--muted);
   margin-top: 10px;
   flex-wrap: wrap;
+}
+
+.performance-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.stat-card {
+  background: var(--card);
+  border: 1px solid #243142;
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.stat-value {
+  display: block;
+  margin-top: 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.performance-calculator {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid #243142;
+  background: linear-gradient(135deg, rgba(27, 36, 48, 0.9), rgba(15, 20, 25, 0.9));
+}
+
+.performance-calculator h3 {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.calc-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.calc-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.calc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.calc-results {
+  background: #0f1419;
+  border: 1px solid #243142;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.calc-results .kv {
+  margin-bottom: 6px;
 }
 
 .performance-tooltip {
@@ -521,6 +654,11 @@ button.danger:not(.ghost):hover {
 
 .legend-swatch.fees {
   background: #f6c343;
+}
+
+.legend-swatch.feesCum {
+  background: #f6c343;
+  opacity: 0.6;
 }
 
 .legend-swatch.pnl {
