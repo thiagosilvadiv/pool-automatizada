@@ -661,6 +661,10 @@ button.danger:not(.ghost):hover {
   opacity: 0.6;
 }
 
+.legend-swatch.feeYieldPct {
+  background: #f97316;
+}
+
 .legend-swatch.pnl {
   background: #36d399;
 }
