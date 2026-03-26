@@ -244,6 +244,23 @@ export class BybitClient {
     return { orderId: result.orderId ?? null };
   }
 
+  async addMargin(symbol: string, marginUsd: number): Promise<void> {
+    const raw = Number(marginUsd);
+    if (!Number.isFinite(raw) || raw <= 0) {
+      return;
+    }
+    const rounded = Math.floor(raw * 10_000) / 10_000;
+    if (rounded <= 0) {
+      return;
+    }
+    await this.request("POST", "/v5/position/add-margin", {
+      category: "linear",
+      symbol,
+      margin: String(rounded),
+      positionIdx: 0
+    });
+  }
+
   async getPosition(symbol: string): Promise<BybitPosition | null> {
     const result = await this.request<{ list: BybitPosition[] }>("GET", "/v5/position/list", {
       category: "linear",

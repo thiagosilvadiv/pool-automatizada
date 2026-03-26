@@ -93,4 +93,15 @@ describe("config", () => {
   it("rejects invalid hedgeLeverage", () => {
     expect(() => loadWith({ hedgeLeverage: 0 })).toThrow();
   });
+
+  it("accepts valid hedgeMarginPct", () => {
+    expect(() => loadWith({ hedgeMarginPct: 0 })).not.toThrow();
+    expect(() => loadWith({ hedgeMarginPct: 25 })).not.toThrow();
+    expect(() => loadWith({ hedgeMarginPct: 100 })).not.toThrow();
+  });
+
+  it("rejects invalid hedgeMarginPct", () => {
+    expect(() => loadWith({ hedgeMarginPct: -1 })).toThrow();
+    expect(() => loadWith({ hedgeMarginPct: 101 })).toThrow();
+  });
 });

@@ -133,6 +133,7 @@ REDIS_PREFIX=orca-bot
 - `BYBIT_RECV_WINDOW`: janela de recepção em ms (padrão 5000)
 - `HEDGE_ENABLED`: ativa proteção por pool (true/false)
 - `HEDGE_PCT`: porcentagem de proteção sobre o valor da posição (0-100)
+- `HEDGE_MARGIN_PCT`: porcentagem extra para adicionar como margem na Bybit (0-100)
 - `HEDGE_SYMBOL`: símbolo Bybit do hedge (ex.: `SOLUSDT`)
 - `HEDGE_LEVERAGE`: alavancagem da proteção (>=1)
 

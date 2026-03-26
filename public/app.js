@@ -45,6 +45,7 @@ const poolTrendDownInput = document.getElementById("poolTrendDown");
 const poolBudgetInput = document.getElementById("poolBudget");
 const poolHedgeEnabledInput = document.getElementById("poolHedgeEnabled");
 const poolHedgePctInput = document.getElementById("poolHedgePct");
+const poolHedgeMarginPctInput = document.getElementById("poolHedgeMarginPct");
 const poolHedgeSymbolInput = document.getElementById("poolHedgeSymbol");
 const poolHedgeLeverageInput = document.getElementById("poolHedgeLeverage");
 const poolTrendHint = document.getElementById("poolTrendHint");
@@ -65,6 +66,7 @@ const editPoolTrendDownInput = document.getElementById("editPoolTrendDown");
 const editPoolBudgetInput = document.getElementById("editPoolBudget");
 const editPoolHedgeEnabledInput = document.getElementById("editPoolHedgeEnabled");
 const editPoolHedgePctInput = document.getElementById("editPoolHedgePct");
+const editPoolHedgeMarginPctInput = document.getElementById("editPoolHedgeMarginPct");
 const editPoolHedgeSymbolInput = document.getElementById("editPoolHedgeSymbol");
 const editPoolHedgeLeverageInput = document.getElementById("editPoolHedgeLeverage");
 const editPoolTrendHint = document.getElementById("editPoolTrendHint");
@@ -681,6 +683,7 @@ function openEditPoolModal(pool) {
   const defaultTrendDown = cachedConfig?.trendTargetDown ?? "other";
   const defaultHedgeEnabled = cachedConfig?.hedgeEnabled ?? false;
   const defaultHedgePct = cachedConfig?.hedgePct ?? "-";
+  const defaultHedgeMarginPct = cachedConfig?.hedgeMarginPct ?? "-";
   const defaultHedgeSymbol = cachedConfig?.hedgeSymbol ?? "-";
   const defaultHedgeLeverage = cachedConfig?.hedgeLeverage ?? "-";
   const tokenInfo = getTokenInfo(pool);
@@ -701,6 +704,10 @@ function openEditPoolModal(pool) {
   if (editPoolHedgePctInput) {
     editPoolHedgePctInput.value = overrides.hedgePct ?? "";
     editPoolHedgePctInput.placeholder = `Padrão (${formatNumber(defaultHedgePct, 2)})`;
+  }
+  if (editPoolHedgeMarginPctInput) {
+    editPoolHedgeMarginPctInput.value = overrides.hedgeMarginPct ?? "";
+    editPoolHedgeMarginPctInput.placeholder = `Padrão (${formatNumber(defaultHedgeMarginPct, 2)})`;
   }
   if (editPoolHedgeSymbolInput) {
     editPoolHedgeSymbolInput.value = overrides.hedgeSymbol ?? "";
@@ -1082,6 +1089,7 @@ addPoolBtn.addEventListener("click", async () => {
   const budgetUsd = parseOptionalNumber(poolBudgetInput.value);
   const hedgeEnabledRaw = poolHedgeEnabledInput?.value ?? "";
   const hedgePct = parseOptionalNumber(poolHedgePctInput?.value);
+  const hedgeMarginPct = parseOptionalNumber(poolHedgeMarginPctInput?.value);
   const hedgeSymbol = poolHedgeSymbolInput?.value?.trim();
   const hedgeLeverage = parseOptionalNumber(poolHedgeLeverageInput?.value);
   poolError.classList.add("hidden");
@@ -1137,6 +1145,9 @@ addPoolBtn.addEventListener("click", async () => {
     if (hedgePct !== undefined) {
       overrides.hedgePct = hedgePct;
     }
+    if (hedgeMarginPct !== undefined) {
+      overrides.hedgeMarginPct = hedgeMarginPct;
+    }
     if (hedgeSymbol) {
       overrides.hedgeSymbol = hedgeSymbol;
     }
@@ -1164,6 +1175,7 @@ addPoolBtn.addEventListener("click", async () => {
     poolBudgetInput.value = "";
     if (poolHedgeEnabledInput) poolHedgeEnabledInput.value = "";
     if (poolHedgePctInput) poolHedgePctInput.value = "";
+    if (poolHedgeMarginPctInput) poolHedgeMarginPctInput.value = "";
     if (poolHedgeSymbolInput) poolHedgeSymbolInput.value = "";
     if (poolHedgeLeverageInput) poolHedgeLeverageInput.value = "";
     updateUI();
@@ -1334,6 +1346,21 @@ if (editPoolForm) {
         return;
       }
       overrides.hedgePct = parsed;
+    }
+
+    const hedgeMarginRaw = editPoolHedgeMarginPctInput?.value?.trim() ?? "";
+    if (!hedgeMarginRaw) {
+      overrides.hedgeMarginPct = null;
+    } else {
+      const parsed = parseOptionalNumber(hedgeMarginRaw);
+      if (parsed === undefined) {
+        if (editPoolError) {
+          editPoolError.textContent = "Hedge margem % inválida.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.hedgeMarginPct = parsed;
     }
 
     const hedgeSymbolRaw = editPoolHedgeSymbolInput?.value?.trim() ?? "";
