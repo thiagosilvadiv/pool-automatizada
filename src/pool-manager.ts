@@ -753,7 +753,7 @@ export class PoolManager {
     }
 
     if (overrides.hedgeSymbol != null) {
-      const value = String(overrides.hedgeSymbol).trim();
+      const value = String(overrides.hedgeSymbol).trim().toUpperCase();
       if (!value) {
         throw new Error("hedgeSymbol override must be a non-empty string");
       }
@@ -937,7 +937,7 @@ export class PoolManager {
       if (updates.hedgeSymbol == null) {
         delete next.hedgeSymbol;
       } else {
-        const value = String(updates.hedgeSymbol).trim();
+        const value = String(updates.hedgeSymbol).trim().toUpperCase();
         if (!value) {
           throw new Error("hedgeSymbol override must be a non-empty string");
         }

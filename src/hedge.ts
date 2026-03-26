@@ -123,7 +123,7 @@ export class HedgeManager {
       return { status: "skipped" };
     }
     this.lastOpenAttemptAt = now;
-    const symbol = (this.config.hedgeSymbol ?? "").trim();
+    const symbol = (this.config.hedgeSymbol ?? "").trim().toUpperCase();
     if (!symbol) {
       const message = "hedgeSymbol ausente";
       logger.warn(message);

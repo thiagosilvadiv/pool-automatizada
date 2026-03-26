@@ -336,7 +336,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? 5000,
     hedgeEnabled: parseEnvBool(process.env.HEDGE_ENABLED) ?? Boolean((data as any).hedgeEnabled ?? false),
     hedgePct: parseEnvNumber(process.env.HEDGE_PCT) ?? Number((data as any).hedgePct ?? 50),
-    hedgeSymbol: (process.env.HEDGE_SYMBOL ?? (data as any).hedgeSymbol ?? "").trim(),
+    hedgeSymbol: (process.env.HEDGE_SYMBOL ?? (data as any).hedgeSymbol ?? "").trim().toUpperCase(),
     hedgeLeverage: parseEnvNumber(process.env.HEDGE_LEVERAGE) ?? Number((data as any).hedgeLeverage ?? 1)
   };
 

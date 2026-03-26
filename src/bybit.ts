@@ -106,7 +106,8 @@ export class BybitClient {
     const data = (await res.json()) as BybitResponse<T>;
     if (!res.ok || data.retCode !== 0) {
       const msg = data?.retMsg || `HTTP ${res.status}`;
-      throw new Error(`Bybit error: ${msg}`);
+      const code = typeof data?.retCode === "number" ? data.retCode : "unknown";
+      throw new Error(`Bybit error (${code}) on ${method} ${path}: ${msg}`);
     }
     return data.result;
   }
@@ -130,6 +131,9 @@ export class BybitClient {
       symbol
     });
     const item = result.list?.[0];
+    if (!item) {
+      throw new Error(`Bybit instrument not found for ${symbol}`);
+    }
     const qtyStep = Number(item?.lotSizeFilter?.qtyStep ?? NaN);
     const minOrderQty = Number(item?.lotSizeFilter?.minOrderQty ?? NaN);
     return {
@@ -142,8 +146,8 @@ export class BybitClient {
     await this.request("POST", "/v5/position/set-leverage", {
       category: "linear",
       symbol,
-      buyLeverage: leverage,
-      sellLeverage: leverage
+      buyLeverage: String(leverage),
+      sellLeverage: String(leverage)
     });
   }
 
@@ -158,7 +162,7 @@ export class BybitClient {
       symbol: options.symbol,
       side: options.side,
       orderType: "Market",
-      qty: options.qty,
+      qty: String(options.qty),
       timeInForce: "IOC",
       reduceOnly: options.reduceOnly ?? false,
       positionIdx: 0
