@@ -1,0 +1,245 @@
+import { BybitClient } from "./bybit.js";
+import { logger } from "./logger.js";
+import type { Config } from "./config.js";
+import type { BotStatus } from "./orca.js";
+
+export type HedgeState = {
+  active: boolean;
+  symbol: string;
+  qty: number;
+  notionalUsd: number;
+  leverage: number;
+  openedAt: string;
+  entryPrice: number;
+};
+
+export type HedgeCloseResult = {
+  symbol: string;
+  qty: number;
+  notionalUsd: number;
+  leverage: number;
+  pnlUsd: number | null;
+  closedAt: string;
+};
+
+const OPEN_COOLDOWN_MS = 60_000;
+
+function clampNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+function floorToStep(value: number, step: number): number {
+  if (!Number.isFinite(step) || step <= 0) {
+    return value;
+  }
+  const factor = Math.floor(value / step);
+  return Number((factor * step).toFixed(12));
+}
+
+export class HedgeManager {
+  private config: Config;
+  private client: BybitClient | null = null;
+  private state: HedgeState | null = null;
+  private lastOpenAttemptAt: number | null = null;
+  private opening = false;
+  private closing = false;
+
+  constructor(config: Config) {
+    this.config = config;
+    this.refreshClient();
+  }
+
+  updateConfig(config: Config): void {
+    this.config = config;
+    this.refreshClient();
+  }
+
+  hydrate(state: HedgeState | null | undefined): void {
+    if (state && state.active && state.symbol && Number.isFinite(state.qty)) {
+      this.state = state;
+    }
+  }
+
+  getState(): HedgeState | null {
+    return this.state;
+  }
+
+  private refreshClient(): void {
+    const apiKey = (this.config.bybitApiKey ?? "").trim();
+    const apiSecret = (this.config.bybitApiSecret ?? "").trim();
+    if (!apiKey || !apiSecret) {
+      this.client = null;
+      return;
+    }
+    this.client = new BybitClient({
+      apiKey,
+      apiSecret,
+      baseUrl: this.config.bybitBaseUrl,
+      recvWindow: this.config.bybitRecvWindow
+    });
+  }
+
+  private resolveBaseUsd(status: BotStatus): number | null {
+    if (Number.isFinite(status.positionValueUsd ?? NaN) && (status.positionValueUsd ?? 0) > 0) {
+      return Number(status.positionValueUsd);
+    }
+    if (Number.isFinite(this.config.budgetUsd ?? NaN) && (this.config.budgetUsd ?? 0) > 0) {
+      return Number(this.config.budgetUsd);
+    }
+    return null;
+  }
+
+  async ensureOpen(status: BotStatus): Promise<void> {
+    if (this.opening || this.closing) {
+      return;
+    }
+    if (!this.config.hedgeEnabled) {
+      return;
+    }
+    if (this.state?.active) {
+      return;
+    }
+    if (!status.positionMint) {
+      return;
+    }
+    const now = Date.now();
+    if (this.lastOpenAttemptAt && now - this.lastOpenAttemptAt < OPEN_COOLDOWN_MS) {
+      return;
+    }
+    this.lastOpenAttemptAt = now;
+    const symbol = (this.config.hedgeSymbol ?? "").trim();
+    if (!symbol) {
+      logger.warn("hedge enabled but hedgeSymbol is missing");
+      return;
+    }
+    const pct = Number(this.config.hedgePct ?? NaN);
+    if (!Number.isFinite(pct) || pct <= 0) {
+      logger.warn({ hedgePct: this.config.hedgePct }, "hedge pct invalid");
+      return;
+    }
+    const leverage = clampNumber(Number(this.config.hedgeLeverage ?? 1), 1, 100);
+    const baseUsd = this.resolveBaseUsd(status);
+    if (!Number.isFinite(baseUsd ?? NaN) || (baseUsd ?? 0) <= 0) {
+      logger.warn("hedge base USD unavailable; skipping hedge open");
+      return;
+    }
+    if (!this.client) {
+      logger.warn("bybit client not configured");
+      return;
+    }
+    this.opening = true;
+    try {
+      const [ticker, instrument] = await Promise.all([
+        this.client.getTicker(symbol),
+        this.client.getInstrumentInfo(symbol)
+      ]);
+      const notionalUsd = (baseUsd ?? 0) * (pct / 100);
+      const rawQty = notionalUsd / ticker.lastPrice;
+      const step = instrument.qtyStep;
+      const minQty = instrument.minOrderQty;
+      const qty = floorToStep(rawQty, step);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        logger.warn({ qty, rawQty, step }, "hedge qty invalid");
+        return;
+      }
+      if (minQty > 0 && qty < minQty) {
+        logger.warn({ qty, minQty }, "hedge qty below minimum");
+        return;
+      }
+      await this.client.setLeverage(symbol, leverage);
+      await this.client.placeOrder({ symbol, side: "Sell", qty, reduceOnly: false });
+      const openedAt = new Date().toISOString();
+      this.state = {
+        active: true,
+        symbol,
+        qty,
+        notionalUsd,
+        leverage,
+        openedAt,
+        entryPrice: ticker.lastPrice
+      };
+      logger.info({ symbol, qty, notionalUsd, leverage }, "hedge opened");
+    } catch (err) {
+      logger.warn({ err }, "failed to open hedge");
+    } finally {
+      this.opening = false;
+    }
+  }
+
+  async closeIfActive(): Promise<HedgeCloseResult | null> {
+    if (this.closing || this.opening) {
+      return null;
+    }
+    const state = this.state;
+    if (!state?.active) {
+      return null;
+    }
+    if (!this.client) {
+      logger.warn("bybit client not configured");
+      return null;
+    }
+    this.closing = true;
+    try {
+      let closeQty = state.qty;
+      try {
+        const position = await this.client.getPosition(state.symbol);
+        const size = Number(position?.size ?? NaN);
+        if (position?.side === "Buy") {
+          logger.warn({ symbol: state.symbol }, "hedge position is long; aborting close");
+          return null;
+        }
+        if (Number.isFinite(size) && size > 0) {
+          closeQty = size;
+        }
+        if (Number.isFinite(size) && size <= 0) {
+          this.state = null;
+          return {
+            symbol: state.symbol,
+            qty: state.qty,
+            notionalUsd: state.notionalUsd,
+            leverage: state.leverage,
+            pnlUsd: null,
+            closedAt: new Date().toISOString()
+          };
+        }
+      } catch (err) {
+        logger.warn({ err }, "failed to read hedge position size");
+      }
+      await this.client.placeOrder({ symbol: state.symbol, side: "Buy", qty: closeQty, reduceOnly: true });
+      const openedAtMs = Date.parse(state.openedAt);
+      let pnlUsd: number | null = null;
+      try {
+        const closed = await this.client.getClosedPnl(state.symbol, Number.isFinite(openedAtMs) ? openedAtMs : undefined);
+        pnlUsd = closed?.pnlUsd ?? null;
+      } catch (err) {
+        logger.warn({ err }, "failed to fetch closed pnl");
+      }
+      if (pnlUsd == null) {
+        try {
+          const ticker = await this.client.getTicker(state.symbol);
+          pnlUsd = (state.entryPrice - ticker.lastPrice) * state.qty;
+        } catch (err) {
+          logger.warn({ err }, "failed to estimate hedge pnl");
+        }
+      }
+      const closedAt = new Date().toISOString();
+      const result: HedgeCloseResult = {
+        symbol: state.symbol,
+        qty: closeQty,
+        notionalUsd: state.notionalUsd,
+        leverage: state.leverage,
+        pnlUsd: pnlUsd != null && Number.isFinite(pnlUsd) ? pnlUsd : null,
+        closedAt
+      };
+      this.state = null;
+      logger.info({ symbol: result.symbol, pnlUsd: result.pnlUsd }, "hedge closed");
+      return result;
+    } catch (err) {
+      logger.warn({ err }, "failed to close hedge");
+      return null;
+    } finally {
+      this.closing = false;
+    }
+  }
+}

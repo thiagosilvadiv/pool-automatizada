@@ -78,4 +78,19 @@ describe("config", () => {
   it("rejects invalid trendCacheSec", () => {
     expect(() => loadWith({ trendCacheSec: -1 })).toThrow();
   });
+
+  it("accepts valid hedgePct", () => {
+    expect(() => loadWith({ hedgePct: 0 })).not.toThrow();
+    expect(() => loadWith({ hedgePct: 50 })).not.toThrow();
+    expect(() => loadWith({ hedgePct: 100 })).not.toThrow();
+  });
+
+  it("rejects invalid hedgePct", () => {
+    expect(() => loadWith({ hedgePct: -1 })).toThrow();
+    expect(() => loadWith({ hedgePct: 101 })).toThrow();
+  });
+
+  it("rejects invalid hedgeLeverage", () => {
+    expect(() => loadWith({ hedgeLeverage: 0 })).toThrow();
+  });
 });

@@ -11,6 +11,7 @@ export type HistoryState = {
   history: unknown[];
   lastEventPortfolioValue: number | null;
   lastEventPortfolioUsd: number | null;
+  hedgeState?: unknown;
 };
 
 export type HistoryStore = {

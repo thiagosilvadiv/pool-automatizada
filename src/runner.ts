@@ -4,6 +4,7 @@ import { Config } from "./config.js";
 import { withRetry } from "./retry.js";
 import { logger } from "./logger.js";
 import { HistoryStore } from "./storage.js";
+import { HedgeManager, HedgeCloseResult, HedgeState } from "./hedge.js";
 
 const MIN_ENTRY_BUDGET_FACTOR = 0.25;
 
@@ -65,6 +66,11 @@ function resolveActionType(action: string | null): string | null {
 export type RunnerStatus = BotStatus & {
   running: boolean;
   lastTickAt: string | null;
+  hedgeActive: boolean;
+  hedgeSymbol: string | null;
+  hedgeNotionalUsd: number | null;
+  hedgeLeverage: number | null;
+  hedgeOpenedAt: string | null;
 };
 
 export type HistoryEvent = {
@@ -102,6 +108,10 @@ export type HistoryEvent = {
   pnlUsd: number | null;
   pnlDelta: number | null;
   pnlDeltaUsd: number | null;
+  hedgeSymbol: string | null;
+  hedgeNotionalUsd: number | null;
+  hedgeLeverage: number | null;
+  hedgePnlUsd: number | null;
 };
 
 export class BotRunner {
@@ -120,11 +130,14 @@ export class BotRunner {
   private openedAtByMint = new Map<string, string>();
   private entryByMint = new Map<string, number>();
   private trendByMint = new Map<string, "up" | "down">();
+  private hedgeManager: HedgeManager;
+  private lastHedgeClose: HedgeCloseResult | null = null;
 
   constructor(bot: OrcaBot, config: Config, options: { historyStore: HistoryStore }) {
     this.bot = bot;
     this.config = config;
     this.historyStore = options.historyStore;
+    this.hedgeManager = new HedgeManager(config);
   }
 
   async init(): Promise<void> {
@@ -156,6 +169,7 @@ export class BotRunner {
     this.inFlight = true;
     try {
       await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
+      this.lastHedgeClose = await this.hedgeManager.closeIfActive();
       this.lastTickAt = new Date().toISOString();
       this.recordEvent(this.bot.getStatus());
     } catch (err) {
@@ -225,10 +239,16 @@ export class BotRunner {
 
   getStatus(): RunnerStatus {
     const status = this.bot.getStatus();
+    const hedgeState = this.hedgeManager.getState();
     return {
       ...status,
       running: this.running,
-      lastTickAt: this.lastTickAt
+      lastTickAt: this.lastTickAt,
+      hedgeActive: Boolean(hedgeState?.active),
+      hedgeSymbol: hedgeState?.symbol ?? null,
+      hedgeNotionalUsd: hedgeState?.notionalUsd ?? null,
+      hedgeLeverage: hedgeState?.leverage ?? null,
+      hedgeOpenedAt: hedgeState?.openedAt ?? null
     };
   }
 
@@ -236,6 +256,7 @@ export class BotRunner {
     const prevInterval = this.config.pollIntervalMs;
     this.config = config;
     this.bot.updateConfig(config);
+    this.hedgeManager.updateConfig(config);
     if (this.running && prevInterval !== config.pollIntervalMs) {
       if (this.timer) {
         clearTimeout(this.timer);
@@ -259,7 +280,7 @@ export class BotRunner {
     this.lastEventPortfolioUsd = null;
     this.entryByMint = new Map();
     this.trendByMint = new Map();
-    await this.historyStore.clear();
+    await this.saveHistory();
   }
 
   async deleteHistoryEvents(ids: string[]): Promise<void> {
@@ -325,7 +346,9 @@ export class BotRunner {
     try {
       await withRetry(() => this.bot.tick(), { retries: 3, baseDelayMs: 1000 });
       this.lastTickAt = new Date().toISOString();
-      this.recordEvent(this.bot.getStatus());
+      const status = this.bot.getStatus();
+      await this.hedgeManager.ensureOpen(status);
+      this.recordEvent(status);
     } catch (err) {
       logger.error({ err }, "tick failed");
       this.bot.setError(err);
@@ -387,6 +410,7 @@ export class BotRunner {
     }
 
     const trendNow = status.trendDirection ?? null;
+    const hedgeClose = action === "close-position" ? this.lastHedgeClose : null;
 
     if (!status.lastAction || status.lastAction === "no-action") {
       if (status.positionMint) {
@@ -431,7 +455,11 @@ export class BotRunner {
           portfolioUsd: status.portfolioUsd,
           pnlUsd: status.pnlUsd,
           pnlDelta: null,
-          pnlDeltaUsd: null
+          pnlDeltaUsd: null,
+          hedgeSymbol: null,
+          hedgeNotionalUsd: null,
+          hedgeLeverage: null,
+          hedgePnlUsd: null
         });
       }
       return;
@@ -497,7 +525,11 @@ export class BotRunner {
         portfolioUsd: status.portfolioUsd,
         pnlUsd: status.pnlUsd,
         pnlDelta: null,
-        pnlDeltaUsd: null
+        pnlDeltaUsd: null,
+        hedgeSymbol: null,
+        hedgeNotionalUsd: null,
+        hedgeLeverage: null,
+        hedgePnlUsd: null
       };
       this.pushEvent(closeEvent);
       if (closeMint) {
@@ -547,7 +579,11 @@ export class BotRunner {
         portfolioUsd: status.portfolioUsd,
         pnlUsd: status.pnlUsd,
         pnlDelta: null,
-        pnlDeltaUsd: null
+        pnlDeltaUsd: null,
+        hedgeSymbol: null,
+        hedgeNotionalUsd: null,
+        hedgeLeverage: null,
+        hedgePnlUsd: null
       };
       this.pushEvent(openEvent);
       return;
@@ -607,11 +643,18 @@ export class BotRunner {
       portfolioUsd: status.portfolioUsd,
       pnlUsd: status.pnlUsd,
       pnlDelta,
-      pnlDeltaUsd
+      pnlDeltaUsd,
+      hedgeSymbol: hedgeClose?.symbol ?? null,
+      hedgeNotionalUsd: hedgeClose?.notionalUsd ?? null,
+      hedgeLeverage: hedgeClose?.leverage ?? null,
+      hedgePnlUsd: hedgeClose?.pnlUsd ?? null
     };
     this.pushEvent(event);
     if (action === "close-position" && mergedPositionMint) {
       this.trendByMint.delete(mergedPositionMint);
+    }
+    if (action === "close-position") {
+      this.lastHedgeClose = null;
     }
   }
 
@@ -671,6 +714,10 @@ export class BotRunner {
     this.historyLoaded = true;
     try {
         const parsed = await this.historyStore.load();
+        const storedHedgeState = (parsed as { hedgeState?: HedgeState | null } | null)?.hedgeState ?? null;
+        if (storedHedgeState) {
+          this.hedgeManager.hydrate(storedHedgeState);
+        }
         if (Array.isArray(parsed?.history)) {
           let mutated = false;
           const normalized: HistoryEvent[] = [];
@@ -839,7 +886,8 @@ export class BotRunner {
       const payload = {
         history: this.history,
         lastEventPortfolioValue: this.lastEventPortfolioValue,
-        lastEventPortfolioUsd: this.lastEventPortfolioUsd
+        lastEventPortfolioUsd: this.lastEventPortfolioUsd,
+        hedgeState: this.hedgeManager.getState()
       };
       await this.historyStore.save(payload);
     } catch (err) {
