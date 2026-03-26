@@ -75,7 +75,9 @@ const analyticsColumnDefaults = {
   hedgeSymbol: true,
   hedgeNotional: true,
   hedgeLeverage: true,
-  hedgePnl: true
+  hedgePnl: true,
+  pnlTotal: true,
+  pnlTotalNet: true
 };
 
 let analyticsColumnVisibility = loadAnalyticsColumnVisibility();
@@ -326,13 +328,23 @@ async function fetchHistory(poolId) {
 
 function renderHistory(items) {
   if (!items || items.length === 0) {
-    historyBody.innerHTML = "<tr><td colspan=\"18\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"20\">Sem eventos ainda</td></tr>";
     return;
   }
   const limit = analyticsRowLimit ?? 30;
   const rows = items.slice(0, limit).map((item) => {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
     const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
+    const pnlRaw = Number(item.positionPnlUsd);
+    const hedgeRaw = Number(item.hedgePnlUsd);
+    const hasPnl = Number.isFinite(pnlRaw);
+    const hasHedge = Number.isFinite(hedgeRaw);
+    const feesRaw = Number(item.positionFeesUsd);
+    const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
+    const poolPnl = hasPnl ? pnlRaw : 0;
+    const hedgePnl = hasHedge ? hedgeRaw : 0;
+    const pnlTotal = hasPnl || hasHedge ? poolPnl + hedgePnl : null;
+    const pnlTotalNet = hasPnl || hasHedge ? (hasPnl ? poolPnl - fees : 0) + hedgePnl : null;
     return `
       <tr>
         <td data-col="datetime">${formatTimestamp(item.timestamp)}</td>
@@ -353,6 +365,8 @@ function renderHistory(items) {
         <td data-col="hedgeNotional">${formatNumber(item.hedgeNotionalUsd, 2)}</td>
         <td data-col="hedgeLeverage">${formatNumber(item.hedgeLeverage, 2)}</td>
         <td data-col="hedgePnl">${formatNumber(item.hedgePnlUsd, 2)}</td>
+        <td data-col="pnlTotal">${formatNumber(pnlTotal, 2)}</td>
+        <td data-col="pnlTotalNet">${formatNumber(pnlTotalNet, 2)}</td>
       </tr>
     `;
   });
