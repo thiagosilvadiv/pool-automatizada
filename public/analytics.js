@@ -592,8 +592,15 @@ function aggregatePerformance(items, group) {
       pnlTotal: 0
     };
     const fees = Number(item.positionFeesUsd) || 0;
-    const pnl = Number(item.positionPnlUsd) || 0;
-    const hedgePnl = Number(item.hedgePnlUsd) || 0;
+    const pnlRaw = Number(item.positionPnlUsd);
+    const hedgeRaw = Number(item.hedgePnlUsd);
+    const hasPnl = Number.isFinite(pnlRaw);
+    const hasHedge = Number.isFinite(hedgeRaw);
+    if (!hasPnl && !hasHedge) {
+      return;
+    }
+    const pnl = hasPnl ? pnlRaw : 0;
+    const hedgePnl = hasHedge ? hedgeRaw : 0;
     const entryUsd = Number(item.positionEntryUsd);
     bucket.fees += fees;
     if (Number.isFinite(entryUsd) && entryUsd > 0) {
