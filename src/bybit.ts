@@ -38,7 +38,11 @@ type BybitPosition = {
 
 type BybitClosedPnl = {
   symbol: string;
+  orderId?: string;
+  closedSize?: string;
   closedPnl?: string;
+  openFee?: string;
+  closeFee?: string;
   updatedTime?: string;
 };
 
@@ -270,35 +274,70 @@ export class BybitClient {
     return item ?? null;
   }
 
-  async getClosedPnl(symbol: string, openedAfterMs?: number): Promise<{ pnlUsd: number | null; updatedTime?: number } | null> {
-    const result = await this.request<{ list: BybitClosedPnl[] }>("GET", "/v5/position/closed-pnl", {
+  async getClosedPnl(
+    symbol: string,
+    options?: { openedAfterMs?: number; closeAtMs?: number; closeQty?: number; orderId?: string }
+  ): Promise<{ pnlUsd: number | null; updatedTime?: number; openFeeUsd?: number; closeFeeUsd?: number } | null> {
+    const params: Record<string, string | number | boolean | undefined | null> = {
       category: "linear",
       symbol,
-      limit: 20
-    });
+      limit: 100
+    };
+    if (options?.openedAfterMs != null && Number.isFinite(options.openedAfterMs)) {
+      params.startTime = Math.max(0, Math.floor(options.openedAfterMs));
+    }
+    if (options?.closeAtMs != null && Number.isFinite(options.closeAtMs)) {
+      params.endTime = Math.max(0, Math.floor(options.closeAtMs));
+    }
+    const result = await this.request<{ list: BybitClosedPnl[] }>("GET", "/v5/position/closed-pnl", params);
     const list = Array.isArray(result.list) ? result.list : [];
     if (list.length === 0) {
       return null;
     }
     const normalized = list
       .map((item) => ({
+        orderId: item?.orderId ? String(item.orderId) : null,
         pnl: Number(item?.closedPnl ?? NaN),
-        updatedTime: Number(item?.updatedTime ?? NaN)
+        updatedTime: Number(item?.updatedTime ?? NaN),
+        closedSize: Number(item?.closedSize ?? NaN),
+        openFee: Number(item?.openFee ?? NaN),
+        closeFee: Number(item?.closeFee ?? NaN)
       }))
       .filter((item) => Number.isFinite(item.updatedTime));
-    let selected = normalized[0] ?? null;
-    if (openedAfterMs != null && Number.isFinite(openedAfterMs)) {
-      const match = normalized.find((item) => item.updatedTime >= openedAfterMs);
-      if (match) {
-        selected = match;
-      }
-    }
-    if (!selected) {
+    if (!normalized.length) {
       return null;
     }
+    if (options?.orderId) {
+      const match = normalized.find((item) => item.orderId === options.orderId);
+      if (match) {
+        return {
+          pnlUsd: Number.isFinite(match.pnl) ? match.pnl : null,
+          updatedTime: match.updatedTime,
+          openFeeUsd: Number.isFinite(match.openFee) ? match.openFee : null,
+          closeFeeUsd: Number.isFinite(match.closeFee) ? match.closeFee : null
+        };
+      }
+    }
+    const closeAtMs = options?.closeAtMs;
+    const closeQty = options?.closeQty;
+    const score = (item: (typeof normalized)[number]) => {
+      let scoreValue = 0;
+      if (Number.isFinite(closeQty) && closeQty != null && closeQty > 0) {
+        const sizeDiff = Math.abs(item.closedSize - closeQty);
+        scoreValue += sizeDiff / closeQty;
+      }
+      if (Number.isFinite(closeAtMs ?? NaN)) {
+        scoreValue += Math.abs(item.updatedTime - (closeAtMs ?? 0)) / (60 * 1000);
+      }
+      return scoreValue;
+    };
+    const candidates = normalized.slice().sort((a, b) => score(a) - score(b));
+    const selected = candidates[0];
     return {
       pnlUsd: Number.isFinite(selected.pnl) ? selected.pnl : null,
-      updatedTime: selected.updatedTime
+      updatedTime: selected.updatedTime,
+      openFeeUsd: Number.isFinite(selected.openFee) ? selected.openFee : null,
+      closeFeeUsd: Number.isFinite(selected.closeFee) ? selected.closeFee : null
     };
   }
 }

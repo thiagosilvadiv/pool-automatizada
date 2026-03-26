@@ -254,11 +254,17 @@ export class HedgeManager {
       } catch (err) {
         logger.warn({ err }, "failed to read hedge position size");
       }
-      await this.client.placeOrder({ symbol: state.symbol, side: "Buy", qty: closeQty, reduceOnly: true });
+      const closeOrder = await this.client.placeOrder({ symbol: state.symbol, side: "Buy", qty: closeQty, reduceOnly: true });
       const openedAtMs = Date.parse(state.openedAt);
+      const closeAtMs = Date.now();
       let pnlUsd: number | null = null;
       try {
-        const closed = await this.client.getClosedPnl(state.symbol, Number.isFinite(openedAtMs) ? openedAtMs : undefined);
+        const closed = await this.client.getClosedPnl(state.symbol, {
+          openedAfterMs: Number.isFinite(openedAtMs) ? openedAtMs : undefined,
+          closeAtMs,
+          closeQty,
+          orderId: closeOrder.orderId ?? undefined
+        });
         pnlUsd = closed?.pnlUsd ?? null;
       } catch (err) {
         logger.warn({ err }, "failed to fetch closed pnl");
