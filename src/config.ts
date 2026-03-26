@@ -61,6 +61,7 @@ export type Config = {
   hedgePct: number;
   hedgeSymbol: string;
   hedgeLeverage: number;
+  hedgeMarginPct: number;
 };
 
 function parseEnvNumber(value: string | undefined): number | undefined {
@@ -337,7 +338,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     hedgeEnabled: parseEnvBool(process.env.HEDGE_ENABLED) ?? Boolean((data as any).hedgeEnabled ?? false),
     hedgePct: parseEnvNumber(process.env.HEDGE_PCT) ?? Number((data as any).hedgePct ?? 50),
     hedgeSymbol: (process.env.HEDGE_SYMBOL ?? (data as any).hedgeSymbol ?? "").trim().toUpperCase(),
-    hedgeLeverage: parseEnvNumber(process.env.HEDGE_LEVERAGE) ?? Number((data as any).hedgeLeverage ?? 1)
+    hedgeLeverage: parseEnvNumber(process.env.HEDGE_LEVERAGE) ?? Number((data as any).hedgeLeverage ?? 1),
+    hedgeMarginPct: parseEnvNumber(process.env.HEDGE_MARGIN_PCT) ?? Number((data as any).hedgeMarginPct ?? 0)
   };
 
   if (!configPath && !envJson && !envPath && !config.rpcUrl) {
@@ -450,6 +452,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.hedgeLeverage) || config.hedgeLeverage < 1) {
     throw new Error("hedgeLeverage must be >= 1");
+  }
+  if (!Number.isFinite(config.hedgeMarginPct) || config.hedgeMarginPct < 0 || config.hedgeMarginPct > 100) {
+    throw new Error("hedgeMarginPct must be between 0 and 100");
   }
   if (config.hedgeEnabled) {
     if (!config.hedgeSymbol || !config.hedgeSymbol.trim()) {

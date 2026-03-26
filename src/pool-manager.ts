@@ -40,6 +40,7 @@ export type PoolOverrides = {
   hedgePct?: number;
   hedgeSymbol?: string;
   hedgeLeverage?: number;
+  hedgeMarginPct?: number;
 };
 
 export type PoolSummary = {
@@ -768,6 +769,14 @@ export class PoolManager {
       normalized.hedgeLeverage = value;
     }
 
+    if (overrides.hedgeMarginPct != null) {
+      const value = Number(overrides.hedgeMarginPct);
+      if (!Number.isFinite(value) || value < 0 || value > 100) {
+        throw new Error("hedgeMarginPct override must be between 0 and 100");
+      }
+      normalized.hedgeMarginPct = value;
+    }
+
     if (normalized.hedgeEnabled === true) {
       const symbol = normalized.hedgeSymbol ?? this.baseConfig.hedgeSymbol ?? "";
       if (!symbol || !symbol.trim()) {
@@ -954,6 +963,18 @@ export class PoolManager {
           throw new Error("hedgeLeverage override must be >= 1");
         }
         next.hedgeLeverage = value;
+      }
+    }
+
+    if ("hedgeMarginPct" in updates) {
+      if (updates.hedgeMarginPct == null) {
+        delete next.hedgeMarginPct;
+      } else {
+        const value = Number(updates.hedgeMarginPct);
+        if (!Number.isFinite(value) || value < 0 || value > 100) {
+          throw new Error("hedgeMarginPct override must be between 0 and 100");
+        }
+        next.hedgeMarginPct = value;
       }
     }
 

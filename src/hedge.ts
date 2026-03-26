@@ -138,6 +138,7 @@ export class HedgeManager {
       return { status: "failed", error: message };
     }
     const leverage = clampNumber(Number(this.config.hedgeLeverage ?? 1), 1, 100);
+    const marginPct = clampNumber(Number(this.config.hedgeMarginPct ?? 0), 0, 100);
     const baseUsd = this.resolveBaseUsd(status);
     if (!Number.isFinite(baseUsd ?? NaN) || (baseUsd ?? 0) <= 0) {
       const message = "Base USD indisponivel para hedge";
@@ -188,6 +189,19 @@ export class HedgeManager {
       };
       this.setError(null);
       logger.info({ symbol, qty, notionalUsd, leverage }, "hedge opened");
+      if (marginPct > 0 && this.client) {
+        const marginUsd = (baseUsd ?? 0) * (marginPct / 100);
+        if (Number.isFinite(marginUsd) && marginUsd > 0) {
+          try {
+            await this.client.addMargin(symbol, marginUsd);
+            logger.info({ symbol, marginUsd }, "hedge margin added");
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "Falha ao adicionar margem";
+            logger.warn({ err }, "failed to add hedge margin");
+            this.setError(message);
+          }
+        }
+      }
       return { status: "opened" };
     } catch (err) {
       const message = err instanceof Error ? err.message : "Falha ao abrir hedge";

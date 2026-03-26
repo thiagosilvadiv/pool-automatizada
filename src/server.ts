@@ -187,6 +187,7 @@ export async function startServer(config: Config): Promise<void> {
       hedgePct: config.hedgePct,
       hedgeSymbol: config.hedgeSymbol,
       hedgeLeverage: config.hedgeLeverage,
+      hedgeMarginPct: config.hedgeMarginPct,
       tokenAMint: selectedStatus?.tokenAMint ?? null,
       tokenBMint: selectedStatus?.tokenBMint ?? null,
       isTokenASol: selectedStatus?.isTokenASol ?? null,
