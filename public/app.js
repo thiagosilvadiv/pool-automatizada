@@ -117,7 +117,9 @@ const historyColumnDefaults = {
   hedgeSymbol: true,
   hedgeNotional: true,
   hedgeLeverage: true,
-  hedgePnl: true
+  hedgePnl: true,
+  pnlTotal: true,
+  pnlTotalNet: true
 };
 let historyColumnVisibility = loadHistoryColumnVisibility();
 const historyTypeDefaults = {
@@ -337,11 +339,23 @@ function buildHistoryCsv(items) {
     "Hedge símbolo",
     "Hedge notional (USD)",
     "Hedge lev",
-    "Hedge PnL (USD)"
+    "Hedge PnL (USD)",
+    "PnL total (USD)",
+    "PnL total sem taxas (USD)"
   ];
   const rows = items.map((item) => {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
     const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
+    const pnlRaw = Number(item.positionPnlUsd);
+    const hedgeRaw = Number(item.hedgePnlUsd);
+    const hasPnl = Number.isFinite(pnlRaw);
+    const hasHedge = Number.isFinite(hedgeRaw);
+    const feesRaw = Number(item.positionFeesUsd);
+    const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
+    const poolPnl = hasPnl ? pnlRaw : 0;
+    const hedgePnl = hasHedge ? hedgeRaw : 0;
+    const pnlTotal = hasPnl || hasHedge ? poolPnl + hedgePnl : null;
+    const pnlTotalNet = hasPnl || hasHedge ? (hasPnl ? poolPnl - fees : 0) + hedgePnl : null;
     return [
       formatTimestamp(item.timestamp),
       formatTimestamp(item.positionOpenedAt),
@@ -360,7 +374,9 @@ function buildHistoryCsv(items) {
       item.hedgeSymbol ?? "-",
       formatNumber(item.hedgeNotionalUsd, 2),
       formatNumber(item.hedgeLeverage, 2),
-      formatNumber(item.hedgePnlUsd, 2)
+      formatNumber(item.hedgePnlUsd, 2),
+      formatNumber(pnlTotal, 2),
+      formatNumber(pnlTotalNet, 2)
     ].map(toCsvValue).join(";");
   });
   return `\ufeff${header.map(toCsvValue).join(";")}\r\n${rows.join("\r\n")}`;
@@ -759,7 +775,7 @@ function renderHistory(items) {
   const filteredItems = applyHistoryTypeFilter(items);
   if (!filteredItems || filteredItems.length === 0) {
     selectedHistoryIds.clear();
-    historyBody.innerHTML = "<tr><td colspan=\"19\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"21\">Sem eventos ainda</td></tr>";
     updateHistorySelectionState();
     return;
   }
@@ -771,6 +787,16 @@ function renderHistory(items) {
     const eventId = item.id ?? `legacy-${index}`;
     currentIds.add(eventId);
     const checked = selectedHistoryIds.has(eventId) ? "checked" : "";
+    const pnlRaw = Number(item.positionPnlUsd);
+    const hedgeRaw = Number(item.hedgePnlUsd);
+    const hasPnl = Number.isFinite(pnlRaw);
+    const hasHedge = Number.isFinite(hedgeRaw);
+    const feesRaw = Number(item.positionFeesUsd);
+    const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
+    const poolPnl = hasPnl ? pnlRaw : 0;
+    const hedgePnl = hasHedge ? hedgeRaw : 0;
+    const pnlTotal = hasPnl || hasHedge ? poolPnl + hedgePnl : null;
+    const pnlTotalNet = hasPnl || hasHedge ? (hasPnl ? poolPnl - fees : 0) + hedgePnl : null;
     return `
       <tr>
         <td><input type="checkbox" class="history-select" data-id="${eventId}" ${checked}></td>
@@ -792,6 +818,8 @@ function renderHistory(items) {
         <td data-col="hedgeNotional">${formatNumber(item.hedgeNotionalUsd, 2)}</td>
         <td data-col="hedgeLeverage">${formatNumber(item.hedgeLeverage, 2)}</td>
         <td data-col="hedgePnl">${formatNumber(item.hedgePnlUsd, 2)}</td>
+        <td data-col="pnlTotal">${formatNumber(pnlTotal, 2)}</td>
+        <td data-col="pnlTotalNet">${formatNumber(pnlTotalNet, 2)}</td>
       </tr>
     `;
   });
