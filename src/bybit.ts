@@ -313,8 +313,8 @@ export class BybitClient {
         return {
           pnlUsd: Number.isFinite(match.pnl) ? match.pnl : null,
           updatedTime: match.updatedTime,
-          openFeeUsd: Number.isFinite(match.openFee) ? match.openFee : null,
-          closeFeeUsd: Number.isFinite(match.closeFee) ? match.closeFee : null
+          openFeeUsd: Number.isFinite(match.openFee) ? match.openFee : undefined,
+          closeFeeUsd: Number.isFinite(match.closeFee) ? match.closeFee : undefined
         };
       }
     }
@@ -336,8 +336,8 @@ export class BybitClient {
     return {
       pnlUsd: Number.isFinite(selected.pnl) ? selected.pnl : null,
       updatedTime: selected.updatedTime,
-      openFeeUsd: Number.isFinite(selected.openFee) ? selected.openFee : null,
-      closeFeeUsd: Number.isFinite(selected.closeFee) ? selected.closeFee : null
+      openFeeUsd: Number.isFinite(selected.openFee) ? selected.openFee : undefined,
+      closeFeeUsd: Number.isFinite(selected.closeFee) ? selected.closeFee : undefined
     };
   }
 }
