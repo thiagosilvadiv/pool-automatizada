@@ -36,6 +36,10 @@ export type PoolOverrides = {
   trendTimeframe?: "1m" | "5m" | "15m" | "30m" | "1h";
   trendTargetUp?: "sol" | "other" | "tokenA" | "tokenB";
   trendTargetDown?: "sol" | "other" | "tokenA" | "tokenB";
+  hedgeEnabled?: boolean;
+  hedgePct?: number;
+  hedgeSymbol?: string;
+  hedgeLeverage?: number;
 };
 
 export type PoolSummary = {
@@ -721,6 +725,63 @@ export class PoolManager {
       normalized.trendTargetDown = value.startsWith("token") ? (value.replace("_", "").toLowerCase() === "tokena" ? "tokenA" : "tokenB") : (value as PoolOverrides["trendTargetDown"]);
     }
 
+    if (overrides.hedgeEnabled != null) {
+      const raw = overrides.hedgeEnabled as unknown;
+      let value: boolean | null = null;
+      if (typeof raw === "boolean") {
+        value = raw;
+      } else if (typeof raw === "string") {
+        const normalizedValue = String(raw).trim().toLowerCase();
+        if (["1", "true", "yes", "on", "sim"].includes(normalizedValue)) {
+          value = true;
+        } else if (["0", "false", "no", "off", "nao"].includes(normalizedValue)) {
+          value = false;
+        }
+      }
+      if (value === null) {
+        throw new Error("hedgeEnabled override must be boolean");
+      }
+      normalized.hedgeEnabled = value;
+    }
+
+    if (overrides.hedgePct != null) {
+      const value = Number(overrides.hedgePct);
+      if (!Number.isFinite(value) || value < 0 || value > 100) {
+        throw new Error("hedgePct override must be between 0 and 100");
+      }
+      normalized.hedgePct = value;
+    }
+
+    if (overrides.hedgeSymbol != null) {
+      const value = String(overrides.hedgeSymbol).trim();
+      if (!value) {
+        throw new Error("hedgeSymbol override must be a non-empty string");
+      }
+      normalized.hedgeSymbol = value;
+    }
+
+    if (overrides.hedgeLeverage != null) {
+      const value = Number(overrides.hedgeLeverage);
+      if (!Number.isFinite(value) || value < 1) {
+        throw new Error("hedgeLeverage override must be >= 1");
+      }
+      normalized.hedgeLeverage = value;
+    }
+
+    if (normalized.hedgeEnabled === true) {
+      const symbol = normalized.hedgeSymbol ?? this.baseConfig.hedgeSymbol ?? "";
+      if (!symbol || !symbol.trim()) {
+        throw new Error("hedgeSymbol override required when hedgeEnabled is true");
+      }
+      const pct = normalized.hedgePct ?? this.baseConfig.hedgePct;
+      if (!Number.isFinite(pct) || pct <= 0) {
+        throw new Error("hedgePct must be > 0 when hedgeEnabled is true");
+      }
+      if (!this.baseConfig.bybitApiKey || !this.baseConfig.bybitApiSecret) {
+        throw new Error("BYBIT_API_KEY and BYBIT_API_SECRET are required when hedgeEnabled is true");
+      }
+    }
+
     return Object.keys(normalized).length > 0 ? normalized : undefined;
   }
 
@@ -834,6 +895,79 @@ export class PoolManager {
           throw new Error("trendTargetDown override must be sol, other, tokenA, or tokenB");
         }
         next.trendTargetDown = value.startsWith("token") ? (value.replace("_", "").toLowerCase() === "tokena" ? "tokenA" : "tokenB") : (value as PoolOverrides["trendTargetDown"]);
+      }
+    }
+
+    if ("hedgeEnabled" in updates) {
+      if (updates.hedgeEnabled == null) {
+        delete next.hedgeEnabled;
+      } else {
+        const raw = updates.hedgeEnabled as unknown;
+        let value: boolean | null = null;
+        if (typeof raw === "boolean") {
+          value = raw;
+        } else if (typeof raw === "string") {
+          const normalizedValue = String(raw).trim().toLowerCase();
+          if (["1", "true", "yes", "on", "sim"].includes(normalizedValue)) {
+            value = true;
+          } else if (["0", "false", "no", "off", "nao"].includes(normalizedValue)) {
+            value = false;
+          }
+        }
+        if (value === null) {
+          throw new Error("hedgeEnabled override must be boolean");
+        }
+        next.hedgeEnabled = value;
+      }
+    }
+
+    if ("hedgePct" in updates) {
+      if (updates.hedgePct == null) {
+        delete next.hedgePct;
+      } else {
+        const value = Number(updates.hedgePct);
+        if (!Number.isFinite(value) || value < 0 || value > 100) {
+          throw new Error("hedgePct override must be between 0 and 100");
+        }
+        next.hedgePct = value;
+      }
+    }
+
+    if ("hedgeSymbol" in updates) {
+      if (updates.hedgeSymbol == null) {
+        delete next.hedgeSymbol;
+      } else {
+        const value = String(updates.hedgeSymbol).trim();
+        if (!value) {
+          throw new Error("hedgeSymbol override must be a non-empty string");
+        }
+        next.hedgeSymbol = value;
+      }
+    }
+
+    if ("hedgeLeverage" in updates) {
+      if (updates.hedgeLeverage == null) {
+        delete next.hedgeLeverage;
+      } else {
+        const value = Number(updates.hedgeLeverage);
+        if (!Number.isFinite(value) || value < 1) {
+          throw new Error("hedgeLeverage override must be >= 1");
+        }
+        next.hedgeLeverage = value;
+      }
+    }
+
+    if (next.hedgeEnabled === true) {
+      const symbol = next.hedgeSymbol ?? this.baseConfig.hedgeSymbol ?? "";
+      if (!symbol || !symbol.trim()) {
+        throw new Error("hedgeSymbol override required when hedgeEnabled is true");
+      }
+      const pct = next.hedgePct ?? this.baseConfig.hedgePct;
+      if (!Number.isFinite(pct) || pct <= 0) {
+        throw new Error("hedgePct must be > 0 when hedgeEnabled is true");
+      }
+      if (!this.baseConfig.bybitApiKey || !this.baseConfig.bybitApiSecret) {
+        throw new Error("BYBIT_API_KEY and BYBIT_API_SECRET are required when hedgeEnabled is true");
       }
     }
 

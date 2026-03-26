@@ -40,6 +40,10 @@ const poolTrendTimeframeInput = document.getElementById("poolTrendTimeframe");
 const poolTrendUpInput = document.getElementById("poolTrendUp");
 const poolTrendDownInput = document.getElementById("poolTrendDown");
 const poolBudgetInput = document.getElementById("poolBudget");
+const poolHedgeEnabledInput = document.getElementById("poolHedgeEnabled");
+const poolHedgePctInput = document.getElementById("poolHedgePct");
+const poolHedgeSymbolInput = document.getElementById("poolHedgeSymbol");
+const poolHedgeLeverageInput = document.getElementById("poolHedgeLeverage");
 const poolTrendHint = document.getElementById("poolTrendHint");
 const addPoolBtn = document.getElementById("addPoolBtn");
 const poolsBody = document.getElementById("poolsBody");
@@ -56,6 +60,10 @@ const editPoolTrendTimeframeInput = document.getElementById("editPoolTrendTimefr
 const editPoolTrendUpInput = document.getElementById("editPoolTrendUp");
 const editPoolTrendDownInput = document.getElementById("editPoolTrendDown");
 const editPoolBudgetInput = document.getElementById("editPoolBudget");
+const editPoolHedgeEnabledInput = document.getElementById("editPoolHedgeEnabled");
+const editPoolHedgePctInput = document.getElementById("editPoolHedgePct");
+const editPoolHedgeSymbolInput = document.getElementById("editPoolHedgeSymbol");
+const editPoolHedgeLeverageInput = document.getElementById("editPoolHedgeLeverage");
 const editPoolTrendHint = document.getElementById("editPoolTrendHint");
 const editPoolError = document.getElementById("editPoolError");
 const swapResultModal = document.getElementById("swapResultModal");
@@ -100,7 +108,11 @@ const historyColumnDefaults = {
   feesUsd: true,
   txFeeUsd: true,
   exitUsd: true,
-  pnlUsd: true
+  pnlUsd: true,
+  hedgeSymbol: true,
+  hedgeNotional: true,
+  hedgeLeverage: true,
+  hedgePnl: true
 };
 let historyColumnVisibility = loadHistoryColumnVisibility();
 const historyTypeDefaults = {
@@ -316,7 +328,11 @@ function buildHistoryCsv(items) {
     "Taxas (USD)",
     "Taxa TX (USD)",
     "Saída (USD)",
-    "PnL líquido (USD)"
+    "PnL líquido (USD)",
+    "Hedge símbolo",
+    "Hedge notional (USD)",
+    "Hedge lev",
+    "Hedge PnL (USD)"
   ];
   const rows = items.map((item) => {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
@@ -335,7 +351,11 @@ function buildHistoryCsv(items) {
       formatNumber(item.positionFeesUsd, 2),
       formatNumber(item.txFeeUsd, 6),
       formatNumber(item.positionExitUsd, 2),
-      formatNumber(item.positionPnlUsd, 2)
+      formatNumber(item.positionPnlUsd, 2),
+      item.hedgeSymbol ?? "-",
+      formatNumber(item.hedgeNotionalUsd, 2),
+      formatNumber(item.hedgeLeverage, 2),
+      formatNumber(item.hedgePnlUsd, 2)
     ].map(toCsvValue).join(";");
   });
   return `\ufeff${header.map(toCsvValue).join(";")}\r\n${rows.join("\r\n")}`;
@@ -628,6 +648,10 @@ function openEditPoolModal(pool) {
   const defaultTrendTimeframe = cachedConfig?.trendTimeframe ?? "1m";
   const defaultTrendUp = cachedConfig?.trendTargetUp ?? "sol";
   const defaultTrendDown = cachedConfig?.trendTargetDown ?? "other";
+  const defaultHedgeEnabled = cachedConfig?.hedgeEnabled ?? false;
+  const defaultHedgePct = cachedConfig?.hedgePct ?? "-";
+  const defaultHedgeSymbol = cachedConfig?.hedgeSymbol ?? "-";
+  const defaultHedgeLeverage = cachedConfig?.hedgeLeverage ?? "-";
   const tokenInfo = getTokenInfo(pool);
 
   if (editPoolIdInput) editPoolIdInput.value = pool.id ?? "";
@@ -638,6 +662,22 @@ function openEditPoolModal(pool) {
   if (editPoolBudgetInput) {
     editPoolBudgetInput.value = overrides.budgetUsd ?? "";
     editPoolBudgetInput.placeholder = `Padrão (${defaultBudget})`;
+  }
+  if (editPoolHedgeEnabledInput) {
+    editPoolHedgeEnabledInput.value = overrides.hedgeEnabled === undefined ? "" : String(overrides.hedgeEnabled);
+    setSelectPlaceholder(editPoolHedgeEnabledInput, `Padrão (${defaultHedgeEnabled ? "Sim" : "Não"})`);
+  }
+  if (editPoolHedgePctInput) {
+    editPoolHedgePctInput.value = overrides.hedgePct ?? "";
+    editPoolHedgePctInput.placeholder = `Padrão (${formatNumber(defaultHedgePct, 2)})`;
+  }
+  if (editPoolHedgeSymbolInput) {
+    editPoolHedgeSymbolInput.value = overrides.hedgeSymbol ?? "";
+    editPoolHedgeSymbolInput.placeholder = `Padrão (${defaultHedgeSymbol || "-"})`;
+  }
+  if (editPoolHedgeLeverageInput) {
+    editPoolHedgeLeverageInput.value = overrides.hedgeLeverage ?? "";
+    editPoolHedgeLeverageInput.placeholder = `Padrão (${formatNumber(defaultHedgeLeverage, 2)})`;
   }
   if (editPoolExitTokenInput) {
     updateExitTokenSelectHints(editPoolExitTokenInput, tokenInfo);
@@ -681,7 +721,7 @@ function renderHistory(items) {
   const filteredItems = applyHistoryTypeFilter(items);
   if (!filteredItems || filteredItems.length === 0) {
     selectedHistoryIds.clear();
-    historyBody.innerHTML = "<tr><td colspan=\"15\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"19\">Sem eventos ainda</td></tr>";
     updateHistorySelectionState();
     return;
   }
@@ -710,6 +750,10 @@ function renderHistory(items) {
         <td data-col="txFeeUsd">${formatNumber(item.txFeeUsd, 6)}</td>
         <td data-col="exitUsd">${formatNumber(item.positionExitUsd, 2)}</td>
         <td data-col="pnlUsd">${formatNumber(item.positionPnlUsd, 2)}</td>
+        <td data-col="hedgeSymbol">${item.hedgeSymbol ?? "-"}</td>
+        <td data-col="hedgeNotional">${formatNumber(item.hedgeNotionalUsd, 2)}</td>
+        <td data-col="hedgeLeverage">${formatNumber(item.hedgeLeverage, 2)}</td>
+        <td data-col="hedgePnl">${formatNumber(item.hedgePnlUsd, 2)}</td>
       </tr>
     `;
   });
@@ -739,10 +783,18 @@ function renderPools(data, config) {
     const budgetDisplay = pool.overrides?.budgetUsd ?? null;
     const exitTokenDisplay = pool.overrides?.preferredExitToken ?? null;
     const exitBiasDisplay = pool.overrides?.rangeExitBiasPct ?? null;
+    const hedgeEnabledDisplay = pool.overrides?.hedgeEnabled ?? null;
+    const hedgePctDisplay = pool.overrides?.hedgePct ?? null;
+    const hedgeSymbolDisplay = pool.overrides?.hedgeSymbol ?? null;
+    const hedgeLeverageDisplay = pool.overrides?.hedgeLeverage ?? null;
     const defaultRange = config?.rangeWidthPct ?? "-";
     const defaultBudget = config?.budgetUsd ?? "-";
     const defaultExitToken = config?.preferredExitToken ?? null;
     const defaultExitBias = config?.rangeExitBiasPct ?? "-";
+    const defaultHedgeEnabled = config?.hedgeEnabled ?? false;
+    const defaultHedgePct = config?.hedgePct ?? "-";
+    const defaultHedgeSymbol = config?.hedgeSymbol ?? "-";
+    const defaultHedgeLeverage = config?.hedgeLeverage ?? "-";
     const poolTokenInfo = getTokenInfo(pool);
     const rangeLabel = rangeDisplay == null ? `Padrão (${defaultRange})` : Number(rangeDisplay).toFixed(2);
     const budgetLabel = budgetDisplay == null ? `Padrão (${defaultBudget})` : Number(budgetDisplay).toFixed(2);
@@ -752,6 +804,16 @@ function renderPools(data, config) {
     const exitBiasLabel = exitBiasDisplay == null
       ? `Padrão (${formatNumber(defaultExitBias, 2)})`
       : formatNumber(exitBiasDisplay, 2);
+    const hedgeEnabledValue = hedgeEnabledDisplay == null ? defaultHedgeEnabled : hedgeEnabledDisplay;
+    const hedgePctLabel = hedgePctDisplay == null
+      ? `Padrão (${formatNumber(defaultHedgePct, 2)})`
+      : formatNumber(hedgePctDisplay, 2);
+    const hedgeSymbolLabel = hedgeSymbolDisplay == null
+      ? `Padrão (${defaultHedgeSymbol || "-"})`
+      : hedgeSymbolDisplay;
+    const hedgeLeverageLabel = hedgeLeverageDisplay == null
+      ? `Padrão (${formatNumber(defaultHedgeLeverage, 2)})`
+      : formatNumber(hedgeLeverageDisplay, 2);
     const createdAt = formatTimestamp(pool.createdAt);
     return `
       <tr>
@@ -763,6 +825,9 @@ function renderPools(data, config) {
         <td>${exitBiasLabel}</td>
         <td>${formatTrendBadge(pool)}</td>
         <td>${budgetLabel}</td>
+        <td>${hedgeEnabledValue ? hedgePctLabel : "Desativado"}</td>
+        <td>${hedgeEnabledValue ? hedgeSymbolLabel : "-"}</td>
+        <td>${hedgeEnabledValue ? hedgeLeverageLabel : "-"}</td>
         <td>${statusLabel}</td>
         <td>${lastActionLabel}</td>
         <td>${formatNumber(pool.positionPnlUsd, 2)}</td>
@@ -965,6 +1030,10 @@ addPoolBtn.addEventListener("click", async () => {
   const trendTargetUpRaw = poolTrendUpInput?.value ?? "";
   const trendTargetDownRaw = poolTrendDownInput?.value ?? "";
   const budgetUsd = parseOptionalNumber(poolBudgetInput.value);
+  const hedgeEnabledRaw = poolHedgeEnabledInput?.value ?? "";
+  const hedgePct = parseOptionalNumber(poolHedgePctInput?.value);
+  const hedgeSymbol = poolHedgeSymbolInput?.value?.trim();
+  const hedgeLeverage = parseOptionalNumber(poolHedgeLeverageInput?.value);
   poolError.classList.add("hidden");
   try {
     const overrides = {};
@@ -1008,6 +1077,22 @@ addPoolBtn.addEventListener("click", async () => {
     if (budgetUsd !== undefined) {
       overrides.budgetUsd = budgetUsd;
     }
+    if (hedgeEnabledRaw) {
+      const parsed = parseTrendEnabledInput(hedgeEnabledRaw);
+      if (parsed === null) {
+        throw new Error("Proteção Bybit inválida. Use Sim ou Não.");
+      }
+      overrides.hedgeEnabled = parsed;
+    }
+    if (hedgePct !== undefined) {
+      overrides.hedgePct = hedgePct;
+    }
+    if (hedgeSymbol) {
+      overrides.hedgeSymbol = hedgeSymbol;
+    }
+    if (hedgeLeverage !== undefined) {
+      overrides.hedgeLeverage = hedgeLeverage;
+    }
     const res = await fetch("/api/pools", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1027,6 +1112,10 @@ addPoolBtn.addEventListener("click", async () => {
     if (poolTrendUpInput) poolTrendUpInput.value = "";
     if (poolTrendDownInput) poolTrendDownInput.value = "";
     poolBudgetInput.value = "";
+    if (poolHedgeEnabledInput) poolHedgeEnabledInput.value = "";
+    if (poolHedgePctInput) poolHedgePctInput.value = "";
+    if (poolHedgeSymbolInput) poolHedgeSymbolInput.value = "";
+    if (poolHedgeLeverageInput) poolHedgeLeverageInput.value = "";
     updateUI();
   } catch (err) {
     poolError.textContent = err instanceof Error ? err.message : String(err);
@@ -1165,6 +1254,58 @@ if (editPoolForm) {
         return;
       }
       overrides.trendTargetDown = parsed;
+    }
+
+    const hedgeEnabledRaw = editPoolHedgeEnabledInput?.value ?? "";
+    if (!hedgeEnabledRaw) {
+      overrides.hedgeEnabled = null;
+    } else {
+      const parsed = parseTrendEnabledInput(hedgeEnabledRaw);
+      if (parsed === null) {
+        if (editPoolError) {
+          editPoolError.textContent = "Proteção Bybit inválida. Use Sim ou Não.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.hedgeEnabled = parsed;
+    }
+
+    const hedgePctRaw = editPoolHedgePctInput?.value?.trim() ?? "";
+    if (!hedgePctRaw) {
+      overrides.hedgePct = null;
+    } else {
+      const parsed = parseOptionalNumber(hedgePctRaw);
+      if (parsed === undefined) {
+        if (editPoolError) {
+          editPoolError.textContent = "Hedge % inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.hedgePct = parsed;
+    }
+
+    const hedgeSymbolRaw = editPoolHedgeSymbolInput?.value?.trim() ?? "";
+    if (!hedgeSymbolRaw) {
+      overrides.hedgeSymbol = null;
+    } else {
+      overrides.hedgeSymbol = hedgeSymbolRaw;
+    }
+
+    const hedgeLeverageRaw = editPoolHedgeLeverageInput?.value?.trim() ?? "";
+    if (!hedgeLeverageRaw) {
+      overrides.hedgeLeverage = null;
+    } else {
+      const parsed = parseOptionalNumber(hedgeLeverageRaw);
+      if (parsed === undefined) {
+        if (editPoolError) {
+          editPoolError.textContent = "Alavancagem inválida.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.hedgeLeverage = parsed;
     }
 
     try {

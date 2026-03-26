@@ -71,7 +71,11 @@ const analyticsColumnDefaults = {
   feesUsd: true,
   txFeeUsd: true,
   exitUsd: true,
-  pnlUsd: true
+  pnlUsd: true,
+  hedgeSymbol: true,
+  hedgeNotional: true,
+  hedgeLeverage: true,
+  hedgePnl: true
 };
 
 let analyticsColumnVisibility = loadAnalyticsColumnVisibility();
@@ -306,7 +310,7 @@ async function fetchHistory(poolId) {
 
 function renderHistory(items) {
   if (!items || items.length === 0) {
-    historyBody.innerHTML = "<tr><td colspan=\"14\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"18\">Sem eventos ainda</td></tr>";
     return;
   }
   const limit = analyticsRowLimit ?? 30;
@@ -329,6 +333,10 @@ function renderHistory(items) {
         <td data-col="txFeeUsd">${formatNumber(item.txFeeUsd, 6)}</td>
         <td data-col="exitUsd">${formatNumber(item.positionExitUsd, 2)}</td>
         <td data-col="pnlUsd">${formatNumber(item.positionPnlUsd, 2)}</td>
+        <td data-col="hedgeSymbol">${item.hedgeSymbol ?? "-"}</td>
+        <td data-col="hedgeNotional">${formatNumber(item.hedgeNotionalUsd, 2)}</td>
+        <td data-col="hedgeLeverage">${formatNumber(item.hedgeLeverage, 2)}</td>
+        <td data-col="hedgePnl">${formatNumber(item.hedgePnlUsd, 2)}</td>
       </tr>
     `;
   });

@@ -88,6 +88,26 @@
             <label for="poolBudget">Budget USD (opcional)</label>
             <input id="poolBudget" type="number" min="0" step="0.01" placeholder="Padrão" />
           </div>
+          <div class="field">
+            <label for="poolHedgeEnabled">Proteção Bybit</label>
+            <select id="poolHedgeEnabled">
+              <option value="">Padrão</option>
+              <option value="true">Sim</option>
+              <option value="false">Não</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolHedgePct">Hedge %</label>
+            <input id="poolHedgePct" type="number" min="0" max="100" step="0.1" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="poolHedgeSymbol">Hedge símbolo</label>
+            <input id="poolHedgeSymbol" type="text" placeholder="Ex: SOLUSDT" />
+          </div>
+          <div class="field">
+            <label for="poolHedgeLeverage">Hedge alavancagem</label>
+            <input id="poolHedgeLeverage" type="number" min="1" step="1" placeholder="Padrão" />
+          </div>
           <button id="addPoolBtn" class="primary">Adicionar</button>
         </div>
         <div id="poolTrendHint" class="hint hidden"></div>
@@ -105,6 +125,9 @@
                 <th>Bias %</th>
                 <th>Tendência</th>
                 <th>Budget USD</th>
+                <th>Hedge %</th>
+                <th>Hedge símbolo</th>
+                <th>Hedge lev</th>
                 <th>Status</th>
                 <th>Ação</th>
                 <th>PnL (USD)</th>
@@ -113,7 +136,7 @@
               </tr>
             </thead>
             <tbody id="poolsBody">
-              <tr><td colspan="13">Sem pools cadastradas</td></tr>
+              <tr><td colspan="16">Sem pools cadastradas</td></tr>
             </tbody>
             </table>
           </div>
@@ -230,6 +253,10 @@
           <label><input type="checkbox" data-col="txFeeUsd" checked /> Taxa TX (USD)</label>
           <label><input type="checkbox" data-col="exitUsd" checked /> Saída (USD)</label>
           <label><input type="checkbox" data-col="pnlUsd" checked /> PnL líquido (USD)</label>
+          <label><input type="checkbox" data-col="hedgeSymbol" checked /> Hedge símbolo</label>
+          <label><input type="checkbox" data-col="hedgeNotional" checked /> Hedge notional (USD)</label>
+          <label><input type="checkbox" data-col="hedgeLeverage" checked /> Hedge lev</label>
+          <label><input type="checkbox" data-col="hedgePnl" checked /> Hedge PnL (USD)</label>
           <div class="history-limit">
             <label for="historyRowLimit">Linhas</label>
             <select id="historyRowLimit">
@@ -266,10 +293,14 @@
                 <th data-col="txFeeUsd">Taxa TX (USD)</th>
                 <th data-col="exitUsd">Saída (USD)</th>
                 <th data-col="pnlUsd">PnL líquido (USD)</th>
+                <th data-col="hedgeSymbol">Hedge símbolo</th>
+                <th data-col="hedgeNotional">Hedge notional (USD)</th>
+                <th data-col="hedgeLeverage">Hedge lev</th>
+                <th data-col="hedgePnl">Hedge PnL (USD)</th>
               </tr>
             </thead>
             <tbody id="historyBody">
-              <tr><td colspan="15">Sem eventos ainda</td></tr>
+              <tr><td colspan="19">Sem eventos ainda</td></tr>
             </tbody>
             </table>
           </div>
@@ -344,6 +375,26 @@
           <div class="field">
             <label for="editPoolBudget">Budget USD</label>
             <input id="editPoolBudget" type="number" min="0" step="0.01" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="editPoolHedgeEnabled">Proteção Bybit</label>
+            <select id="editPoolHedgeEnabled">
+              <option value="">Padrão</option>
+              <option value="true">Sim</option>
+              <option value="false">Não</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolHedgePct">Hedge %</label>
+            <input id="editPoolHedgePct" type="number" min="0" max="100" step="0.1" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="editPoolHedgeSymbol">Hedge símbolo</label>
+            <input id="editPoolHedgeSymbol" type="text" placeholder="Ex: SOLUSDT" />
+          </div>
+          <div class="field">
+            <label for="editPoolHedgeLeverage">Hedge alavancagem</label>
+            <input id="editPoolHedgeLeverage" type="number" min="1" step="1" placeholder="Padrão" />
           </div>
           <div id="editPoolTrendHint" class="hint hidden"></div>
           <div class="modal-actions">

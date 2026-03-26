@@ -50,6 +50,10 @@
           <label><input type="checkbox" data-col="txFeeUsd" checked /> Taxa TX (USD)</label>
           <label><input type="checkbox" data-col="exitUsd" checked /> Saída (USD)</label>
           <label><input type="checkbox" data-col="pnlUsd" checked /> PnL líquido (USD)</label>
+          <label><input type="checkbox" data-col="hedgeSymbol" checked /> Hedge símbolo</label>
+          <label><input type="checkbox" data-col="hedgeNotional" checked /> Hedge notional (USD)</label>
+          <label><input type="checkbox" data-col="hedgeLeverage" checked /> Hedge lev</label>
+          <label><input type="checkbox" data-col="hedgePnl" checked /> Hedge PnL (USD)</label>
           <div class="history-limit">
             <label for="analyticsRowLimit">Linhas</label>
             <select id="analyticsRowLimit">
@@ -216,10 +220,14 @@
                 <th data-col="txFeeUsd">Taxa TX (USD)</th>
                 <th data-col="exitUsd">Saída (USD)</th>
                 <th data-col="pnlUsd">PnL líquido (USD)</th>
+                <th data-col="hedgeSymbol">Hedge símbolo</th>
+                <th data-col="hedgeNotional">Hedge notional (USD)</th>
+                <th data-col="hedgeLeverage">Hedge lev</th>
+                <th data-col="hedgePnl">Hedge PnL (USD)</th>
               </tr>
             </thead>
             <tbody id="historyBody">
-              <tr><td colspan="14">Sem eventos ainda</td></tr>
+              <tr><td colspan="18">Sem eventos ainda</td></tr>
             </tbody>
             </table>
           </div>

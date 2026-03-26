@@ -53,6 +53,14 @@ export type Config = {
   trendStaleSec: number;
   trendCacheSec: number | null;
   trendNetworkId: string;
+  bybitApiKey: string | null;
+  bybitApiSecret: string | null;
+  bybitBaseUrl: string;
+  bybitRecvWindow: number;
+  hedgeEnabled: boolean;
+  hedgePct: number;
+  hedgeSymbol: string;
+  hedgeLeverage: number;
 };
 
 function parseEnvNumber(value: string | undefined): number | undefined {
@@ -319,7 +327,17 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? "manual",
     trendStaleSec: Number(trendStaleSec),
     trendCacheSec: Number.isFinite(Number(trendCacheSec)) ? Number(trendCacheSec) : null,
-    trendNetworkId
+    trendNetworkId,
+    bybitApiKey: (process.env.BYBIT_API_KEY ?? (data as any).bybitApiKey ?? "").trim() || null,
+    bybitApiSecret: (process.env.BYBIT_API_SECRET ?? (data as any).bybitApiSecret ?? "").trim() || null,
+    bybitBaseUrl: process.env.BYBIT_BASE_URL ?? (data as any).bybitBaseUrl ?? "https://api.bybit.com",
+    bybitRecvWindow: parseEnvNumber(process.env.BYBIT_RECV_WINDOW)
+      ?? (data as any).bybitRecvWindow
+      ?? 5000,
+    hedgeEnabled: parseEnvBool(process.env.HEDGE_ENABLED) ?? Boolean((data as any).hedgeEnabled ?? false),
+    hedgePct: parseEnvNumber(process.env.HEDGE_PCT) ?? Number((data as any).hedgePct ?? 50),
+    hedgeSymbol: (process.env.HEDGE_SYMBOL ?? (data as any).hedgeSymbol ?? "").trim(),
+    hedgeLeverage: parseEnvNumber(process.env.HEDGE_LEVERAGE) ?? Number((data as any).hedgeLeverage ?? 1)
   };
 
   if (!configPath && !envJson && !envPath && !config.rpcUrl) {
@@ -422,6 +440,30 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (config.trendEnabled && (!config.trendNetworkId || !config.trendNetworkId.trim())) {
     throw new Error("trendNetworkId is required when trendEnabled is true");
+  }
+
+  if (!Number.isFinite(config.bybitRecvWindow) || config.bybitRecvWindow <= 0) {
+    throw new Error("bybitRecvWindow must be > 0");
+  }
+  if (!Number.isFinite(config.hedgePct) || config.hedgePct < 0 || config.hedgePct > 100) {
+    throw new Error("hedgePct must be between 0 and 100");
+  }
+  if (!Number.isFinite(config.hedgeLeverage) || config.hedgeLeverage < 1) {
+    throw new Error("hedgeLeverage must be >= 1");
+  }
+  if (config.hedgeEnabled) {
+    if (!config.hedgeSymbol || !config.hedgeSymbol.trim()) {
+      throw new Error("hedgeSymbol is required when hedgeEnabled is true");
+    }
+    if (!config.bybitApiKey || !config.bybitApiSecret) {
+      throw new Error("BYBIT_API_KEY and BYBIT_API_SECRET are required when hedgeEnabled is true");
+    }
+    if (!config.bybitBaseUrl || !config.bybitBaseUrl.trim()) {
+      throw new Error("bybitBaseUrl is required when hedgeEnabled is true");
+    }
+    if (config.hedgePct <= 0) {
+      throw new Error("hedgePct must be > 0 when hedgeEnabled is true");
+    }
   }
 
   return config;

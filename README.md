@@ -128,8 +128,18 @@ REDIS_PREFIX=orca-bot
 - `trendFallback`: o que fazer se tendência estiver ausente/velha (`manual`, `neutral`, `last`)
 - `trendStaleSec`: idade máxima (segundos) para considerar o sinal válido
 - `trendNetworkId`: id da rede no GeckoTerminal (ex.: `solana`)
+- `BYBIT_API_KEY` / `BYBIT_API_SECRET`: credenciais da Bybit (necessário quando hedge estiver ativo)
+- `BYBIT_BASE_URL`: URL base da API Bybit (padrão `https://api.bybit.com`)
+- `BYBIT_RECV_WINDOW`: janela de recepção em ms (padrão 5000)
+- `HEDGE_ENABLED`: ativa proteção por pool (true/false)
+- `HEDGE_PCT`: porcentagem de proteção sobre o valor da posição (0-100)
+- `HEDGE_SYMBOL`: símbolo Bybit do hedge (ex.: `SOLUSDT`)
+- `HEDGE_LEVERAGE`: alavancagem da proteção (>=1)
 
 Exemplo de faixa assimétrica por valor:
 
-- `RANGE_WIDTH_PCT=1` e `RANGE_EXIT_BIAS_PCT=10` → o PnL negativo (no token escolhido) fica ~10% menor que o positivo.
+- `RANGE_WIDTH_PCT=1` e `RANGE_EXIT_BIAS_PCT=10` ? o PnL negativo (no token escolhido) fica ~10% menor que o positivo.
 - `preferredExitToken=tokenA` fixa o lado inferior e usa tokenA como referência de PnL; `preferredExitToken=tokenB` fixa o lado superior e usa tokenB como referência.
+
+
+

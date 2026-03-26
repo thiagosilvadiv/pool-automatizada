@@ -62,7 +62,17 @@ export async function startServer(config: Config): Promise<void> {
   app.get("/api/status", (_req: Request, res: Response) => {
     const status = poolManager.getSelectedStatus();
     if (!status) {
-      res.json({ running: false, lastAction: "no-pool", lastError: null, lastPrice: null });
+      res.json({
+        running: false,
+        lastAction: "no-pool",
+        lastError: null,
+        lastPrice: null,
+        hedgeActive: false,
+        hedgeSymbol: null,
+        hedgeNotionalUsd: null,
+        hedgeLeverage: null,
+        hedgeOpenedAt: null
+      });
       return;
     }
     res.json(status);
@@ -168,6 +178,10 @@ export async function startServer(config: Config): Promise<void> {
       trendFallback: config.trendFallback,
       trendStaleSec: config.trendStaleSec,
       trendNetworkId: config.trendNetworkId,
+      hedgeEnabled: config.hedgeEnabled,
+      hedgePct: config.hedgePct,
+      hedgeSymbol: config.hedgeSymbol,
+      hedgeLeverage: config.hedgeLeverage,
       tokenAMint: selectedStatus?.tokenAMint ?? null,
       tokenBMint: selectedStatus?.tokenBMint ?? null,
       isTokenASol: selectedStatus?.isTokenASol ?? null,
