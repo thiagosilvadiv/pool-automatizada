@@ -71,7 +71,8 @@ export async function startServer(config: Config): Promise<void> {
         hedgeSymbol: null,
         hedgeNotionalUsd: null,
         hedgeLeverage: null,
-        hedgeOpenedAt: null
+        hedgeOpenedAt: null,
+        hedgeLastError: null
       });
       return;
     }

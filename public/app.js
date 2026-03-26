@@ -3,6 +3,8 @@ const runningEl = document.getElementById("running");
 const lastTickEl = document.getElementById("lastTick");
 const lastActionEl = document.getElementById("lastAction");
 const lastErrorEl = document.getElementById("lastError");
+const hedgeStatusEl = document.getElementById("hedgeStatus");
+const hedgeErrorEl = document.getElementById("hedgeError");
 const priceEl = document.getElementById("price");
 const targetRangeEl = document.getElementById("targetRange");
 const positionRangeEl = document.getElementById("positionRange");
@@ -769,7 +771,7 @@ function renderPools(data, config) {
   cachedPools = pools;
   cachedConfig = config;
   if (!pools.length) {
-    poolsBody.innerHTML = "<tr><td colspan=\"13\">Sem pools cadastradas</td></tr>";
+    poolsBody.innerHTML = "<tr><td colspan=\"16\">Sem pools cadastradas</td></tr>";
     return;
   }
   const rows = pools.map((pool) => {
@@ -887,6 +889,15 @@ async function updateUI() {
     lastTickEl.textContent = formatTimestamp(status.lastTickAt);
     lastActionEl.textContent = status.lastAction ?? "-";
     lastErrorEl.textContent = status.lastError ?? "-";
+    if (hedgeStatusEl) {
+      const hedgeLabel = status.hedgeActive
+        ? `Ativo${status.hedgeSymbol ? " (" + status.hedgeSymbol + ")" : ""}`
+        : "Parado";
+      hedgeStatusEl.textContent = hedgeLabel;
+    }
+    if (hedgeErrorEl) {
+      hedgeErrorEl.textContent = status.hedgeLastError ?? "-";
+    }
     priceEl.textContent = formatNumber(status.lastPrice, 8);
     targetRangeEl.textContent = formatRange(status.targetRange);
     positionRangeEl.textContent = formatRange(status.positionRange);

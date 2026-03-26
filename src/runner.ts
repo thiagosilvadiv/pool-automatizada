@@ -71,6 +71,7 @@ export type RunnerStatus = BotStatus & {
   hedgeNotionalUsd: number | null;
   hedgeLeverage: number | null;
   hedgeOpenedAt: string | null;
+  hedgeLastError: string | null;
 };
 
 export type HistoryEvent = {
@@ -248,7 +249,8 @@ export class BotRunner {
       hedgeSymbol: hedgeState?.symbol ?? null,
       hedgeNotionalUsd: hedgeState?.notionalUsd ?? null,
       hedgeLeverage: hedgeState?.leverage ?? null,
-      hedgeOpenedAt: hedgeState?.openedAt ?? null
+      hedgeOpenedAt: hedgeState?.openedAt ?? null,
+      hedgeLastError: this.hedgeManager.getLastError()
     };
   }
 
@@ -347,7 +349,26 @@ export class BotRunner {
       await withRetry(() => this.bot.tick(), { retries: 3, baseDelayMs: 1000 });
       this.lastTickAt = new Date().toISOString();
       const status = this.bot.getStatus();
-      await this.hedgeManager.ensureOpen(status);
+      const hedgeResult = await this.hedgeManager.ensureOpen(status);
+      if (this.config.hedgeEnabled && status.positionMint && !this.hedgeManager.getState()?.active) {
+        if (hedgeResult.status === "failed") {
+          const reason = hedgeResult.error ?? this.hedgeManager.getLastError() ?? "hedge failed";
+          logger.error({ reason }, "hedge failed; closing position");
+          this.bot.setError(new Error(`Hedge falhou: ${reason}`));
+          try {
+            await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
+            this.lastHedgeClose = await this.hedgeManager.closeIfActive();
+          } catch (err) {
+            logger.error({ err }, "auto-close after hedge failure failed");
+            this.bot.setError(err);
+          } finally {
+            this.lastTickAt = new Date().toISOString();
+            this.recordEvent(this.bot.getStatus());
+            this.stop();
+          }
+          return;
+        }
+      }
       this.recordEvent(status);
     } catch (err) {
       logger.error({ err }, "tick failed");
