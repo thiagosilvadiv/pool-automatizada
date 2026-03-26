@@ -21,6 +21,7 @@ type BybitTicker = {
 
 type BybitInstrument = {
   symbol: string;
+  status?: string;
   lotSizeFilter?: {
     qtyStep?: string;
     minOrderQty?: string;
@@ -41,6 +42,24 @@ type BybitClosedPnl = {
   updatedTime?: string;
 };
 
+type BybitInstrumentPage = {
+  list?: BybitInstrument[];
+  nextPageCursor?: string;
+};
+
+class BybitError extends Error {
+  code: number | string;
+  method: string;
+  path: string;
+
+  constructor(code: number | string, method: string, path: string, message: string) {
+    super(`Bybit error (${code}) on ${method} ${path}: ${message}`);
+    this.code = code;
+    this.method = method;
+    this.path = path;
+  }
+}
+
 function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
   const entries = Object.entries(params)
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
@@ -51,6 +70,52 @@ function buildQuery(params: Record<string, string | number | boolean | undefined
 
 function signPayload(secret: string, payload: string): string {
   return crypto.createHmac("sha256", secret).update(payload).digest("hex");
+}
+
+export async function listLinearSymbols(baseUrl: string, options?: { status?: string; limit?: number }): Promise<string[]> {
+  const cleanBase = baseUrl.replace(/\/+$/, "");
+  const limit = Math.min(1000, Math.max(1, Math.floor(options?.limit ?? 1000)));
+  const statusFilter = options?.status?.trim();
+  const symbols = new Set<string>();
+  let cursor: string | null = null;
+  for (let page = 0; page < 20; page += 1) {
+    const params: Record<string, string | number | boolean | undefined | null> = {
+      category: "linear",
+      limit
+    };
+    if (statusFilter) {
+      params.status = statusFilter;
+    }
+    if (cursor) {
+      params.cursor = cursor;
+    }
+    const query = buildQuery(params);
+    const url = `${cleanBase}/v5/market/instruments-info${query ? `?${query}` : ""}`;
+    const res = await fetch(url);
+    const data = (await res.json()) as BybitResponse<BybitInstrumentPage>;
+    if (!res.ok || data.retCode !== 0) {
+      const msg = data?.retMsg || `HTTP ${res.status}`;
+      const code = typeof data?.retCode === "number" ? data.retCode : "unknown";
+      throw new Error(`Bybit error (${code}) on GET /v5/market/instruments-info: ${msg}`);
+    }
+    const list = Array.isArray(data.result?.list) ? data.result.list : [];
+    for (const item of list) {
+      const symbol = String(item?.symbol ?? "").trim();
+      if (!symbol) {
+        continue;
+      }
+      if (statusFilter && item?.status && item.status !== statusFilter) {
+        continue;
+      }
+      symbols.add(symbol);
+    }
+    const next = data.result?.nextPageCursor;
+    cursor = next ? String(next) : null;
+    if (!cursor) {
+      break;
+    }
+  }
+  return Array.from(symbols).sort();
 }
 
 export class BybitClient {
@@ -107,7 +172,7 @@ export class BybitClient {
     if (!res.ok || data.retCode !== 0) {
       const msg = data?.retMsg || `HTTP ${res.status}`;
       const code = typeof data?.retCode === "number" ? data.retCode : "unknown";
-      throw new Error(`Bybit error (${code}) on ${method} ${path}: ${msg}`);
+      throw new BybitError(code, method, path, msg);
     }
     return data.result;
   }
@@ -143,12 +208,21 @@ export class BybitClient {
   }
 
   async setLeverage(symbol: string, leverage: number): Promise<void> {
-    await this.request("POST", "/v5/position/set-leverage", {
-      category: "linear",
-      symbol,
-      buyLeverage: String(leverage),
-      sellLeverage: String(leverage)
-    });
+    try {
+      await this.request("POST", "/v5/position/set-leverage", {
+        category: "linear",
+        symbol,
+        buyLeverage: String(leverage),
+        sellLeverage: String(leverage)
+      });
+    } catch (err) {
+      if (err instanceof BybitError) {
+        if (err.code === 110043 || err.message.toLowerCase().includes("leverage not modified")) {
+          return;
+        }
+      }
+      throw err;
+    }
   }
 
   async placeOrder(options: {

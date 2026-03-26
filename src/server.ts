@@ -7,6 +7,7 @@ import { buildConnection, buildWallet, loadKeypair } from "./solana.js";
 import { logger } from "./logger.js";
 import { PoolManager } from "./pool-manager.js";
 import { getTrendSeries } from "./trend.js";
+import { listLinearSymbols } from "./bybit.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,6 +16,9 @@ export async function startServer(config: Config): Promise<void> {
   const app = express();
   const port = Number(process.env.PORT ?? 3000);
   app.use(express.json());
+
+  const hedgeSymbolsCache: { updatedAt: number; symbols: string[] } = { updatedAt: 0, symbols: [] };
+  const HEDGE_SYMBOLS_TTL_MS = 5 * 60 * 1000;
 
   const uiUser = process.env.UI_USER ?? null;
   const uiPass = process.env.UI_PASS ?? process.env.UI_PASSWORD ?? null;
@@ -188,6 +192,26 @@ export async function startServer(config: Config): Promise<void> {
       isTokenASol: selectedStatus?.isTokenASol ?? null,
       isTokenBSol: selectedStatus?.isTokenBSol ?? null
     });
+  });
+
+  app.get("/api/hedge-symbols", async (req: Request, res: Response) => {
+    try {
+      const forceRaw = String(req.query.force ?? "").trim().toLowerCase();
+      const force = forceRaw === "1" || forceRaw === "true" || forceRaw === "yes";
+      const now = Date.now();
+      if (!force && hedgeSymbolsCache.symbols.length > 0 && now - hedgeSymbolsCache.updatedAt < HEDGE_SYMBOLS_TTL_MS) {
+        res.json({ ok: true, symbols: hedgeSymbolsCache.symbols, cached: true, updatedAt: hedgeSymbolsCache.updatedAt });
+        return;
+      }
+      const symbols = await listLinearSymbols(config.bybitBaseUrl, { status: "Trading" });
+      hedgeSymbolsCache.symbols = symbols;
+      hedgeSymbolsCache.updatedAt = now;
+      const query = String(req.query.q ?? "").trim().toUpperCase();
+      const filtered = query ? symbols.filter((symbol) => symbol.includes(query)) : symbols;
+      res.json({ ok: true, symbols: filtered, cached: false, updatedAt: now });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   app.get("/api/pools", async (_req: Request, res: Response) => {

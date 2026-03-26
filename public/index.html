@@ -102,7 +102,7 @@
           </div>
           <div class="field">
             <label for="poolHedgeSymbol">Hedge símbolo</label>
-            <input id="poolHedgeSymbol" type="text" placeholder="Ex: SOLUSDT" />
+            <input id="poolHedgeSymbol" type="text" placeholder="Ex: SOLUSDT" list="hedgeSymbolsList" />
           </div>
           <div class="field">
             <label for="poolHedgeLeverage">Hedge alavancagem</label>
@@ -392,7 +392,7 @@
           </div>
           <div class="field">
             <label for="editPoolHedgeSymbol">Hedge símbolo</label>
-            <input id="editPoolHedgeSymbol" type="text" placeholder="Ex: SOLUSDT" />
+            <input id="editPoolHedgeSymbol" type="text" placeholder="Ex: SOLUSDT" list="hedgeSymbolsList" />
           </div>
           <div class="field">
             <label for="editPoolHedgeLeverage">Hedge alavancagem</label>
@@ -434,6 +434,7 @@
         </div>
       </div>
     </div>
+    <datalist id="hedgeSymbolsList"></datalist>
     <script src="app.js"></script>
   </body>
 </html>

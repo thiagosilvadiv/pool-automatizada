@@ -31,6 +31,7 @@ const cooldownSecEl = document.getElementById("cooldownSec");
 const dryRunEl = document.getElementById("dryRun");
 const historyBody = document.getElementById("historyBody");
 const poolNameLabel = document.getElementById("poolNameLabel");
+const hedgeSymbolsList = document.getElementById("hedgeSymbolsList");
 
 const poolNameInput = document.getElementById("poolName");
 const poolAddressInput = document.getElementById("poolAddress");
@@ -393,6 +394,34 @@ async function fetchHistory() {
 async function fetchPools() {
   const res = await fetch("/api/pools");
   return res.json();
+}
+
+let hedgeSymbolsLoaded = false;
+let hedgeSymbolsLoading = false;
+
+function renderHedgeSymbols(symbols) {
+  if (!hedgeSymbolsList) {
+    return;
+  }
+  hedgeSymbolsList.innerHTML = symbols.map((symbol) => `<option value="${symbol}"></option>`).join("");
+}
+
+async function ensureHedgeSymbolsLoaded() {
+  if (!hedgeSymbolsList || hedgeSymbolsLoaded || hedgeSymbolsLoading) {
+    return;
+  }
+  hedgeSymbolsLoading = true;
+  try {
+    const res = await fetch("/api/hedge-symbols");
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok || !Array.isArray(data.symbols)) {
+      return;
+    }
+    renderHedgeSymbols(data.symbols);
+    hedgeSymbolsLoaded = true;
+  } finally {
+    hedgeSymbolsLoading = false;
+  }
 }
 
 function parseOptionalNumber(value) {
@@ -1029,6 +1058,16 @@ if (swapToSolBtn) {
     updateUI();
   });
 }
+
+const hedgeSymbolInputs = [poolHedgeSymbolInput, editPoolHedgeSymbolInput].filter(Boolean);
+hedgeSymbolInputs.forEach((input) => {
+  input.addEventListener("focus", () => {
+    void ensureHedgeSymbolsLoaded();
+  });
+  input.addEventListener("input", () => {
+    input.value = input.value.toUpperCase();
+  });
+});
 
 addPoolBtn.addEventListener("click", async () => {
   const name = poolNameInput.value.trim();
