@@ -133,6 +133,8 @@ export class BotRunner {
   private trendByMint = new Map<string, "up" | "down">();
   private hedgeManager: HedgeManager;
   private lastHedgeClose: HedgeCloseResult | null = null;
+  private pendingClose = false;
+  private pendingCloseRequestedAt: string | null = null;
 
   constructor(bot: OrcaBot, config: Config, options: { historyStore: HistoryStore }) {
     this.bot = bot;
@@ -169,21 +171,12 @@ export class BotRunner {
 
   async closePositionNow(): Promise<RunnerStatus> {
     if (this.inFlight) {
+      this.pendingClose = true;
+      this.pendingCloseRequestedAt = new Date().toISOString();
+      logger.info({ pendingCloseRequestedAt: this.pendingCloseRequestedAt }, "close requested during tick; pending");
       return this.getStatus();
     }
-    this.inFlight = true;
-    try {
-      await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
-      this.lastHedgeClose = await this.hedgeManager.closeIfOpen();
-      this.lastTickAt = new Date().toISOString();
-      this.recordEvent(this.bot.getStatus());
-    } catch (err) {
-      logger.error({ err }, "close-position failed");
-      this.bot.setError(err);
-    } finally {
-      this.inFlight = false;
-    }
-    return this.getStatus();
+    return this.performClose("manual");
   }
 
   async topUpSolNow(): Promise<{ ok: boolean; reason?: string; status: RunnerStatus }> {
@@ -348,6 +341,10 @@ export class BotRunner {
     if (this.inFlight) {
       return;
     }
+    if (this.pendingClose) {
+      await this.performClose("pending");
+      return;
+    }
     this.inFlight = true;
     try {
       await withRetry(() => this.bot.tick(), { retries: 3, baseDelayMs: 1000 });
@@ -379,7 +376,36 @@ export class BotRunner {
       this.bot.setError(err);
     } finally {
       this.inFlight = false;
+      if (this.pendingClose) {
+        await this.performClose("pending");
+      }
     }
+  }
+
+  private async performClose(mode: "manual" | "pending"): Promise<RunnerStatus> {
+    if (this.inFlight) {
+      return this.getStatus();
+    }
+    this.inFlight = true;
+    this.pendingClose = false;
+    this.pendingCloseRequestedAt = null;
+    try {
+      await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
+      this.lastHedgeClose = await this.hedgeManager.closeIfOpen();
+      this.lastTickAt = new Date().toISOString();
+      this.recordEvent(this.bot.getStatus());
+    } catch (err) {
+      logger.error({ err, mode }, "close-position failed");
+      this.bot.setError(err);
+    } finally {
+      this.inFlight = false;
+    }
+    if (this.running) {
+      this.stop();
+    }
+    this.pendingClose = false;
+    this.pendingCloseRequestedAt = null;
+    return this.getStatus();
   }
 
   private recordEvent(status: BotStatus): void {
