@@ -41,6 +41,8 @@ const actionLabels = {
   "auto-sol-topup": "top-up SOL",
   "manual-sol-topup": "top-up SOL (manual)",
   "manual-swap-to-sol": "converter tokens para SOL",
+  "add-liquidity": "adicionar liquidez",
+  "add-liquidity-failed": "falha adicionar liquidez",
   "close-failed": "fechamento falhou",
   "resume-position": "monitorando posição existente",
   "reload-position": "recarregar posição",

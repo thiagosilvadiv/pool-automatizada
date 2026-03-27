@@ -133,6 +133,7 @@ const MAX_HEDGE_LOGS = 80;
 export class BotRunner {
   private bot: OrcaBot;
   private config: Config;
+  private poolId: string;
   private historyStore: HistoryStore;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -152,12 +153,20 @@ export class BotRunner {
   private lastHedgeClose: HedgeCloseResult | null = null;
   private pendingClose = false;
   private pendingCloseRequestedAt: string | null = null;
+  private autoAddRequestedByMint = new Set<string>();
+  private onAutoAddRequest?: (poolId: string) => void;
 
-  constructor(bot: OrcaBot, config: Config, options: { historyStore: HistoryStore }) {
+  constructor(
+    bot: OrcaBot,
+    config: Config,
+    options: { historyStore: HistoryStore; poolId: string; onAutoAddRequest?: (poolId: string) => void }
+  ) {
     this.bot = bot;
     this.config = config;
     this.historyStore = options.historyStore;
     this.hedgeManager = new HedgeManager(config);
+    this.poolId = options.poolId;
+    this.onAutoAddRequest = options.onAutoAddRequest;
   }
 
   async init(): Promise<void> {
@@ -286,6 +295,37 @@ export class BotRunner {
     this.bot.setSwapAllowlist(mints);
   }
 
+  isBusy(): boolean {
+    return this.inFlight || this.pendingClose;
+  }
+
+  isAutoAddEnabled(): boolean {
+    return Boolean(this.config.autoAddLiquidityEnabled);
+  }
+
+  async getWalletBalances(): Promise<{ tokenA: number; tokenB: number }> {
+    return this.bot.getWalletBalances();
+  }
+
+  async autoAddLiquidity(limits: { maxTokenA?: number; maxTokenB?: number }): Promise<{ ok: boolean; reason?: string }> {
+    if (this.inFlight) {
+      return { ok: false, reason: "busy" };
+    }
+    this.inFlight = true;
+    try {
+      const result = await this.bot.addLiquidityFromWallet(limits);
+      this.lastTickAt = new Date().toISOString();
+      this.recordEvent(this.bot.getStatus());
+      return result;
+    } catch (err) {
+      logger.error({ err }, "auto-add liquidity failed");
+      this.bot.setError(err);
+      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    } finally {
+      this.inFlight = false;
+    }
+  }
+
   getHistory(): HistoryEvent[] {
     return [...this.history].reverse();
   }
@@ -304,6 +344,7 @@ export class BotRunner {
     this.lastEventPortfolioUsd = null;
     this.entryByMint = new Map();
     this.trendByMint = new Map();
+    this.autoAddRequestedByMint = new Set();
     await this.saveHistory();
   }
 
@@ -340,8 +381,21 @@ export class BotRunner {
         trendByMint.delete(item.positionMint);
       }
     }
+    const autoAddByMint = new Set<string>();
+    for (const item of this.history) {
+      if (!item.positionMint) {
+        continue;
+      }
+      if (item.action === "add-liquidity") {
+        autoAddByMint.add(item.positionMint);
+      }
+      if (item.action === "close-position") {
+        autoAddByMint.delete(item.positionMint);
+      }
+    }
     this.entryByMint = entryByMint;
     this.trendByMint = trendByMint;
+    this.autoAddRequestedByMint = autoAddByMint;
     await this.saveHistory();
   }
 
@@ -438,6 +492,7 @@ export class BotRunner {
         }
       }
       this.recordEvent(status, { hedgeClose: hedgeCloseForRebalance });
+      this.maybeRequestAutoAdd(status);
     } catch (err) {
       logger.error({ err }, "tick failed");
       this.bot.setError(err);
@@ -793,9 +848,30 @@ export class BotRunner {
     this.pushEvent(event);
     if (action === "close-position" && mergedPositionMint) {
       this.trendByMint.delete(mergedPositionMint);
+      this.autoAddRequestedByMint.delete(mergedPositionMint);
     }
     if (action === "close-position") {
       this.lastHedgeClose = null;
+    }
+  }
+
+  private maybeRequestAutoAdd(status: BotStatus): void {
+    if (!this.config.autoAddLiquidityEnabled) {
+      return;
+    }
+    const mint = status.positionMint ?? null;
+    if (!mint) {
+      return;
+    }
+    if (status.lastAction !== "no-action") {
+      return;
+    }
+    if (this.autoAddRequestedByMint.has(mint)) {
+      return;
+    }
+    this.autoAddRequestedByMint.add(mint);
+    if (this.onAutoAddRequest) {
+      this.onAutoAddRequest(this.poolId);
     }
   }
 
@@ -985,6 +1061,18 @@ export class BotRunner {
               }
             }
           }
+          const autoAddByMint = new Set<string>();
+          for (const item of normalized) {
+            if (!item.positionMint) {
+              continue;
+            }
+            if (item.action === "add-liquidity") {
+              autoAddByMint.add(item.positionMint);
+            }
+            if (item.action === "close-position") {
+              autoAddByMint.delete(item.positionMint);
+            }
+          }
           const maxHistory = Number.isFinite(this.config.historyMaxEvents)
             ? Math.floor(this.config.historyMaxEvents)
             : 0;
@@ -996,6 +1084,7 @@ export class BotRunner {
           this.openedAtByMint = openedByMint;
           this.entryByMint = entryByMint;
           this.trendByMint = trendByMint;
+          this.autoAddRequestedByMint = autoAddByMint;
           if (mutated) {
             await this.saveHistory();
           }

@@ -44,6 +44,7 @@ const poolTrendTimeframeInput = document.getElementById("poolTrendTimeframe");
 const poolTrendUpInput = document.getElementById("poolTrendUp");
 const poolTrendDownInput = document.getElementById("poolTrendDown");
 const poolBudgetInput = document.getElementById("poolBudget");
+const poolAutoAddEnabledInput = document.getElementById("poolAutoAddEnabled");
 const poolHedgeEnabledInput = document.getElementById("poolHedgeEnabled");
 const poolHedgePctInput = document.getElementById("poolHedgePct");
 const poolHedgeMarginPctInput = document.getElementById("poolHedgeMarginPct");
@@ -65,6 +66,7 @@ const editPoolTrendTimeframeInput = document.getElementById("editPoolTrendTimefr
 const editPoolTrendUpInput = document.getElementById("editPoolTrendUp");
 const editPoolTrendDownInput = document.getElementById("editPoolTrendDown");
 const editPoolBudgetInput = document.getElementById("editPoolBudget");
+const editPoolAutoAddEnabledInput = document.getElementById("editPoolAutoAddEnabled");
 const editPoolHedgeEnabledInput = document.getElementById("editPoolHedgeEnabled");
 const editPoolHedgePctInput = document.getElementById("editPoolHedgePct");
 const editPoolHedgeMarginPctInput = document.getElementById("editPoolHedgeMarginPct");
@@ -139,6 +141,8 @@ const actionLabels = {
   "auto-sol-topup": "top-up SOL",
   "manual-sol-topup": "top-up SOL (manual)",
   "manual-swap-to-sol": "converter tokens para SOL",
+  "add-liquidity": "adicionar liquidez",
+  "add-liquidity-failed": "falha ao adicionar liquidez",
   "resume-position": "monitorando posição existente",
   "close-failed": "fechamento falhou",
   "reload-position": "recarregar posição",
@@ -721,6 +725,7 @@ function openEditPoolModal(pool) {
   const defaultTrendUp = cachedConfig?.trendTargetUp ?? "sol";
   const defaultTrendDown = cachedConfig?.trendTargetDown ?? "other";
   const defaultHedgeEnabled = cachedConfig?.hedgeEnabled ?? false;
+  const defaultAutoAddEnabled = cachedConfig?.autoAddLiquidityEnabled ?? false;
   const defaultHedgePct = cachedConfig?.hedgePct ?? "-";
   const defaultHedgeMarginPct = cachedConfig?.hedgeMarginPct ?? "-";
   const defaultHedgeSymbol = cachedConfig?.hedgeSymbol ?? "-";
@@ -735,6 +740,10 @@ function openEditPoolModal(pool) {
   if (editPoolBudgetInput) {
     editPoolBudgetInput.value = overrides.budgetUsd ?? "";
     editPoolBudgetInput.placeholder = `Padrão (${defaultBudget})`;
+  }
+  if (editPoolAutoAddEnabledInput) {
+    editPoolAutoAddEnabledInput.value = overrides.autoAddLiquidityEnabled === undefined ? "" : String(overrides.autoAddLiquidityEnabled);
+    setSelectPlaceholder(editPoolAutoAddEnabledInput, `Padrão (${defaultAutoAddEnabled ? "Sim" : "Não"})`);
   }
   if (editPoolHedgeEnabledInput) {
     editPoolHedgeEnabledInput.value = overrides.hedgeEnabled === undefined ? "" : String(overrides.hedgeEnabled);
@@ -1061,6 +1070,9 @@ async function updateUI() {
     if (poolTrendEnabledInput) {
       setSelectPlaceholder(poolTrendEnabledInput, `Padrão (${config.trendEnabled ? "Sim" : "Não"})`);
     }
+    if (poolAutoAddEnabledInput) {
+      setSelectPlaceholder(poolAutoAddEnabledInput, `Padrão (${config.autoAddLiquidityEnabled ? "Sim" : "Não"})`);
+    }
     if (poolTrendTimeframeInput) {
       setSelectPlaceholder(poolTrendTimeframeInput, `Padrão (${config.trendTimeframe ?? "1m"})`);
     }
@@ -1169,6 +1181,7 @@ addPoolBtn.addEventListener("click", async () => {
   const trendTargetUpRaw = poolTrendUpInput?.value ?? "";
   const trendTargetDownRaw = poolTrendDownInput?.value ?? "";
   const budgetUsd = parseOptionalNumber(poolBudgetInput.value);
+  const autoAddRaw = poolAutoAddEnabledInput?.value ?? "";
   const hedgeEnabledRaw = poolHedgeEnabledInput?.value ?? "";
   const hedgePct = parseOptionalNumber(poolHedgePctInput?.value);
   const hedgeMarginPct = parseOptionalNumber(poolHedgeMarginPctInput?.value);
@@ -1217,6 +1230,13 @@ addPoolBtn.addEventListener("click", async () => {
     if (budgetUsd !== undefined) {
       overrides.budgetUsd = budgetUsd;
     }
+    if (autoAddRaw) {
+      const parsed = parseTrendEnabledInput(autoAddRaw);
+      if (parsed === null) {
+        throw new Error("Auto adicionar liquidez inválido. Use Sim ou Não.");
+      }
+      overrides.autoAddLiquidityEnabled = parsed;
+    }
     if (hedgeEnabledRaw) {
       const parsed = parseTrendEnabledInput(hedgeEnabledRaw);
       if (parsed === null) {
@@ -1255,6 +1275,7 @@ addPoolBtn.addEventListener("click", async () => {
     if (poolTrendUpInput) poolTrendUpInput.value = "";
     if (poolTrendDownInput) poolTrendDownInput.value = "";
     poolBudgetInput.value = "";
+    if (poolAutoAddEnabledInput) poolAutoAddEnabledInput.value = "";
     if (poolHedgeEnabledInput) poolHedgeEnabledInput.value = "";
     if (poolHedgePctInput) poolHedgePctInput.value = "";
     if (poolHedgeMarginPctInput) poolHedgeMarginPctInput.value = "";
@@ -1308,6 +1329,21 @@ if (editPoolForm) {
         return;
       }
       overrides.budgetUsd = parsed;
+    }
+
+    const autoAddRaw = editPoolAutoAddEnabledInput?.value ?? "";
+    if (!autoAddRaw) {
+      overrides.autoAddLiquidityEnabled = null;
+    } else {
+      const parsed = parseTrendEnabledInput(autoAddRaw);
+      if (parsed === null) {
+        if (editPoolError) {
+          editPoolError.textContent = "Auto adicionar liquidez inválido. Use Sim ou Não.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.autoAddLiquidityEnabled = parsed;
     }
 
     const exitTokenRaw = editPoolExitTokenInput?.value?.trim() ?? "";
