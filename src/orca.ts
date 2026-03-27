@@ -608,9 +608,13 @@ export class OrcaBot {
       return { ok: false, reason: message };
     }
 
+    const poolState = this.poolState;
+    if (!poolState) {
+      throw new Error("poolState not initialized");
+    }
     const tokenExtensionCtx = await whirlpools.TokenExtensionUtil.buildTokenExtensionContext(
       this.ctx.fetcher,
-      this.poolState.pool.getData(),
+      poolState.pool.getData(),
       whirlpools.IGNORE_CACHE
     );
 
@@ -663,11 +667,6 @@ export class OrcaBot {
       return { ok: false, reason: message };
     }
 
-    const poolState = this.poolState;
-    if (!poolState) {
-      throw new Error("poolState not initialized");
-    }
-
     const buildQuote = (): any | null => {
       let quote = this.tryBuildQuote(
         poolState.pool,
@@ -706,8 +705,8 @@ export class OrcaBot {
 
     const { requiredA, requiredB } = extractQuoteAmounts(
       quote,
-      this.poolState.decimalsA,
-      this.poolState.decimalsB
+      poolState.decimalsA,
+      poolState.decimalsB
     );
     this.lastStatus.lastOpenTokenA = requiredA;
     this.lastStatus.lastOpenTokenB = requiredB;
