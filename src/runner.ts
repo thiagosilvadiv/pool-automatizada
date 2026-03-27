@@ -143,6 +143,10 @@ export class BotRunner {
 
   async init(): Promise<void> {
     await this.loadHistoryIfNeeded();
+    const synced = await this.hedgeManager.syncFromBybit();
+    if (synced) {
+      await this.saveHistory();
+    }
   }
 
   async start(): Promise<void> {
@@ -170,7 +174,7 @@ export class BotRunner {
     this.inFlight = true;
     try {
       await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
-      this.lastHedgeClose = await this.hedgeManager.closeIfActive();
+      this.lastHedgeClose = await this.hedgeManager.closeIfOpen();
       this.lastTickAt = new Date().toISOString();
       this.recordEvent(this.bot.getStatus());
     } catch (err) {
@@ -357,7 +361,7 @@ export class BotRunner {
           this.bot.setError(new Error(`Hedge falhou: ${reason}`));
           try {
             await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
-            this.lastHedgeClose = await this.hedgeManager.closeIfActive();
+            this.lastHedgeClose = await this.hedgeManager.closeIfOpen();
           } catch (err) {
             logger.error({ err }, "auto-close after hedge failure failed");
             this.bot.setError(err);
