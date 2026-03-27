@@ -667,28 +667,30 @@ export class OrcaBot {
       return { ok: false, reason: message };
     }
 
+    const quoteUsableA = Math.max(0, usableA * 0.98);
+    const quoteUsableB = Math.max(0, usableB * 0.98);
     const buildQuote = (): any | null => {
       let quote = this.tryBuildQuote(
         poolState.pool,
         poolState.tokenMintA,
-        new Decimal(usableA),
+        new Decimal(quoteUsableA),
         lowerTick,
         upperTick,
         slippage,
-        usableA,
-        usableB,
+        quoteUsableA,
+        quoteUsableB,
         tokenExtensionCtx
       );
       if (!quote) {
         quote = this.tryBuildQuote(
           poolState.pool,
           poolState.tokenMintB,
-          new Decimal(usableB),
+          new Decimal(quoteUsableB),
           lowerTick,
           upperTick,
           slippage,
-          usableA,
-          usableB,
+          quoteUsableA,
+          quoteUsableB,
           tokenExtensionCtx
         );
       }
@@ -697,7 +699,7 @@ export class OrcaBot {
 
     const quote = buildQuote();
     if (!quote) {
-      const message = "nao foi possivel calcular quote para adicionar liquidez";
+      const message = `nao foi possivel calcular quote para adicionar liquidez (A=${usableA.toFixed(6)}, B=${usableB.toFixed(6)})`;
       this.setError(message);
       this.lastStatus.lastAction = "add-liquidity-failed";
       return { ok: false, reason: message };
