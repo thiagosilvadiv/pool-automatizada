@@ -537,6 +537,18 @@ export class PoolManager {
     return this.getHedgeLogs(this.selectedPoolId);
   }
 
+  clearHedgeLogs(id: string): void {
+    const record = this.getRecord(id);
+    record.runner.clearHedgeLogs();
+  }
+
+  clearSelectedHedgeLogs(): void {
+    if (!this.selectedPoolId) {
+      return;
+    }
+    this.clearHedgeLogs(this.selectedPoolId);
+  }
+
   async clearSelectedHistory(): Promise<void> {
     if (!this.selectedPoolId) {
       return;

@@ -91,6 +91,7 @@ const topupBtn = document.getElementById("topupBtn");
 const closeEmptyAccountsBtn = document.getElementById("closeEmptyAccountsBtn");
 const swapToSolBtn = document.getElementById("swapToSolBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
+const clearHedgeLogBtn = document.getElementById("clearHedgeLogBtn");
 const exportHistoryBtn = document.getElementById("exportHistoryBtn");
 const deleteHistoryBtn = document.getElementById("deleteHistoryBtn");
 const selectAllHistory = document.getElementById("selectAllHistory");
@@ -155,6 +156,8 @@ const actionTypeLabels = {
   "monitorando": "Monitorando",
   "operacional": "Operacional"
 };
+
+const MAX_HEDGE_LOG_ROWS = 80;
 
 const hedgeLogActionLabels = {
   "open": "Abertura",
@@ -857,7 +860,7 @@ function renderHedgeLogs(items) {
     hedgeLogBody.innerHTML = "<tr><td colspan=\"9\">Sem eventos ainda</td></tr>";
     return;
   }
-  const rows = items.slice(0, 60).map((item) => {
+  const rows = items.slice(0, MAX_HEDGE_LOG_ROWS).map((item) => {
     const levelLabel = hedgeLogLevelLabels[item.level] ?? item.level ?? "-";
     const actionLabel = hedgeLogActionLabels[item.action] ?? item.action ?? "-";
     const message = escapeHtml(item.message ?? "-");
@@ -1859,6 +1862,15 @@ clearHistoryBtn.addEventListener("click", async () => {
   await fetch("/api/history/clear", { method: "POST" });
   updateUI();
 });
+
+if (clearHedgeLogBtn) {
+  clearHedgeLogBtn.addEventListener("click", async () => {
+    const ok = window.confirm("Limpar o log do hedge? Essa ação não pode ser desfeita.");
+    if (!ok) return;
+    await fetch("/api/hedge-logs/clear", { method: "POST" });
+    updateUI();
+  });
+}
 
 if (deleteHistoryBtn) {
   deleteHistoryBtn.addEventListener("click", async () => {

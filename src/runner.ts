@@ -294,6 +294,10 @@ export class BotRunner {
     return [...this.hedgeLogs].reverse();
   }
 
+  clearHedgeLogs(): void {
+    this.hedgeLogs = [];
+  }
+
   async clearHistory(): Promise<void> {
     this.history = [];
     this.lastEventPortfolioValue = null;
