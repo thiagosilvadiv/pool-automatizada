@@ -678,8 +678,20 @@ button.danger:not(.ghost):hover {
 .performance-tooltip .line {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
-  white-space: nowrap;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
+.performance-tooltip .line span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.performance-tooltip .line span:last-child {
+  flex: 0 0 auto;
+  text-align: right;
 }
 
 .legend-swatch {
