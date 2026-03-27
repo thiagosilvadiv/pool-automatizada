@@ -677,6 +677,10 @@ button.danger:not(.ghost):hover {
   background: #f472b6;
 }
 
+.legend-swatch.pnlTotalNet {
+  background: #fb7185;
+}
+
 .legend-swatch.pnlCum {
   background: #36d399;
   opacity: 0.6;
@@ -684,11 +688,6 @@ button.danger:not(.ghost):hover {
 
 .legend-swatch.pnlNetCum {
   background: #4ea1ff;
-  opacity: 0.6;
-}
-
-.legend-swatch.pnlTotalCum {
-  background: #f472b6;
   opacity: 0.6;
 }
 
