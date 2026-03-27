@@ -350,7 +350,26 @@ export class BotRunner {
       await withRetry(() => this.bot.tick(), { retries: 3, baseDelayMs: 1000 });
       this.lastTickAt = new Date().toISOString();
       const status = this.bot.getStatus();
-      const hedgeResult = await this.hedgeManager.ensureOpen(status);
+      const isRebalanced = status.lastAction === "rebalanced";
+      let hedgeCloseForRebalance: HedgeCloseResult | null = null;
+      let hadHedge = this.hedgeManager.getState()?.active ?? false;
+
+      if (isRebalanced && this.config.hedgeEnabled) {
+        if (!hadHedge) {
+          const synced = await this.hedgeManager.syncFromBybit();
+          hadHedge = synced || (this.hedgeManager.getState()?.active ?? false);
+        }
+        if (hadHedge) {
+          hedgeCloseForRebalance = await this.hedgeManager.closeIfOpen();
+        }
+      }
+
+      let hedgeResult: { status: "opened" | "skipped" | "failed"; error?: string } = { status: "skipped" };
+      const allowHedgeOpen = !isRebalanced || !hadHedge || hedgeCloseForRebalance != null;
+      if (this.config.hedgeEnabled && allowHedgeOpen) {
+        hedgeResult = await this.hedgeManager.ensureOpen(status);
+      }
+
       if (this.config.hedgeEnabled && status.positionMint && !this.hedgeManager.getState()?.active) {
         if (hedgeResult.status === "failed") {
           const reason = hedgeResult.error ?? this.hedgeManager.getLastError() ?? "hedge failed";
@@ -370,7 +389,7 @@ export class BotRunner {
           return;
         }
       }
-      this.recordEvent(status);
+      this.recordEvent(status, { hedgeClose: hedgeCloseForRebalance });
     } catch (err) {
       logger.error({ err }, "tick failed");
       this.bot.setError(err);
@@ -422,7 +441,7 @@ export class BotRunner {
     return this.getStatus();
   }
 
-  private recordEvent(status: BotStatus): void {
+  private recordEvent(status: BotStatus, options?: { hedgeClose?: HedgeCloseResult | null }): void {
     const action = status.lastAction;
     const eventPositionMint = status.eventPositionMint ?? null;
     const eventPositionEntryUsd = status.eventPositionEntryUsd ?? null;
@@ -554,6 +573,7 @@ export class BotRunner {
       if (closePnlUsd != null && txFeeUsd != null) {
         closePnlUsd -= txFeeUsd;
       }
+      const hedgeClose = options?.hedgeClose ?? null;
 
       const trendForClose = this.resolveTrendForMint(closeMint, trendNow);
       const closeEvent: HistoryEvent = {
@@ -591,10 +611,10 @@ export class BotRunner {
         pnlUsd: status.pnlUsd,
         pnlDelta: null,
         pnlDeltaUsd: null,
-        hedgeSymbol: null,
-        hedgeNotionalUsd: null,
-        hedgeLeverage: null,
-        hedgePnlUsd: null
+        hedgeSymbol: hedgeClose?.symbol ?? null,
+        hedgeNotionalUsd: hedgeClose?.notionalUsd ?? null,
+        hedgeLeverage: hedgeClose?.leverage ?? null,
+        hedgePnlUsd: hedgeClose?.pnlUsd ?? null
       };
       this.pushEvent(closeEvent);
       if (closeMint) {
