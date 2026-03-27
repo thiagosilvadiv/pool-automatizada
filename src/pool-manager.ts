@@ -329,6 +329,11 @@ export class PoolManager {
     return record.runner.getHistory();
   }
 
+  getHedgeLogs(id: string): ReturnType<BotRunner["getHedgeLogs"]> {
+    const record = this.getRecord(id);
+    return record.runner.getHedgeLogs();
+  }
+
   hasPool(id: string): boolean {
     return this.pools.has(id);
   }
@@ -523,6 +528,13 @@ export class PoolManager {
       return [];
     }
     return this.getHistory(this.selectedPoolId);
+  }
+
+  getSelectedHedgeLogs(): ReturnType<BotRunner["getHedgeLogs"]> {
+    if (!this.selectedPoolId) {
+      return [];
+    }
+    return this.getHedgeLogs(this.selectedPoolId);
   }
 
   async clearSelectedHistory(): Promise<void> {
