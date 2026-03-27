@@ -34,6 +34,7 @@ type BybitPosition = {
   side: "Buy" | "Sell" | "None";
   avgPrice?: string;
   positionValue?: string;
+  leverage?: string;
 };
 
 type BybitClosedPnl = {
