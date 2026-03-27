@@ -726,6 +726,14 @@ export class OrcaBot {
     await this.updatePortfolioSnapshot(price, solUsdPrice);
     this.lastStatus.lastAction = "add-liquidity";
     this.lastStatus.positionMint = this.currentPositionMint;
+    if (this.config.autoSwapToSolEnabled) {
+      try {
+        await this.swapWalletToSol("auto");
+        await this.updatePortfolioSnapshot(price, solUsdPrice);
+      } catch (err) {
+        logger.warn({ err }, "auto swap-to-sol failed after add liquidity");
+      }
+    }
     return { ok: true };
   }
 
