@@ -126,6 +126,18 @@ const perfMetricLabels = {
   pnlNetCum: "PnL sem taxas acumulado"
 };
 
+const perfMetricTooltipLabels = {
+  fees: "Taxas",
+  feesCum: "Taxas acum.",
+  feeYieldPct: "Rend. taxa (%)",
+  pnl: "PnL",
+  pnlNet: "PnL s/ taxas",
+  pnlTotal: "PnL hedge + taxas",
+  pnlTotalNet: "PnL hedge s/ taxas",
+  pnlCum: "PnL acum.",
+  pnlNetCum: "PnL s/ taxas acum."
+};
+
 const perfMetricColors = {
   fees: "#f6c343",
   feesCum: "rgba(246, 195, 67, 0.65)",
@@ -800,7 +812,7 @@ function showPerfTooltip(point, x, y) {
   if (!perfTooltip) return;
   const lines = perfChartMetrics.map((key) => {
     const val = point.values[key];
-    const label = perfMetricLabels[key] ?? key;
+    const label = perfMetricTooltipLabels[key] ?? perfMetricLabels[key] ?? key;
     const formatted = formatMetricValue(key, val);
     return `<div class="line"><span>${label}</span><span>${formatted}</span></div>`;
   }).join("");
