@@ -33,6 +33,7 @@ export type Config = {
   autoSwapToSolExcludeMints: string[];
   autoSwapFeesToUsdcEnabled: boolean;
   autoSwapFeesToUsdcTargetMint: string;
+  autoAddLiquidityEnabled: boolean;
   jupiterApiKey: string | null;
   jupiterApiUrl: string;
   jupiterExcludeDexes: string[];
@@ -297,6 +298,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     autoSwapFeesToUsdcTargetMint: process.env.AUTO_SWAP_FEES_TO_USDC_TARGET_MINT
       ?? (data as any).autoSwapFeesToUsdcTargetMint
       ?? "",
+    autoAddLiquidityEnabled: parseEnvBool(process.env.AUTO_ADD_LIQUIDITY_ENABLED)
+      ?? Boolean((data as any).autoAddLiquidityEnabled ?? false),
     jupiterApiKey: process.env.JUPITER_API_KEY ?? data.jupiterApiKey ?? null,
     jupiterApiUrl: process.env.JUPITER_API_URL ?? data.jupiterApiUrl ?? "https://api.jup.ag",
     jupiterExcludeDexes: parseEnvList(process.env.JUPITER_EXCLUDE_DEXES)

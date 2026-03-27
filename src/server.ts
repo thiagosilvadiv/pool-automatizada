@@ -183,6 +183,7 @@ export async function startServer(config: Config): Promise<void> {
       trendFallback: config.trendFallback,
       trendStaleSec: config.trendStaleSec,
       trendNetworkId: config.trendNetworkId,
+      autoAddLiquidityEnabled: config.autoAddLiquidityEnabled,
       hedgeEnabled: config.hedgeEnabled,
       hedgePct: config.hedgePct,
       hedgeSymbol: config.hedgeSymbol,

@@ -531,6 +531,203 @@ export class OrcaBot {
     return this.getStatus();
   }
 
+  async addLiquidityFromWallet(options: { share?: number; maxTokenA?: number; maxTokenB?: number }): Promise<{ ok: boolean; reason?: string }> {
+    this.lastStatus.running = true;
+    this.resetActionFee();
+    await this.refreshPoolState();
+
+    const share = options.share ?? 1;
+    if ((options.maxTokenA == null && options.maxTokenB == null) && (!Number.isFinite(share) || share <= 0)) {
+      const message = "parametros invalidos para adicionar liquidez";
+      this.setError(message);
+      this.lastStatus.lastAction = "add-liquidity-failed";
+      return { ok: false, reason: message };
+    }
+
+    const effectiveShare = Number.isFinite(share) && share > 0 ? Math.min(share, 1) : 1;
+
+    if (!this.currentPosition) {
+      await this.loadExistingPosition();
+    }
+
+    if (!this.currentPosition) {
+      const message = "nenhuma posicao aberta";
+      this.setError(message);
+      this.lastStatus.lastAction = "add-liquidity-failed";
+      return { ok: false, reason: message };
+    }
+
+    const price = await this.getCurrentPrice();
+    const solUsdPrice = await this.tryGetSolUsdPrice();
+    this.lastStatus.lastPrice = price;
+    this.lastStatus.solUsdPrice = solUsdPrice;
+    this.lastStatus.budgetUsd = this.config.budgetUsd;
+    this.lastStatus.budgetSol = solUsdPrice && this.config.budgetUsd
+      ? this.config.budgetUsd / solUsdPrice
+      : null;
+
+    await this.updatePortfolioSnapshot(price, solUsdPrice);
+
+    const positionData = this.currentPosition.getData?.() ?? this.currentPosition.getData;
+    const lowerTick = positionData?.tickLowerIndex;
+    const upperTick = positionData?.tickUpperIndex;
+    if (lowerTick == null || upperTick == null) {
+      const message = "nao foi possivel ler ticks da posicao";
+      this.setError(message);
+      this.lastStatus.lastAction = "add-liquidity-failed";
+      return { ok: false, reason: message };
+    }
+
+    let balances = await this.getTokenBalances();
+    let usableA = options.maxTokenA != null ? Number(options.maxTokenA) : balances.tokenA * effectiveShare;
+    let usableB = options.maxTokenB != null ? Number(options.maxTokenB) : balances.tokenB * effectiveShare;
+    if (!Number.isFinite(usableA) || usableA < 0) {
+      usableA = 0;
+    }
+    if (!Number.isFinite(usableB) || usableB < 0) {
+      usableB = 0;
+    }
+    if (options.maxTokenA != null) {
+      usableA = Math.min(usableA, balances.tokenA);
+    }
+    if (options.maxTokenB != null) {
+      usableB = Math.min(usableB, balances.tokenB);
+    }
+
+    if (this.config.maxTokenA != null) {
+      usableA = Math.min(usableA, this.config.maxTokenA);
+    }
+    if (this.config.maxTokenB != null) {
+      usableB = Math.min(usableB, this.config.maxTokenB);
+    }
+
+    if (usableA <= 0 && usableB <= 0) {
+      const message = "saldo insuficiente para adicionar liquidez";
+      this.setError(message);
+      this.lastStatus.lastAction = "add-liquidity-failed";
+      return { ok: false, reason: message };
+    }
+
+    const tokenExtensionCtx = await whirlpools.TokenExtensionUtil.buildTokenExtensionContext(
+      this.ctx.fetcher,
+      this.poolState.pool.getData(),
+      whirlpools.IGNORE_CACHE
+    );
+
+    const { targetA, targetB } = await this.computeTargetFromBalances(
+      price,
+      lowerTick,
+      upperTick,
+      usableA,
+      usableB,
+      tokenExtensionCtx
+    );
+
+    if (targetA <= 0 && targetB <= 0) {
+      const message = "nao foi possivel calcular alvo para adicionar liquidez";
+      this.setError(message);
+      this.lastStatus.lastAction = "add-liquidity-failed";
+      return { ok: false, reason: message };
+    }
+
+    const slippage = common.Percentage.fromFraction(this.config.slippageBps, 10_000);
+    const swapped = await this.rebalanceToTarget(usableA, usableB, targetA, targetB, price, slippage);
+    if (swapped) {
+      balances = await this.getTokenBalances();
+      usableA = options.maxTokenA != null ? Number(options.maxTokenA) : balances.tokenA * effectiveShare;
+      usableB = options.maxTokenB != null ? Number(options.maxTokenB) : balances.tokenB * effectiveShare;
+      if (!Number.isFinite(usableA) || usableA < 0) {
+        usableA = 0;
+      }
+      if (!Number.isFinite(usableB) || usableB < 0) {
+        usableB = 0;
+      }
+      if (options.maxTokenA != null) {
+        usableA = Math.min(usableA, balances.tokenA);
+      }
+      if (options.maxTokenB != null) {
+        usableB = Math.min(usableB, balances.tokenB);
+      }
+      if (this.config.maxTokenA != null) {
+        usableA = Math.min(usableA, this.config.maxTokenA);
+      }
+      if (this.config.maxTokenB != null) {
+        usableB = Math.min(usableB, this.config.maxTokenB);
+      }
+    }
+
+    if (usableA <= 0 && usableB <= 0) {
+      const message = "saldo insuficiente apos swap";
+      this.setError(message);
+      this.lastStatus.lastAction = "add-liquidity-failed";
+      return { ok: false, reason: message };
+    }
+
+    const poolState = this.poolState;
+    if (!poolState) {
+      throw new Error("poolState not initialized");
+    }
+
+    const buildQuote = (): any | null => {
+      let quote = this.tryBuildQuote(
+        poolState.pool,
+        poolState.tokenMintA,
+        new Decimal(usableA),
+        lowerTick,
+        upperTick,
+        slippage,
+        usableA,
+        usableB,
+        tokenExtensionCtx
+      );
+      if (!quote) {
+        quote = this.tryBuildQuote(
+          poolState.pool,
+          poolState.tokenMintB,
+          new Decimal(usableB),
+          lowerTick,
+          upperTick,
+          slippage,
+          usableA,
+          usableB,
+          tokenExtensionCtx
+        );
+      }
+      return quote;
+    };
+
+    const quote = buildQuote();
+    if (!quote) {
+      const message = "nao foi possivel calcular quote para adicionar liquidez";
+      this.setError(message);
+      this.lastStatus.lastAction = "add-liquidity-failed";
+      return { ok: false, reason: message };
+    }
+
+    const { requiredA, requiredB } = extractQuoteAmounts(
+      quote,
+      this.poolState.decimalsA,
+      this.poolState.decimalsB
+    );
+    this.lastStatus.lastOpenTokenA = requiredA;
+    this.lastStatus.lastOpenTokenB = requiredB;
+
+    try {
+      await this.increasePositionLiquidity(this.currentPosition, quote);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "falha ao adicionar liquidez";
+      this.setError(message);
+      this.lastStatus.lastAction = "add-liquidity-failed";
+      return { ok: false, reason: message };
+    }
+
+    this.resetPositionAnchors();
+    await this.updatePortfolioSnapshot(price, solUsdPrice);
+    this.lastStatus.lastAction = "add-liquidity";
+    this.lastStatus.positionMint = this.currentPositionMint;
+    return { ok: true };
+  }
+
   async topUpSolNow(): Promise<{ ok: boolean; reason?: string }> {
     this.lastStatus.running = true;
     this.resetActionFee();
@@ -1010,6 +1207,27 @@ export class OrcaBot {
     return { targetA, targetB };
   }
 
+  private async computeTargetFromBalances(
+    price: number,
+    lowerTick: number,
+    upperTick: number,
+    walletA: number,
+    walletB: number,
+    tokenExtensionCtx: any
+  ): Promise<{ targetA: number; targetB: number }> {
+    if (!this.poolState) {
+      return { targetA: 0, targetB: 0 };
+    }
+    const walletValue = walletB + walletA * price;
+    if (walletValue <= 0) {
+      return { targetA: 0, targetB: 0 };
+    }
+    const ratio = await this.getRangeRatio(lowerTick, upperTick, price, tokenExtensionCtx);
+    const targetA = walletValue / (price + ratio);
+    const targetB = ratio * targetA;
+    return { targetA, targetB };
+  }
+
   private async getRangeRatio(
     lowerTick: number,
     upperTick: number,
@@ -1130,6 +1348,25 @@ export class OrcaBot {
     return execution.ok || this.config.dryRun;
   }
 
+  private async increasePositionLiquidity(position: any, quote: any): Promise<void> {
+    let increaseResult: any = null;
+    if (typeof position.increaseLiquidity === "function") {
+      increaseResult = await position.increaseLiquidity(quote);
+    } else if (typeof position.increaseLiquidityWithMetadata === "function") {
+      increaseResult = await position.increaseLiquidityWithMetadata(quote);
+    }
+
+    if (!increaseResult) {
+      throw new Error("increaseLiquidity not available on SDK objects; update src/orca.ts to your SDK version");
+    }
+
+    const txList = Array.isArray(increaseResult) ? increaseResult : [increaseResult];
+    for (const item of txList) {
+      const tx = item.transaction ?? item.tx ?? item;
+      await this.executeTx(tx, "add-liquidity");
+    }
+  }
+
   private async closePosition(position: any): Promise<void> {
     logger.info("closing position and collecting fees");
 
@@ -1216,6 +1453,13 @@ export class OrcaBot {
 
   getStatus(): BotStatus {
     return { ...this.lastStatus };
+  }
+
+  async getWalletBalances(): Promise<{ tokenA: number; tokenB: number }> {
+    if (!this.poolState) {
+      await this.refreshPoolState();
+    }
+    return this.getTokenBalances();
   }
 
   setPositionEntryUsd(value: number | null): void {

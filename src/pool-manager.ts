@@ -36,6 +36,7 @@ export type PoolOverrides = {
   trendTimeframe?: "1m" | "5m" | "15m" | "30m" | "1h";
   trendTargetUp?: "sol" | "other" | "tokenA" | "tokenB";
   trendTargetDown?: "sol" | "other" | "tokenA" | "tokenB";
+  autoAddLiquidityEnabled?: boolean;
   hedgeEnabled?: boolean;
   hedgePct?: number;
   hedgeSymbol?: string;
@@ -96,6 +97,9 @@ export class PoolManager {
   private lastLowSolAutoCloseAt: number | null = null;
   private swapAllowlist: string[] = [];
   private swapAllowlistUpdatedAt: string | null = null;
+  private pendingAutoAddPools = new Set<string>();
+  private autoAddInProgress = false;
+  private autoAddTimer: NodeJS.Timeout | null = null;
 
   constructor(baseConfig: Config, connection: any, wallet: any) {
     this.baseConfig = baseConfig;
@@ -635,7 +639,13 @@ export class PoolManager {
     });
     bot.setSwapAllowlist(this.swapAllowlist);
     const historyStore = await createHistoryStore(entry.id);
-    const runner = new BotRunner(bot, poolConfig, { historyStore });
+    const runner = new BotRunner(bot, poolConfig, {
+      historyStore,
+      poolId: entry.id,
+      onAutoAddRequest: (poolId) => {
+        this.queueAutoAdd(poolId);
+      }
+    });
     await runner.init();
     runner.updateSwapAllowlist(this.swapAllowlist);
     this.pools.set(entry.id, { entry, runner });
@@ -659,6 +669,113 @@ export class PoolManager {
       logger.warn({ err }, "failed to load swap allowlist");
       this.swapAllowlist = [];
       this.swapAllowlistUpdatedAt = null;
+    }
+  }
+
+  private queueAutoAdd(poolId: string): void {
+    if (!poolId) {
+      return;
+    }
+    this.pendingAutoAddPools.add(poolId);
+    this.scheduleAutoAdd();
+  }
+
+  private scheduleAutoAdd(): void {
+    if (this.autoAddInProgress || this.autoAddTimer) {
+      return;
+    }
+    this.autoAddTimer = setTimeout(() => {
+      this.autoAddTimer = null;
+      void this.processAutoAddQueue();
+    }, 1500);
+  }
+
+  private async processAutoAddQueue(): Promise<void> {
+    if (this.autoAddInProgress) {
+      return;
+    }
+    this.autoAddInProgress = true;
+    try {
+      const pendingIds = Array.from(this.pendingAutoAddPools);
+      if (!pendingIds.length) {
+        return;
+      }
+      const eligible: string[] = [];
+      for (const id of pendingIds) {
+        const record = this.pools.get(id);
+        if (!record) {
+          this.pendingAutoAddPools.delete(id);
+          continue;
+        }
+        if (!record.runner.isAutoAddEnabled()) {
+          this.pendingAutoAddPools.delete(id);
+          continue;
+        }
+        const status = record.runner.getStatus();
+        if (!status.positionMint) {
+          this.pendingAutoAddPools.delete(id);
+          continue;
+        }
+        eligible.push(id);
+      }
+
+      if (!eligible.length) {
+        return;
+      }
+
+      const anyBusy = eligible.some((id) => this.pools.get(id)?.runner.isBusy());
+      if (anyBusy) {
+        this.scheduleAutoAdd();
+        return;
+      }
+
+      const share = 1 / eligible.length;
+      const balancesList = await Promise.all(eligible.map(async (id) => {
+        const record = this.pools.get(id);
+        if (!record) {
+          return { id, balances: null as { tokenA: number; tokenB: number } | null };
+        }
+        try {
+          const balances = await record.runner.getWalletBalances();
+          return { id, balances };
+        } catch (err) {
+          logger.warn({ err, poolId: id }, "failed to fetch wallet balances for auto-add");
+          return { id, balances: null as { tokenA: number; tokenB: number } | null };
+        }
+      }));
+
+      const limitsById = new Map<string, { maxTokenA: number; maxTokenB: number }>();
+      for (const item of balancesList) {
+        if (!item.balances) {
+          continue;
+        }
+        const maxTokenA = Number.isFinite(item.balances.tokenA) ? item.balances.tokenA * share : 0;
+        const maxTokenB = Number.isFinite(item.balances.tokenB) ? item.balances.tokenB * share : 0;
+        limitsById.set(item.id, { maxTokenA, maxTokenB });
+      }
+
+      for (const id of eligible) {
+        const record = this.pools.get(id);
+        if (!record) {
+          this.pendingAutoAddPools.delete(id);
+          continue;
+        }
+        const limits = limitsById.get(id);
+        if (!limits) {
+          this.pendingAutoAddPools.delete(id);
+          continue;
+        }
+        const result = await record.runner.autoAddLiquidity(limits);
+        if (!result.ok) {
+          logger.warn({ poolId: id, reason: result.reason }, "auto-add liquidity failed");
+        }
+        this.pendingAutoAddPools.delete(id);
+      }
+    } finally {
+      this.autoAddInProgress = false;
+      if (this.pendingAutoAddPools.size > 0) {
+        this.scheduleAutoAdd();
+      }
     }
   }
 
@@ -748,6 +865,25 @@ export class PoolManager {
         throw new Error("trendTargetDown override must be sol, other, tokenA, or tokenB");
       }
       normalized.trendTargetDown = value.startsWith("token") ? (value.replace("_", "").toLowerCase() === "tokena" ? "tokenA" : "tokenB") : (value as PoolOverrides["trendTargetDown"]);
+    }
+
+    if (overrides.autoAddLiquidityEnabled != null) {
+      const raw = overrides.autoAddLiquidityEnabled as unknown;
+      let value: boolean | null = null;
+      if (typeof raw === "boolean") {
+        value = raw;
+      } else if (typeof raw === "string") {
+        const normalizedValue = String(raw).trim().toLowerCase();
+        if (["1", "true", "yes", "on", "sim"].includes(normalizedValue)) {
+          value = true;
+        } else if (["0", "false", "no", "off", "nao"].includes(normalizedValue)) {
+          value = false;
+        }
+      }
+      if (value === null) {
+        throw new Error("autoAddLiquidityEnabled override must be boolean");
+      }
+      normalized.autoAddLiquidityEnabled = value;
     }
 
     if (overrides.hedgeEnabled != null) {
@@ -928,6 +1064,29 @@ export class PoolManager {
           throw new Error("trendTargetDown override must be sol, other, tokenA, or tokenB");
         }
         next.trendTargetDown = value.startsWith("token") ? (value.replace("_", "").toLowerCase() === "tokena" ? "tokenA" : "tokenB") : (value as PoolOverrides["trendTargetDown"]);
+      }
+    }
+
+    if ("autoAddLiquidityEnabled" in updates) {
+      if (updates.autoAddLiquidityEnabled == null) {
+        delete next.autoAddLiquidityEnabled;
+      } else {
+        const raw = updates.autoAddLiquidityEnabled as unknown;
+        let value: boolean | null = null;
+        if (typeof raw === "boolean") {
+          value = raw;
+        } else if (typeof raw === "string") {
+          const normalizedValue = String(raw).trim().toLowerCase();
+          if (["1", "true", "yes", "on", "sim"].includes(normalizedValue)) {
+            value = true;
+          } else if (["0", "false", "no", "off", "nao"].includes(normalizedValue)) {
+            value = false;
+          }
+        }
+        if (value === null) {
+          throw new Error("autoAddLiquidityEnabled override must be boolean");
+        }
+        next.autoAddLiquidityEnabled = value;
       }
     }
 
