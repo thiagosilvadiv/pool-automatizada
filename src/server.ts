@@ -338,6 +338,11 @@ export async function startServer(config: Config): Promise<void> {
     res.json(poolManager.getSelectedHedgeLogs());
   });
 
+  app.post("/api/hedge-logs/clear", (_req: Request, res: Response) => {
+    poolManager.clearSelectedHedgeLogs();
+    res.json({ ok: true });
+  });
+
   app.get("/api/history/:id", (req: Request, res: Response) => {
     const id = req.params.id;
     if (!poolManager.hasPool(id)) {
