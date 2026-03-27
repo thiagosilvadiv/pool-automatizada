@@ -389,12 +389,15 @@ export class BotRunner {
     this.inFlight = true;
     const wasRunning = this.running;
     let closed = false;
+    let status: BotStatus | null = null;
     try {
-      await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
-      closed = true;
-      this.lastHedgeClose = await this.hedgeManager.closeIfOpen();
+      status = await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
+      closed = status.lastAction === "close-position";
+      if (closed) {
+        this.lastHedgeClose = await this.hedgeManager.closeIfOpen();
+      }
       this.lastTickAt = new Date().toISOString();
-      this.recordEvent(this.bot.getStatus());
+      this.recordEvent(status);
     } catch (err) {
       logger.error({ err, mode }, "close-position failed");
       this.bot.setError(err);
