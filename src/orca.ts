@@ -454,6 +454,15 @@ export class OrcaBot {
     this.currentPosition = null;
     this.currentPositionMint = null;
     this.missingPositionSince = null;
+    await this.loadExistingPosition();
+    if (this.currentPosition) {
+      logger.error({ price, positionRange }, "position still open after rebalance close; aborting open");
+      this.setError("Fechamento falhou: posição ainda aberta");
+      this.lastStatus.lastAction = "close-failed";
+      this.lastStatus.positionRange = await this.getPositionRange(this.currentPosition);
+      this.lastStatus.positionMint = this.currentPositionMint;
+      return this.getStatus();
+    }
     const result = await this.openPosition(range, price, solUsdPrice);
     this.lastStatus.lastAction = result === "open-position" ? "rebalanced" : result;
     if (result === "open-position") {
@@ -491,6 +500,10 @@ export class OrcaBot {
       : null;
 
     if (!this.currentPosition) {
+      await this.loadExistingPosition();
+    }
+
+    if (!this.currentPosition) {
       this.lastStatus.lastAction = "close-no-position";
       return this.getStatus();
     }
@@ -501,6 +514,15 @@ export class OrcaBot {
     this.currentPosition = null;
     this.currentPositionMint = null;
     this.missingPositionSince = null;
+    await this.loadExistingPosition();
+    if (this.currentPosition) {
+      logger.error("position still open after manual close; retry required");
+      this.setError("Fechamento falhou: posição ainda aberta");
+      this.lastStatus.lastAction = "close-failed";
+      this.lastStatus.positionRange = await this.getPositionRange(this.currentPosition);
+      this.lastStatus.positionMint = this.currentPositionMint;
+      return this.getStatus();
+    }
     await this.updatePortfolioSnapshot(price, solUsdPrice);
 
     this.lastStatus.lastAction = "close-position";

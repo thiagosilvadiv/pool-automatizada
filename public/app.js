@@ -138,6 +138,7 @@ const actionLabels = {
   "manual-sol-topup": "top-up SOL (manual)",
   "manual-swap-to-sol": "converter tokens para SOL",
   "resume-position": "monitorando posição existente",
+  "close-failed": "fechamento falhou",
   "reload-position": "recarregar posição",
   "out-of-range-wait": "aguardando confirmação fora da faixa",
   "cooldown-wait": "aguardando cooldown",
