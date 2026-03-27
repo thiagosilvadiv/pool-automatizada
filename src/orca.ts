@@ -601,6 +601,30 @@ export class OrcaBot {
       usableB = Math.min(usableB, this.config.maxTokenB);
     }
 
+    const valueCap = usableB + usableA * price;
+    const valueCapUsd = Number.isFinite(valueCap) && valueCap > 0 ? valueCap : null;
+    const applyValueCap = (nextBalances: { tokenA: number; tokenB: number }) => {
+      let capA = Number.isFinite(nextBalances.tokenA) && nextBalances.tokenA > 0 ? nextBalances.tokenA : 0;
+      let capB = Number.isFinite(nextBalances.tokenB) && nextBalances.tokenB > 0 ? nextBalances.tokenB : 0;
+      if (this.config.maxTokenA != null) {
+        capA = Math.min(capA, this.config.maxTokenA);
+      }
+      if (this.config.maxTokenB != null) {
+        capB = Math.min(capB, this.config.maxTokenB);
+      }
+      if (valueCapUsd != null) {
+        const currentValue = capB + capA * price;
+        if (currentValue > 0) {
+          const factor = Math.min(1, valueCapUsd / currentValue);
+          capA *= factor;
+          capB *= factor;
+        }
+      }
+      return { usableA: capA, usableB: capB };
+    };
+
+    ({ usableA, usableB } = applyValueCap(balances));
+
     if (usableA <= 0 && usableB <= 0) {
       const message = "saldo insuficiente para adicionar liquidez";
       this.setError(message);
@@ -638,27 +662,8 @@ export class OrcaBot {
     const swapped = await this.rebalanceToTarget(usableA, usableB, targetA, targetB, price, slippage);
     if (swapped) {
       balances = await this.getTokenBalances();
-      usableA = options.maxTokenA != null ? Number(options.maxTokenA) : balances.tokenA * effectiveShare;
-      usableB = options.maxTokenB != null ? Number(options.maxTokenB) : balances.tokenB * effectiveShare;
-      if (!Number.isFinite(usableA) || usableA < 0) {
-        usableA = 0;
-      }
-      if (!Number.isFinite(usableB) || usableB < 0) {
-        usableB = 0;
-      }
-      if (options.maxTokenA != null) {
-        usableA = Math.min(usableA, balances.tokenA);
-      }
-      if (options.maxTokenB != null) {
-        usableB = Math.min(usableB, balances.tokenB);
-      }
-      if (this.config.maxTokenA != null) {
-        usableA = Math.min(usableA, this.config.maxTokenA);
-      }
-      if (this.config.maxTokenB != null) {
-        usableB = Math.min(usableB, this.config.maxTokenB);
-      }
     }
+    ({ usableA, usableB } = applyValueCap(balances));
 
     if (usableA <= 0 && usableB <= 0) {
       const message = "saldo insuficiente apos swap";
