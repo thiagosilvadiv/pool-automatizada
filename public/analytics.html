@@ -146,11 +146,11 @@
             </label>
             <label class="metric-toggle is-checked">
               <input type="checkbox" data-series="pnlTotal" checked />
-              <span>PnL com hedge</span>
+              <span>PnL com hedge e Taxas</span>
             </label>
             <label class="metric-toggle is-checked">
               <input type="checkbox" data-series="pnlTotalNet" checked />
-              <span>PnL total sem taxas (USD)</span>
+              <span>PnL total com hedge sem taxas (USD)</span>
             </label>
             <label class="metric-toggle is-checked">
               <input type="checkbox" data-series="pnlCum" checked />
@@ -161,6 +161,20 @@
               <span>PnL sem taxas acumulado</span>
             </label>
           </div>
+          <details class="metric-help">
+            <summary>O que significa cada métrica?</summary>
+            <div class="metric-help-list">
+              <p><strong>Taxas:</strong> taxas coletadas no período.</p>
+              <p><strong>Taxas acumuladas:</strong> soma das taxas ao longo do período.</p>
+              <p><strong>Rendimento da taxa (%):</strong> taxa média diária sobre o capital de entrada.</p>
+              <p><strong>PnL:</strong> PnL da pool considerando taxas e TX.</p>
+              <p><strong>PnL sem taxas:</strong> PnL da pool sem descontar taxas.</p>
+              <p><strong>PnL com hedge e Taxas:</strong> PnL da pool (com taxas) + PnL do hedge.</p>
+              <p><strong>PnL total com hedge sem taxas (USD):</strong> PnL da pool sem taxas + PnL do hedge.</p>
+              <p><strong>PnL acumulado:</strong> soma do PnL da pool ao longo do período.</p>
+              <p><strong>PnL sem taxas acumulado:</strong> soma do PnL da pool sem taxas no período.</p>
+            </div>
+          </details>
         </div>
         <div class="performance-wrap">
           <canvas id="perfCanvas" class="performance-canvas"></canvas>
@@ -173,8 +187,8 @@
           <span><i class="legend-swatch feeYieldPct"></i> Rendimento da taxa (%)</span>
           <span><i class="legend-swatch pnl"></i> PnL</span>
           <span><i class="legend-swatch pnlNet"></i> PnL sem taxas</span>
-          <span><i class="legend-swatch pnlTotal"></i> PnL com hedge</span>
-          <span><i class="legend-swatch pnlTotalNet"></i> PnL total sem taxas (USD)</span>
+          <span><i class="legend-swatch pnlTotal"></i> PnL com hedge e Taxas</span>
+          <span><i class="legend-swatch pnlTotalNet"></i> PnL total com hedge sem taxas (USD)</span>
           <span><i class="legend-swatch pnlCum"></i> PnL acumulado</span>
           <span><i class="legend-swatch pnlNetCum"></i> PnL sem taxas acumulado</span>
         </div>
