@@ -460,6 +460,44 @@ button.danger:not(.ghost):hover {
   font-size: 12px;
 }
 
+.metric-help {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.metric-help summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid #2c3a4a;
+  background: rgba(15, 20, 25, 0.6);
+  color: var(--text);
+}
+
+.metric-help summary::-webkit-details-marker {
+  display: none;
+}
+
+.metric-help-list {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #243142;
+  background: #0f1419;
+  color: var(--muted);
+  max-width: 520px;
+}
+
+.metric-help-list p {
+  margin: 0 0 8px;
+}
+
+.metric-help-list p:last-child {
+  margin-bottom: 0;
+}
+
 .metric-toggle {
   display: inline-flex;
   align-items: center;

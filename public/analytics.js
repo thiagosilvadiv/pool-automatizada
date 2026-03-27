@@ -120,8 +120,8 @@ const perfMetricLabels = {
   feeYieldPct: "Rendimento da taxa (%)",
   pnl: "PnL",
   pnlNet: "PnL sem taxas",
-  pnlTotal: "PnL com hedge",
-  pnlTotalNet: "PnL total sem taxas (USD)",
+  pnlTotal: "PnL com hedge e Taxas",
+  pnlTotalNet: "PnL total com hedge sem taxas (USD)",
   pnlCum: "PnL acumulado",
   pnlNetCum: "PnL sem taxas acumulado"
 };
