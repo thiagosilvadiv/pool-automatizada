@@ -115,6 +115,21 @@ export type HistoryEvent = {
   hedgePnlUsd: number | null;
 };
 
+export type HedgeLogEntry = {
+  id: string;
+  timestamp: string;
+  level: "info" | "warn" | "error";
+  action: "open" | "close" | "open-failed" | "close-failed";
+  message: string;
+  symbol: string | null;
+  qty: number | null;
+  notionalUsd: number | null;
+  leverage: number | null;
+  pnlUsd: number | null;
+};
+
+const MAX_HEDGE_LOGS = 80;
+
 export class BotRunner {
   private bot: OrcaBot;
   private config: Config;
@@ -127,7 +142,9 @@ export class BotRunner {
   private lastEventPortfolioValue: number | null = null;
   private lastEventPortfolioUsd: number | null = null;
   private historyLoaded = false;
+  private hedgeLogs: HedgeLogEntry[] = [];
   private eventIdSeed = Math.floor(Math.random() * 1_000_000);
+  private logIdSeed = Math.floor(Math.random() * 1_000_000);
   private openedAtByMint = new Map<string, string>();
   private entryByMint = new Map<string, number>();
   private trendByMint = new Map<string, "up" | "down">();
@@ -273,6 +290,10 @@ export class BotRunner {
     return [...this.history].reverse();
   }
 
+  getHedgeLogs(): HedgeLogEntry[] {
+    return [...this.hedgeLogs].reverse();
+  }
+
   async clearHistory(): Promise<void> {
     this.history = [];
     this.lastEventPortfolioValue = null;
@@ -361,6 +382,14 @@ export class BotRunner {
         }
         if (hadHedge) {
           hedgeCloseForRebalance = await this.hedgeManager.closeIfOpen();
+          if (hedgeCloseForRebalance) {
+            this.logHedgeClose(hedgeCloseForRebalance, "Hedge fechado para re-range");
+          } else {
+            const errMessage = this.hedgeManager.getLastError();
+            if (errMessage) {
+              this.logHedgeError("close-failed", `Falha ao fechar hedge: ${errMessage}`, this.config.hedgeSymbol);
+            }
+          }
         }
       }
 
@@ -368,6 +397,13 @@ export class BotRunner {
       const allowHedgeOpen = !isRebalanced || !hadHedge || hedgeCloseForRebalance != null;
       if (this.config.hedgeEnabled && allowHedgeOpen) {
         hedgeResult = await this.hedgeManager.ensureOpen(status);
+        if (hedgeResult.status === "opened") {
+          const message = isRebalanced ? "Hedge aberto apos re-range" : "Hedge aberto";
+          this.logHedgeOpen(message);
+        } else if (hedgeResult.status === "failed") {
+          const reason = hedgeResult.error ?? this.hedgeManager.getLastError() ?? "Falha ao abrir hedge";
+          this.logHedgeError("open-failed", `Falha ao abrir hedge: ${reason}`, this.config.hedgeSymbol);
+        }
       }
 
       if (this.config.hedgeEnabled && status.positionMint && !this.hedgeManager.getState()?.active) {
@@ -378,6 +414,14 @@ export class BotRunner {
           try {
             await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
             this.lastHedgeClose = await this.hedgeManager.closeIfOpen();
+            if (this.lastHedgeClose) {
+              this.logHedgeClose(this.lastHedgeClose, "Hedge fechado apos falha");
+            } else {
+              const errMessage = this.hedgeManager.getLastError();
+              if (errMessage) {
+                this.logHedgeError("close-failed", `Falha ao fechar hedge: ${errMessage}`, this.config.hedgeSymbol);
+              }
+            }
           } catch (err) {
             logger.error({ err }, "auto-close after hedge failure failed");
             this.bot.setError(err);
@@ -414,6 +458,14 @@ export class BotRunner {
       closed = status.lastAction === "close-position";
       if (closed) {
         this.lastHedgeClose = await this.hedgeManager.closeIfOpen();
+        if (this.lastHedgeClose) {
+          this.logHedgeClose(this.lastHedgeClose, "Hedge fechado junto da pool");
+        } else {
+          const errMessage = this.hedgeManager.getLastError();
+          if (errMessage) {
+            this.logHedgeError("close-failed", `Falha ao fechar hedge: ${errMessage}`, this.config.hedgeSymbol);
+          }
+        }
       }
       this.lastTickAt = new Date().toISOString();
       this.recordEvent(status);
@@ -995,6 +1047,74 @@ export class BotRunner {
         break;
       }
     }
+  }
+
+  private addHedgeLog(entry: Omit<HedgeLogEntry, "id" | "timestamp"> & { timestamp?: string }): void {
+    const timestamp = entry.timestamp ?? new Date().toISOString();
+    const log: HedgeLogEntry = {
+      id: this.createLogId(timestamp),
+      timestamp,
+      level: entry.level,
+      action: entry.action,
+      message: entry.message,
+      symbol: entry.symbol ?? null,
+      qty: entry.qty ?? null,
+      notionalUsd: entry.notionalUsd ?? null,
+      leverage: entry.leverage ?? null,
+      pnlUsd: entry.pnlUsd ?? null
+    };
+    this.hedgeLogs.push(log);
+    if (this.hedgeLogs.length > MAX_HEDGE_LOGS) {
+      this.hedgeLogs.splice(0, this.hedgeLogs.length - MAX_HEDGE_LOGS);
+    }
+  }
+
+  private logHedgeOpen(message: string): void {
+    const state = this.hedgeManager.getState();
+    this.addHedgeLog({
+      level: "info",
+      action: "open",
+      message,
+      symbol: state?.symbol ?? null,
+      qty: state?.qty ?? null,
+      notionalUsd: state?.notionalUsd ?? null,
+      leverage: state?.leverage ?? null,
+      pnlUsd: null
+    });
+  }
+
+  private logHedgeClose(result: HedgeCloseResult, message: string): void {
+    this.addHedgeLog({
+      level: "info",
+      action: "close",
+      message,
+      symbol: result.symbol ?? null,
+      qty: result.qty ?? null,
+      notionalUsd: result.notionalUsd ?? null,
+      leverage: result.leverage ?? null,
+      pnlUsd: result.pnlUsd ?? null,
+      timestamp: result.closedAt ?? undefined
+    });
+  }
+
+  private logHedgeError(action: "open-failed" | "close-failed", message: string, symbol?: string | null): void {
+    this.addHedgeLog({
+      level: "error",
+      action,
+      message,
+      symbol: symbol ? String(symbol).trim().toUpperCase() : null,
+      qty: null,
+      notionalUsd: null,
+      leverage: null,
+      pnlUsd: null
+    });
+  }
+
+  private createLogId(timestamp: string): string {
+    const parsed = Date.parse(timestamp);
+    const timePart = Number.isFinite(parsed) ? parsed.toString(36) : Date.now().toString(36);
+    const rand = (this.logIdSeed++ % 1_000_000).toString(36);
+    return `log_${timePart}_${rand}`;
   }
 
   private createEventId(timestamp: string): string {

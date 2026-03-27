@@ -30,6 +30,7 @@ const confirmSecEl = document.getElementById("confirmSec");
 const cooldownSecEl = document.getElementById("cooldownSec");
 const dryRunEl = document.getElementById("dryRun");
 const historyBody = document.getElementById("historyBody");
+const hedgeLogBody = document.getElementById("hedgeLogBody");
 const poolNameLabel = document.getElementById("poolNameLabel");
 const hedgeSymbolsList = document.getElementById("hedgeSymbolsList");
 
@@ -153,6 +154,19 @@ const actionTypeLabels = {
   "fechamento + abertura": "Fechamento + abertura",
   "monitorando": "Monitorando",
   "operacional": "Operacional"
+};
+
+const hedgeLogActionLabels = {
+  "open": "Abertura",
+  "close": "Fechamento",
+  "open-failed": "Falha abertura",
+  "close-failed": "Falha fechamento"
+};
+
+const hedgeLogLevelLabels = {
+  "info": "Info",
+  "warn": "Aviso",
+  "error": "Erro"
 };
 
 function formatRange(range) {
@@ -407,6 +421,11 @@ async function fetchConfig() {
 
 async function fetchHistory() {
   const res = await fetch("/api/history");
+  return res.json();
+}
+
+async function fetchHedgeLogs() {
+  const res = await fetch("/api/hedge-logs");
   return res.json();
 }
 
@@ -830,6 +849,35 @@ function renderHistory(items) {
   updateHistorySelectionState();
 }
 
+function renderHedgeLogs(items) {
+  if (!hedgeLogBody) {
+    return;
+  }
+  if (!Array.isArray(items) || items.length === 0) {
+    hedgeLogBody.innerHTML = "<tr><td colspan=\"9\">Sem eventos ainda</td></tr>";
+    return;
+  }
+  const rows = items.slice(0, 60).map((item) => {
+    const levelLabel = hedgeLogLevelLabels[item.level] ?? item.level ?? "-";
+    const actionLabel = hedgeLogActionLabels[item.action] ?? item.action ?? "-";
+    const message = escapeHtml(item.message ?? "-");
+    return `
+      <tr class="hedge-log hedge-log-${item.level ?? "info"}">
+        <td>${formatTimestamp(item.timestamp)}</td>
+        <td>${levelLabel}</td>
+        <td>${actionLabel}</td>
+        <td>${escapeHtml(item.symbol ?? "-")}</td>
+        <td>${formatNumber(item.qty, 4)}</td>
+        <td>${formatNumber(item.notionalUsd, 2)}</td>
+        <td>${formatNumber(item.leverage, 2)}</td>
+        <td>${formatNumber(item.pnlUsd, 2)}</td>
+        <td>${message}</td>
+      </tr>
+    `;
+  });
+  hedgeLogBody.innerHTML = rows.join("");
+}
+
 function renderPools(data, config) {
   closeActiveActionMenu();
   const pools = data?.pools ?? [];
@@ -942,11 +990,12 @@ function renderResults(data) {
 
 async function updateUI() {
   try {
-    const [status, config, history, pools] = await Promise.all([
+    const [status, config, history, pools, hedgeLogs] = await Promise.all([
       fetchStatus(),
       fetchConfig(),
       fetchHistory(),
-      fetchPools()
+      fetchPools(),
+      fetchHedgeLogs()
     ]);
     cachedHistory = Array.isArray(history) ? history : [];
 
@@ -1015,6 +1064,7 @@ async function updateUI() {
     updateTrendHint(poolTrendHint, tokenInfo);
 
     renderHistory(history);
+    renderHedgeLogs(hedgeLogs);
     renderPools(pools, config);
     renderResults(pools);
   } catch (err) {

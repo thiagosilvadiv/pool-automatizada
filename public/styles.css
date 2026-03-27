@@ -920,6 +920,14 @@ tbody tr:nth-child(even) {
   background: rgba(255, 255, 255, 0.02);
 }
 
+.hedge-log-error td {
+  color: var(--danger);
+}
+
+.hedge-log-warn td {
+  color: var(--warn);
+}
+
 @media (max-width: 720px) {
   .row {
     flex-wrap: wrap;
