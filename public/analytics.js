@@ -97,9 +97,9 @@ const perfMetricDefaults = {
   pnl: true,
   pnlNet: true,
   pnlTotal: true,
+  pnlTotalNet: true,
   pnlCum: true,
-  pnlNetCum: true,
-  pnlTotalCum: false
+  pnlNetCum: true
 };
 
 const perfMetricOrder = [
@@ -109,9 +109,9 @@ const perfMetricOrder = [
   "pnl",
   "pnlNet",
   "pnlTotal",
+  "pnlTotalNet",
   "pnlCum",
-  "pnlNetCum",
-  "pnlTotalCum"
+  "pnlNetCum"
 ];
 
 const perfMetricLabels = {
@@ -121,9 +121,9 @@ const perfMetricLabels = {
   pnl: "PnL",
   pnlNet: "PnL sem taxas",
   pnlTotal: "PnL com hedge",
+  pnlTotalNet: "PnL total sem taxas (USD)",
   pnlCum: "PnL acumulado",
-  pnlNetCum: "PnL sem taxas acumulado",
-  pnlTotalCum: "PnL com hedge acumulado"
+  pnlNetCum: "PnL sem taxas acumulado"
 };
 
 const perfMetricColors = {
@@ -133,9 +133,9 @@ const perfMetricColors = {
   pnl: "#36d399",
   pnlNet: "#4ea1ff",
   pnlTotal: "#f472b6",
+  pnlTotalNet: "#fb7185",
   pnlCum: "#36d399",
-  pnlNetCum: "#4ea1ff",
-  pnlTotalCum: "rgba(244, 114, 182, 0.6)"
+  pnlNetCum: "#4ea1ff"
 };
 
 let perfGroup = loadPerfGroup();
@@ -603,7 +603,8 @@ function aggregatePerformance(items, group) {
       fees: 0,
       pnl: 0,
       pnlNet: 0,
-      pnlTotal: 0
+      pnlTotal: 0,
+      pnlTotalNet: 0
     };
     const fees = Number(item.positionFeesUsd) || 0;
     const pnlRaw = Number(item.positionPnlUsd);
@@ -621,21 +622,21 @@ function aggregatePerformance(items, group) {
       bucket.entrySum += entryUsd;
       bucket.entryCount += 1;
     }
+    const pnlNet = pnl - fees;
     bucket.pnl += pnl;
-    bucket.pnlNet += pnl - fees;
+    bucket.pnlNet += pnlNet;
     bucket.pnlTotal += pnl + hedgePnl;
+    bucket.pnlTotalNet += pnlNet + hedgePnl;
     buckets.set(key, bucket);
   });
   const series = Array.from(buckets.values()).sort((a, b) => a.date - b.date);
   let runningPnl = 0;
   let runningNet = 0;
   let runningFees = 0;
-  let runningTotal = 0;
   return series.map((entry) => {
     runningPnl += entry.pnl;
     runningNet += entry.pnlNet;
     runningFees += entry.fees;
-    runningTotal += entry.pnlTotal;
     return {
       label: labelForBucket(entry.date, group),
       fees: entry.fees,
@@ -643,10 +644,10 @@ function aggregatePerformance(items, group) {
       pnl: entry.pnl,
       pnlNet: entry.pnlNet,
       pnlTotal: entry.pnlTotal,
+      pnlTotalNet: entry.pnlTotalNet,
       feesCum: runningFees,
       pnlCum: runningPnl,
-      pnlNetCum: runningNet,
-      pnlTotalCum: runningTotal
+      pnlNetCum: runningNet
     };
   });
 }
