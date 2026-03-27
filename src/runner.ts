@@ -877,9 +877,17 @@ export class BotRunner {
 
   private pushEvent(event: HistoryEvent): void {
     if ((event.action === "resume-position" || event.action === "skip-low-sol-position") && this.history.length > 0) {
-      const last = this.history[this.history.length - 1];
-      if (last?.action === event.action && last?.positionMint === event.positionMint) {
-        this.history[this.history.length - 1] = { ...event, id: last.id, timestamp: last.timestamp };
+      let matchIndex = -1;
+      for (let i = this.history.length - 1; i >= 0; i -= 1) {
+        const candidate = this.history[i];
+        if (candidate?.action === event.action && candidate?.positionMint === event.positionMint) {
+          matchIndex = i;
+          break;
+        }
+      }
+      if (matchIndex >= 0) {
+        const previous = this.history[matchIndex];
+        this.history[matchIndex] = { ...event, id: previous.id, timestamp: previous.timestamp };
         if (event.positionMint && typeof event.positionEntryUsd === "number") {
           if (isEntryUsdSane(event.positionEntryUsd, event.budgetUsd ?? null, event.portfolioUsd ?? null, {
             minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
