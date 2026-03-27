@@ -387,10 +387,11 @@ export class BotRunner {
       return this.getStatus();
     }
     this.inFlight = true;
-    this.pendingClose = false;
-    this.pendingCloseRequestedAt = null;
+    const wasRunning = this.running;
+    let closed = false;
     try {
       await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
+      closed = true;
       this.lastHedgeClose = await this.hedgeManager.closeIfOpen();
       this.lastTickAt = new Date().toISOString();
       this.recordEvent(this.bot.getStatus());
@@ -400,11 +401,21 @@ export class BotRunner {
     } finally {
       this.inFlight = false;
     }
-    if (this.running) {
-      this.stop();
+    if (closed) {
+      this.pendingClose = false;
+      this.pendingCloseRequestedAt = null;
+      if (this.running) {
+        this.stop();
+      }
+    } else if (wasRunning) {
+      this.pendingClose = true;
+      if (!this.pendingCloseRequestedAt) {
+        this.pendingCloseRequestedAt = new Date().toISOString();
+      }
+    } else {
+      this.pendingClose = false;
+      this.pendingCloseRequestedAt = null;
     }
-    this.pendingClose = false;
-    this.pendingCloseRequestedAt = null;
     return this.getStatus();
   }
 
