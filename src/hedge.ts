@@ -313,7 +313,22 @@ export class HedgeManager {
           closeQty,
           orderId: closeOrder.orderId ?? undefined
         });
-        pnlUsd = closed?.pnlUsd ?? null;
+        const closedPnl = closed?.pnlUsd ?? null;
+        if (closedPnl != null && Number.isFinite(closedPnl)) {
+          let feeTotal = 0;
+          let hasFee = false;
+          if (Number.isFinite(closed?.openFeeUsd ?? NaN)) {
+            feeTotal += Number(closed?.openFeeUsd ?? 0);
+            hasFee = true;
+          }
+          if (Number.isFinite(closed?.closeFeeUsd ?? NaN)) {
+            feeTotal += Number(closed?.closeFeeUsd ?? 0);
+            hasFee = true;
+          }
+          pnlUsd = closedPnl - (hasFee ? feeTotal : 0);
+        } else {
+          pnlUsd = closedPnl;
+        }
       } catch (err) {
         logger.warn({ err }, "failed to fetch closed pnl");
       }
@@ -389,7 +404,22 @@ export class HedgeManager {
           closeQty: size,
           orderId: closeOrder.orderId ?? undefined
         });
-        pnlUsd = closed?.pnlUsd ?? null;
+        const closedPnl = closed?.pnlUsd ?? null;
+        if (closedPnl != null && Number.isFinite(closedPnl)) {
+          let feeTotal = 0;
+          let hasFee = false;
+          if (Number.isFinite(closed?.openFeeUsd ?? NaN)) {
+            feeTotal += Number(closed?.openFeeUsd ?? 0);
+            hasFee = true;
+          }
+          if (Number.isFinite(closed?.closeFeeUsd ?? NaN)) {
+            feeTotal += Number(closed?.closeFeeUsd ?? 0);
+            hasFee = true;
+          }
+          pnlUsd = closedPnl - (hasFee ? feeTotal : 0);
+        } else {
+          pnlUsd = closedPnl;
+        }
       } catch (err) {
         logger.warn({ err }, "failed to fetch closed pnl");
       }
