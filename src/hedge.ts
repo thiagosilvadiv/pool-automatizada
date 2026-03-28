@@ -11,6 +11,7 @@ export type HedgeState = {
   leverage: number;
   openedAt: string;
   entryPrice: number;
+  openOrderId?: string | null;
 };
 
 export type HedgeCloseResult = {
@@ -105,7 +106,8 @@ export class HedgeManager {
         notionalUsd,
         leverage,
         openedAt: new Date().toISOString(),
-        entryPrice: Number.isFinite(avgPrice) ? avgPrice : 0
+        entryPrice: Number.isFinite(avgPrice) ? avgPrice : 0,
+        openOrderId: null
       };
       this.setError(null);
       logger.info({ symbol, qty: size }, "hedge synced from bybit");
@@ -225,7 +227,7 @@ export class HedgeManager {
         return { status: "failed", error: message };
       }
       await this.client.setLeverage(symbol, leverage);
-      await this.client.placeOrder({ symbol, side: "Sell", qty, reduceOnly: false });
+      const openOrder = await this.client.placeOrder({ symbol, side: "Sell", qty, reduceOnly: false });
       const openedAt = new Date().toISOString();
       this.state = {
         active: true,
@@ -234,7 +236,8 @@ export class HedgeManager {
         notionalUsd,
         leverage,
         openedAt,
-        entryPrice: ticker.lastPrice
+        entryPrice: ticker.lastPrice,
+        openOrderId: openOrder.orderId ?? null
       };
       this.setError(null);
       logger.info({ symbol, qty, notionalUsd, leverage }, "hedge opened");
@@ -309,6 +312,7 @@ export class HedgeManager {
       const closeAtMs = Date.now();
       let pnlUsd: number | null = null;
       let feesUsd: number | null = null;
+      let appliedFees = false;
       try {
         const closed = await this.client.getClosedPnl(state.symbol, {
           openedAfterMs: Number.isFinite(openedAtMs) ? openedAtMs : undefined,
@@ -330,11 +334,41 @@ export class HedgeManager {
           }
           feesUsd = hasFee ? feeTotal : null;
           pnlUsd = closedPnl - (hasFee ? feeTotal : 0);
+          appliedFees = hasFee;
         } else {
           pnlUsd = closedPnl;
         }
       } catch (err) {
         logger.warn({ err }, "failed to fetch closed pnl");
+      }
+      if (feesUsd == null) {
+        try {
+          let feeTotal = 0;
+          let hasFee = false;
+          if (state.openOrderId) {
+            const openFee = await this.client.getExecutionFees(state.symbol, { orderId: state.openOrderId });
+            if (openFee != null && Number.isFinite(openFee)) {
+              feeTotal += openFee;
+              hasFee = true;
+            }
+          }
+          if (closeOrder.orderId) {
+            const closeFee = await this.client.getExecutionFees(state.symbol, { orderId: closeOrder.orderId });
+            if (closeFee != null && Number.isFinite(closeFee)) {
+              feeTotal += closeFee;
+              hasFee = true;
+            }
+          }
+          if (hasFee) {
+            feesUsd = feeTotal;
+            if (pnlUsd != null && Number.isFinite(pnlUsd) && !appliedFees) {
+              pnlUsd -= feeTotal;
+              appliedFees = true;
+            }
+          }
+        } catch (err) {
+          logger.warn({ err }, "failed to fetch execution fees");
+        }
       }
       if (pnlUsd == null) {
         try {
@@ -343,6 +377,10 @@ export class HedgeManager {
         } catch (err) {
           logger.warn({ err }, "failed to estimate hedge pnl");
         }
+      }
+      if (pnlUsd != null && Number.isFinite(pnlUsd) && feesUsd != null && !appliedFees) {
+        pnlUsd -= feesUsd;
+        appliedFees = true;
       }
       const closedAt = new Date().toISOString();
       const result: HedgeCloseResult = {
@@ -404,6 +442,7 @@ export class HedgeManager {
       const closeAtMs = Date.now();
       let pnlUsd: number | null = null;
       let feesUsd: number | null = null;
+      let appliedFees = false;
       try {
         const closed = await this.client.getClosedPnl(symbol, {
           closeAtMs,
@@ -424,11 +463,34 @@ export class HedgeManager {
           }
           feesUsd = hasFee ? feeTotal : null;
           pnlUsd = closedPnl - (hasFee ? feeTotal : 0);
+          appliedFees = hasFee;
         } else {
           pnlUsd = closedPnl;
         }
       } catch (err) {
         logger.warn({ err }, "failed to fetch closed pnl");
+      }
+      if (feesUsd == null) {
+        try {
+          let feeTotal = 0;
+          let hasFee = false;
+          if (closeOrder.orderId) {
+            const closeFee = await this.client.getExecutionFees(symbol, { orderId: closeOrder.orderId });
+            if (closeFee != null && Number.isFinite(closeFee)) {
+              feeTotal += closeFee;
+              hasFee = true;
+            }
+          }
+          if (hasFee) {
+            feesUsd = feeTotal;
+            if (pnlUsd != null && Number.isFinite(pnlUsd) && !appliedFees) {
+              pnlUsd -= feeTotal;
+              appliedFees = true;
+            }
+          }
+        } catch (err) {
+          logger.warn({ err }, "failed to fetch execution fees");
+        }
       }
       if (pnlUsd == null) {
         try {
@@ -440,6 +502,10 @@ export class HedgeManager {
         } catch (err) {
           logger.warn({ err }, "failed to estimate hedge pnl");
         }
+      }
+      if (pnlUsd != null && Number.isFinite(pnlUsd) && feesUsd != null && !appliedFees) {
+        pnlUsd -= feesUsd;
+        appliedFees = true;
       }
       const positionValue = Number(position?.positionValue ?? NaN);
       const avgPrice = Number(position?.avgPrice ?? NaN);
