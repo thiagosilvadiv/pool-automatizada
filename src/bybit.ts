@@ -54,6 +54,13 @@ type BybitInstrumentPage = {
   nextPageCursor?: string;
 };
 
+type BybitExecution = {
+  symbol?: string;
+  orderId?: string;
+  execFee?: string;
+  execTime?: string;
+};
+
 class BybitError extends Error {
   code: number | string;
   method: string;
@@ -346,5 +353,37 @@ export class BybitClient {
       openFeeUsd: Number.isFinite(selected.openFee) ? selected.openFee : undefined,
       closeFeeUsd: Number.isFinite(selected.closeFee) ? selected.closeFee : undefined
     };
+  }
+
+  async getExecutionFees(
+    symbol: string,
+    options?: { orderId?: string; startTime?: number; endTime?: number }
+  ): Promise<number | null> {
+    const params: Record<string, string | number | boolean | undefined | null> = {
+      category: "linear",
+      symbol,
+      limit: 100
+    };
+    if (options?.orderId) {
+      params.orderId = options.orderId;
+    }
+    if (options?.startTime != null && Number.isFinite(options.startTime)) {
+      params.startTime = Math.max(0, Math.floor(options.startTime));
+    }
+    if (options?.endTime != null && Number.isFinite(options.endTime)) {
+      params.endTime = Math.max(0, Math.floor(options.endTime));
+    }
+    const result = await this.request<{ list: BybitExecution[] }>("GET", "/v5/execution/list", params);
+    const list = Array.isArray(result.list) ? result.list : [];
+    let feeTotal = 0;
+    let hasFee = false;
+    for (const item of list) {
+      const fee = Number(item?.execFee ?? NaN);
+      if (Number.isFinite(fee)) {
+        feeTotal += fee;
+        hasFee = true;
+      }
+    }
+    return hasFee ? feeTotal : null;
   }
 }
