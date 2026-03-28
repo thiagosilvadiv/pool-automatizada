@@ -78,6 +78,7 @@ const analyticsColumnDefaults = {
   hedgeSymbol: true,
   hedgeNotional: true,
   hedgeLeverage: true,
+  hedgeFees: true,
   hedgePnl: true,
   pnlTotal: true,
   pnlTotalNet: true
@@ -343,7 +344,7 @@ async function fetchHistory(poolId) {
 
 function renderHistory(items) {
   if (!items || items.length === 0) {
-    historyBody.innerHTML = "<tr><td colspan=\"20\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"21\">Sem eventos ainda</td></tr>";
     return;
   }
   const limit = analyticsRowLimit ?? 30;
@@ -379,6 +380,7 @@ function renderHistory(items) {
         <td data-col="hedgeSymbol">${item.hedgeSymbol ?? "-"}</td>
         <td data-col="hedgeNotional">${formatNumber(item.hedgeNotionalUsd, 2)}</td>
         <td data-col="hedgeLeverage">${formatNumber(item.hedgeLeverage, 2)}</td>
+        <td data-col="hedgeFees">${formatNumber(item.hedgeFeesUsd, 2)}</td>
         <td data-col="hedgePnl">${formatNumber(item.hedgePnlUsd, 2)}</td>
         <td data-col="pnlTotal">${formatNumber(pnlTotal, 2)}</td>
         <td data-col="pnlTotalNet">${formatNumber(pnlTotalNet, 2)}</td>
