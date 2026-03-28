@@ -112,6 +112,7 @@ export type HistoryEvent = {
   hedgeSymbol: string | null;
   hedgeNotionalUsd: number | null;
   hedgeLeverage: number | null;
+  hedgeFeesUsd: number | null;
   hedgePnlUsd: number | null;
 };
 
@@ -654,6 +655,7 @@ export class BotRunner {
           hedgeSymbol: null,
           hedgeNotionalUsd: null,
           hedgeLeverage: null,
+          hedgeFeesUsd: null,
           hedgePnlUsd: null
         });
       }
@@ -725,6 +727,7 @@ export class BotRunner {
         hedgeSymbol: hedgeClose?.symbol ?? null,
         hedgeNotionalUsd: hedgeClose?.notionalUsd ?? null,
         hedgeLeverage: hedgeClose?.leverage ?? null,
+        hedgeFeesUsd: hedgeClose?.feesUsd ?? null,
         hedgePnlUsd: hedgeClose?.pnlUsd ?? null
       };
       this.pushEvent(closeEvent);
@@ -779,6 +782,7 @@ export class BotRunner {
         hedgeSymbol: null,
         hedgeNotionalUsd: null,
         hedgeLeverage: null,
+        hedgeFeesUsd: null,
         hedgePnlUsd: null
       };
       this.pushEvent(openEvent);
@@ -843,6 +847,7 @@ export class BotRunner {
       hedgeSymbol: hedgeClose?.symbol ?? null,
       hedgeNotionalUsd: hedgeClose?.notionalUsd ?? null,
       hedgeLeverage: hedgeClose?.leverage ?? null,
+      hedgeFeesUsd: hedgeClose?.feesUsd ?? null,
       hedgePnlUsd: hedgeClose?.pnlUsd ?? null
     };
     this.pushEvent(event);

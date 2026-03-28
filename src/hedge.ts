@@ -18,6 +18,7 @@ export type HedgeCloseResult = {
   qty: number;
   notionalUsd: number;
   leverage: number;
+  feesUsd: number | null;
   pnlUsd: number | null;
   closedAt: string;
 };
@@ -295,6 +296,7 @@ export class HedgeManager {
             qty: state.qty,
             notionalUsd: state.notionalUsd,
             leverage: state.leverage,
+            feesUsd: null,
             pnlUsd: null,
             closedAt: new Date().toISOString()
           };
@@ -306,6 +308,7 @@ export class HedgeManager {
       const openedAtMs = Date.parse(state.openedAt);
       const closeAtMs = Date.now();
       let pnlUsd: number | null = null;
+      let feesUsd: number | null = null;
       try {
         const closed = await this.client.getClosedPnl(state.symbol, {
           openedAfterMs: Number.isFinite(openedAtMs) ? openedAtMs : undefined,
@@ -325,6 +328,7 @@ export class HedgeManager {
             feeTotal += Number(closed?.closeFeeUsd ?? 0);
             hasFee = true;
           }
+          feesUsd = hasFee ? feeTotal : null;
           pnlUsd = closedPnl - (hasFee ? feeTotal : 0);
         } else {
           pnlUsd = closedPnl;
@@ -346,6 +350,7 @@ export class HedgeManager {
         qty: closeQty,
         notionalUsd: state.notionalUsd,
         leverage: state.leverage,
+        feesUsd,
         pnlUsd: pnlUsd != null && Number.isFinite(pnlUsd) ? pnlUsd : null,
         closedAt
       };
@@ -398,6 +403,7 @@ export class HedgeManager {
       const closeOrder = await this.client.placeOrder({ symbol, side: "Buy", qty: size, reduceOnly: true });
       const closeAtMs = Date.now();
       let pnlUsd: number | null = null;
+      let feesUsd: number | null = null;
       try {
         const closed = await this.client.getClosedPnl(symbol, {
           closeAtMs,
@@ -416,6 +422,7 @@ export class HedgeManager {
             feeTotal += Number(closed?.closeFeeUsd ?? 0);
             hasFee = true;
           }
+          feesUsd = hasFee ? feeTotal : null;
           pnlUsd = closedPnl - (hasFee ? feeTotal : 0);
         } else {
           pnlUsd = closedPnl;
@@ -449,6 +456,7 @@ export class HedgeManager {
         qty: size,
         notionalUsd,
         leverage,
+        feesUsd,
         pnlUsd: pnlUsd != null && Number.isFinite(pnlUsd) ? pnlUsd : null,
         closedAt: new Date().toISOString()
       };

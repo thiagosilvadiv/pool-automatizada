@@ -121,6 +121,7 @@ const historyColumnDefaults = {
   hedgeSymbol: true,
   hedgeNotional: true,
   hedgeLeverage: true,
+  hedgeFees: true,
   hedgePnl: true,
   pnlTotal: true,
   pnlTotalNet: true
@@ -361,6 +362,7 @@ function buildHistoryCsv(items) {
     "Hedge símbolo",
     "Hedge notional (USD)",
     "Hedge lev",
+    "Hedge taxas (USD)",
     "Hedge PnL (USD)",
     "PnL total (USD)",
     "PnL total sem taxas (USD)"
@@ -396,6 +398,7 @@ function buildHistoryCsv(items) {
       item.hedgeSymbol ?? "-",
       formatNumber(item.hedgeNotionalUsd, 2),
       formatNumber(item.hedgeLeverage, 2),
+      formatNumber(item.hedgeFeesUsd, 2),
       formatNumber(item.hedgePnlUsd, 2),
       formatNumber(pnlTotal, 2),
       formatNumber(pnlTotalNet, 2)
@@ -807,7 +810,7 @@ function renderHistory(items) {
   const filteredItems = applyHistoryTypeFilter(items);
   if (!filteredItems || filteredItems.length === 0) {
     selectedHistoryIds.clear();
-    historyBody.innerHTML = "<tr><td colspan=\"21\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"22\">Sem eventos ainda</td></tr>";
     updateHistorySelectionState();
     return;
   }
@@ -849,6 +852,7 @@ function renderHistory(items) {
         <td data-col="hedgeSymbol">${item.hedgeSymbol ?? "-"}</td>
         <td data-col="hedgeNotional">${formatNumber(item.hedgeNotionalUsd, 2)}</td>
         <td data-col="hedgeLeverage">${formatNumber(item.hedgeLeverage, 2)}</td>
+        <td data-col="hedgeFees">${formatNumber(item.hedgeFeesUsd, 2)}</td>
         <td data-col="hedgePnl">${formatNumber(item.hedgePnlUsd, 2)}</td>
         <td data-col="pnlTotal">${formatNumber(pnlTotal, 2)}</td>
         <td data-col="pnlTotalNet">${formatNumber(pnlTotalNet, 2)}</td>
