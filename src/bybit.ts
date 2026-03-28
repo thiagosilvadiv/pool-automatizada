@@ -44,6 +44,8 @@ type BybitClosedPnl = {
   closedPnl?: string;
   openFee?: string;
   closeFee?: string;
+  cumEntryFee?: string;
+  cumExitFee?: string;
   updatedTime?: string;
 };
 
@@ -296,14 +298,18 @@ export class BybitClient {
       return null;
     }
     const normalized = list
-      .map((item) => ({
-        orderId: item?.orderId ? String(item.orderId) : null,
-        pnl: Number(item?.closedPnl ?? NaN),
-        updatedTime: Number(item?.updatedTime ?? NaN),
-        closedSize: Number(item?.closedSize ?? NaN),
-        openFee: Number(item?.openFee ?? NaN),
-        closeFee: Number(item?.closeFee ?? NaN)
-      }))
+      .map((item) => {
+        const openFeeRaw = item?.openFee ?? item?.cumEntryFee ?? null;
+        const closeFeeRaw = item?.closeFee ?? item?.cumExitFee ?? null;
+        return {
+          orderId: item?.orderId ? String(item.orderId) : null,
+          pnl: Number(item?.closedPnl ?? NaN),
+          updatedTime: Number(item?.updatedTime ?? NaN),
+          closedSize: Number(item?.closedSize ?? NaN),
+          openFee: Number(openFeeRaw ?? NaN),
+          closeFee: Number(closeFeeRaw ?? NaN)
+        };
+      })
       .filter((item) => Number.isFinite(item.updatedTime));
     if (!normalized.length) {
       return null;
