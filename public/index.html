@@ -120,6 +120,18 @@
             <label for="poolHedgeLeverage">Hedge alavancagem</label>
             <input id="poolHedgeLeverage" type="number" min="1" step="1" placeholder="Padrão" />
           </div>
+          <div class="field">
+            <label for="poolHedgeEntryMode">Entrada do Hedge</label>
+            <select id="poolHedgeEntryMode">
+              <option value="">Padrão</option>
+              <option value="off">Sempre (atual)</option>
+              <option value="trend-down">Somente baixa</option>
+              <option value="trend-up">Somente alta</option>
+              <option value="trend-any">Baixa ou alta</option>
+              <option value="force-down">Sempre baixa (ignora tendência)</option>
+              <option value="force-up">Sempre alta (ignora tendência)</option>
+            </select>
+          </div>
           <button id="addPoolBtn" class="primary">Adicionar</button>
         </div>
         <div id="poolTrendHint" class="hint hidden"></div>
@@ -459,6 +471,18 @@
           <div class="field">
             <label for="editPoolHedgeLeverage">Hedge alavancagem</label>
             <input id="editPoolHedgeLeverage" type="number" min="1" step="1" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="editPoolHedgeEntryMode">Entrada do Hedge</label>
+            <select id="editPoolHedgeEntryMode">
+              <option value="">Padrão</option>
+              <option value="off">Sempre (atual)</option>
+              <option value="trend-down">Somente baixa</option>
+              <option value="trend-up">Somente alta</option>
+              <option value="trend-any">Baixa ou alta</option>
+              <option value="force-down">Sempre baixa (ignora tendência)</option>
+              <option value="force-up">Sempre alta (ignora tendência)</option>
+            </select>
           </div>
           <div id="editPoolTrendHint" class="hint hidden"></div>
           <div class="modal-actions">

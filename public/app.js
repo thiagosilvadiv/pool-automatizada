@@ -50,6 +50,7 @@ const poolHedgePctInput = document.getElementById("poolHedgePct");
 const poolHedgeMarginPctInput = document.getElementById("poolHedgeMarginPct");
 const poolHedgeSymbolInput = document.getElementById("poolHedgeSymbol");
 const poolHedgeLeverageInput = document.getElementById("poolHedgeLeverage");
+const poolHedgeEntryModeInput = document.getElementById("poolHedgeEntryMode");
 const poolTrendHint = document.getElementById("poolTrendHint");
 const addPoolBtn = document.getElementById("addPoolBtn");
 const poolsBody = document.getElementById("poolsBody");
@@ -72,6 +73,7 @@ const editPoolHedgePctInput = document.getElementById("editPoolHedgePct");
 const editPoolHedgeMarginPctInput = document.getElementById("editPoolHedgeMarginPct");
 const editPoolHedgeSymbolInput = document.getElementById("editPoolHedgeSymbol");
 const editPoolHedgeLeverageInput = document.getElementById("editPoolHedgeLeverage");
+const editPoolHedgeEntryModeInput = document.getElementById("editPoolHedgeEntryMode");
 const editPoolTrendHint = document.getElementById("editPoolTrendHint");
 const editPoolError = document.getElementById("editPoolError");
 const swapResultModal = document.getElementById("swapResultModal");
@@ -162,11 +164,21 @@ const actionTypeLabels = {
   "operacional": "Operacional"
 };
 
+const hedgeEntryModeLabels = {
+  "off": "Sempre (atual)",
+  "trend-down": "Somente baixa",
+  "trend-up": "Somente alta",
+  "trend-any": "Baixa ou alta",
+  "force-down": "Sempre baixa (ignora tendência)",
+  "force-up": "Sempre alta (ignora tendência)"
+};
+
 const MAX_HEDGE_LOG_ROWS = 80;
 
 const hedgeLogActionLabels = {
   "open": "Abertura",
   "close": "Fechamento",
+  "open-skip": "Ignorado",
   "open-failed": "Falha abertura",
   "close-failed": "Falha fechamento"
 };
@@ -335,6 +347,11 @@ function formatTrendDirection(value) {
   if (value === "up") return "Alta";
   if (value === "down") return "Baixa";
   return "-";
+}
+
+function formatHedgeEntryMode(value) {
+  if (!value) return "-";
+  return hedgeEntryModeLabels[value] ?? String(value);
 }
 
 function toCsvValue(value) {
@@ -733,6 +750,7 @@ function openEditPoolModal(pool) {
   const defaultHedgeMarginPct = cachedConfig?.hedgeMarginPct ?? "-";
   const defaultHedgeSymbol = cachedConfig?.hedgeSymbol ?? "-";
   const defaultHedgeLeverage = cachedConfig?.hedgeLeverage ?? "-";
+  const defaultHedgeEntryMode = cachedConfig?.hedgeEntryMode ?? "off";
   const tokenInfo = getTokenInfo(pool);
 
   if (editPoolIdInput) editPoolIdInput.value = pool.id ?? "";
@@ -767,6 +785,10 @@ function openEditPoolModal(pool) {
   if (editPoolHedgeLeverageInput) {
     editPoolHedgeLeverageInput.value = overrides.hedgeLeverage ?? "";
     editPoolHedgeLeverageInput.placeholder = `Padrão (${formatNumber(defaultHedgeLeverage, 2)})`;
+  }
+  if (editPoolHedgeEntryModeInput) {
+    editPoolHedgeEntryModeInput.value = overrides.hedgeEntryMode ?? "";
+    setSelectPlaceholder(editPoolHedgeEntryModeInput, `Padrão (${formatHedgeEntryMode(defaultHedgeEntryMode)})`);
   }
   if (editPoolExitTokenInput) {
     updateExitTokenSelectHints(editPoolExitTokenInput, tokenInfo);
@@ -1077,6 +1099,9 @@ async function updateUI() {
     if (poolAutoAddEnabledInput) {
       setSelectPlaceholder(poolAutoAddEnabledInput, `Padrão (${config.autoAddLiquidityEnabled ? "Sim" : "Não"})`);
     }
+    if (poolHedgeEntryModeInput) {
+      setSelectPlaceholder(poolHedgeEntryModeInput, `Padrão (${formatHedgeEntryMode(config.hedgeEntryMode ?? "off")})`);
+    }
     if (poolTrendTimeframeInput) {
       setSelectPlaceholder(poolTrendTimeframeInput, `Padrão (${config.trendTimeframe ?? "1m"})`);
     }
@@ -1191,6 +1216,7 @@ addPoolBtn.addEventListener("click", async () => {
   const hedgeMarginPct = parseOptionalNumber(poolHedgeMarginPctInput?.value);
   const hedgeSymbol = poolHedgeSymbolInput?.value?.trim();
   const hedgeLeverage = parseOptionalNumber(poolHedgeLeverageInput?.value);
+  const hedgeEntryMode = poolHedgeEntryModeInput?.value?.trim();
   poolError.classList.add("hidden");
   try {
     const overrides = {};
@@ -1260,6 +1286,9 @@ addPoolBtn.addEventListener("click", async () => {
     if (hedgeLeverage !== undefined) {
       overrides.hedgeLeverage = hedgeLeverage;
     }
+    if (hedgeEntryMode) {
+      overrides.hedgeEntryMode = hedgeEntryMode;
+    }
     const res = await fetch("/api/pools", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1285,6 +1314,7 @@ addPoolBtn.addEventListener("click", async () => {
     if (poolHedgeMarginPctInput) poolHedgeMarginPctInput.value = "";
     if (poolHedgeSymbolInput) poolHedgeSymbolInput.value = "";
     if (poolHedgeLeverageInput) poolHedgeLeverageInput.value = "";
+    if (poolHedgeEntryModeInput) poolHedgeEntryModeInput.value = "";
     updateUI();
   } catch (err) {
     poolError.textContent = err instanceof Error ? err.message : String(err);
@@ -1505,6 +1535,13 @@ if (editPoolForm) {
         return;
       }
       overrides.hedgeLeverage = parsed;
+    }
+
+    const hedgeEntryModeRaw = editPoolHedgeEntryModeInput?.value?.trim() ?? "";
+    if (!hedgeEntryModeRaw) {
+      overrides.hedgeEntryMode = null;
+    } else {
+      overrides.hedgeEntryMode = hedgeEntryModeRaw;
     }
 
     try {

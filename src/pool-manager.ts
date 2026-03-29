@@ -42,6 +42,7 @@ export type PoolOverrides = {
   hedgeSymbol?: string;
   hedgeLeverage?: number;
   hedgeMarginPct?: number;
+  hedgeEntryMode?: "off" | "trend-down" | "trend-up" | "trend-any" | "force-down" | "force-up";
 };
 
 export type PoolSummary = {
@@ -937,6 +938,15 @@ export class PoolManager {
       normalized.hedgeMarginPct = value;
     }
 
+    if (overrides.hedgeEntryMode != null) {
+      const value = String(overrides.hedgeEntryMode).trim().toLowerCase();
+      const allowed = ["off", "trend-down", "trend-up", "trend-any", "force-down", "force-up"];
+      if (!allowed.includes(value)) {
+        throw new Error("hedgeEntryMode override must be off, trend-down, trend-up, trend-any, force-down, or force-up");
+      }
+      normalized.hedgeEntryMode = value as PoolOverrides["hedgeEntryMode"];
+    }
+
     if (normalized.hedgeEnabled === true) {
       const symbol = normalized.hedgeSymbol ?? this.baseConfig.hedgeSymbol ?? "";
       if (!symbol || !symbol.trim()) {
@@ -948,6 +958,12 @@ export class PoolManager {
       }
       if (!this.baseConfig.bybitApiKey || !this.baseConfig.bybitApiSecret) {
         throw new Error("BYBIT_API_KEY and BYBIT_API_SECRET are required when hedgeEnabled is true");
+      }
+    }
+
+    if (normalized.hedgeEntryMode && ["trend-down", "trend-up", "trend-any"].includes(normalized.hedgeEntryMode)) {
+      if (!this.baseConfig.trendNetworkId || !this.baseConfig.trendNetworkId.trim()) {
+        throw new Error("trendNetworkId is required when hedgeEntryMode uses trend");
       }
     }
 
@@ -1161,6 +1177,19 @@ export class PoolManager {
       }
     }
 
+    if ("hedgeEntryMode" in updates) {
+      if (updates.hedgeEntryMode == null) {
+        delete next.hedgeEntryMode;
+      } else {
+        const value = String(updates.hedgeEntryMode).trim().toLowerCase();
+        const allowed = ["off", "trend-down", "trend-up", "trend-any", "force-down", "force-up"];
+        if (!allowed.includes(value)) {
+          throw new Error("hedgeEntryMode override must be off, trend-down, trend-up, trend-any, force-down, or force-up");
+        }
+        next.hedgeEntryMode = value as PoolOverrides["hedgeEntryMode"];
+      }
+    }
+
     if (next.hedgeEnabled === true) {
       const symbol = next.hedgeSymbol ?? this.baseConfig.hedgeSymbol ?? "";
       if (!symbol || !symbol.trim()) {
@@ -1172,6 +1201,12 @@ export class PoolManager {
       }
       if (!this.baseConfig.bybitApiKey || !this.baseConfig.bybitApiSecret) {
         throw new Error("BYBIT_API_KEY and BYBIT_API_SECRET are required when hedgeEnabled is true");
+      }
+    }
+
+    if (next.hedgeEntryMode && ["trend-down", "trend-up", "trend-any"].includes(next.hedgeEntryMode)) {
+      if (!this.baseConfig.trendNetworkId || !this.baseConfig.trendNetworkId.trim()) {
+        throw new Error("trendNetworkId is required when hedgeEntryMode uses trend");
       }
     }
 
