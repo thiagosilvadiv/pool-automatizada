@@ -125,6 +125,8 @@ const historyColumnDefaults = {
   hedgeLeverage: true,
   hedgeFees: true,
   hedgePnl: true,
+  hedgeDecision: true,
+  hedgeDecisionReason: true,
   pnlTotal: true,
   pnlTotalNet: true
 };
@@ -354,6 +356,13 @@ function formatHedgeEntryMode(value) {
   return hedgeEntryModeLabels[value] ?? String(value);
 }
 
+function formatHedgeDecision(value) {
+  if (value === "opened") return "Abriu";
+  if (value === "skipped") return "Ignorado";
+  if (value === "failed") return "Falhou";
+  return value ?? "-";
+}
+
 function toCsvValue(value) {
   if (value === null || value === undefined) return "";
   const text = String(value).replace(/"/g, "\"\"");
@@ -381,6 +390,8 @@ function buildHistoryCsv(items) {
     "Hedge lev",
     "Hedge taxas (USD)",
     "Hedge PnL (USD)",
+    "Hedge decisão",
+    "Hedge motivo",
     "PnL total (USD)",
     "PnL total sem taxas (USD)"
   ];
@@ -417,6 +428,8 @@ function buildHistoryCsv(items) {
       formatNumber(item.hedgeLeverage, 2),
       formatNumber(item.hedgeFeesUsd, 2),
       formatNumber(item.hedgePnlUsd, 2),
+      formatHedgeDecision(item.hedgeDecision),
+      item.hedgeDecisionReason ?? "-",
       formatNumber(pnlTotal, 2),
       formatNumber(pnlTotalNet, 2)
     ].map(toCsvValue).join(";");
@@ -833,7 +846,7 @@ function renderHistory(items) {
   const filteredItems = applyHistoryTypeFilter(items);
   if (!filteredItems || filteredItems.length === 0) {
     selectedHistoryIds.clear();
-    historyBody.innerHTML = "<tr><td colspan=\"22\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"24\">Sem eventos ainda</td></tr>";
     updateHistorySelectionState();
     return;
   }
@@ -877,6 +890,8 @@ function renderHistory(items) {
         <td data-col="hedgeLeverage">${formatNumber(item.hedgeLeverage, 2)}</td>
         <td data-col="hedgeFees">${formatNumber(item.hedgeFeesUsd, 2)}</td>
         <td data-col="hedgePnl">${formatNumber(item.hedgePnlUsd, 2)}</td>
+        <td data-col="hedgeDecision">${formatHedgeDecision(item.hedgeDecision)}</td>
+        <td data-col="hedgeDecisionReason">${item.hedgeDecisionReason ?? "-"}</td>
         <td data-col="pnlTotal">${formatNumber(pnlTotal, 2)}</td>
         <td data-col="pnlTotalNet">${formatNumber(pnlTotalNet, 2)}</td>
       </tr>

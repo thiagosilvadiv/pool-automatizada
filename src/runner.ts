@@ -114,6 +114,8 @@ export type HistoryEvent = {
   hedgeLeverage: number | null;
   hedgeFeesUsd: number | null;
   hedgePnlUsd: number | null;
+  hedgeDecision: "opened" | "skipped" | "failed" | null;
+  hedgeDecisionReason: string | null;
 };
 
 export type HedgeLogEntry = {
@@ -152,6 +154,7 @@ export class BotRunner {
   private trendByMint = new Map<string, "up" | "down">();
   private hedgeManager: HedgeManager;
   private lastHedgeClose: HedgeCloseResult | null = null;
+  private lastHedgeDecision: { status: "opened" | "skipped" | "failed"; reason: string | null } | null = null;
   private pendingClose = false;
   private pendingCloseRequestedAt: string | null = null;
   private autoAddRequestedByMint = new Set<string>();
@@ -407,6 +410,16 @@ export class BotRunner {
     return this.trendByMint.get(mint) ?? fallback ?? null;
   }
 
+  private normalizeHedgeDecision(
+    result: { status: "opened" | "skipped" | "failed"; error?: string; reason?: string }
+  ): { status: "opened" | "skipped" | "failed"; reason: string | null } | null {
+    const reason = result.reason ?? (result.status === "failed" ? (result.error ?? this.hedgeManager.getLastError() ?? null) : null);
+    if (result.status === "skipped" && !reason) {
+      return null;
+    }
+    return { status: result.status, reason: reason ?? null };
+  }
+
   private schedule(): void {
     if (!this.running) {
       return;
@@ -456,6 +469,7 @@ export class BotRunner {
       const allowHedgeOpen = !isRebalanced || !hadHedge || hedgeCloseForRebalance != null;
       if (this.config.hedgeEnabled && allowHedgeOpen) {
         hedgeResult = await this.hedgeManager.ensureOpen(status);
+        this.lastHedgeDecision = this.normalizeHedgeDecision(hedgeResult);
         if (hedgeResult.status === "opened") {
           const message = isRebalanced ? "Hedge aberto apos re-range" : "Hedge aberto";
           this.logHedgeOpen(message);
@@ -465,6 +479,8 @@ export class BotRunner {
           const reason = hedgeResult.error ?? this.hedgeManager.getLastError() ?? "Falha ao abrir hedge";
           this.logHedgeError("open-failed", `Falha ao abrir hedge: ${reason}`, this.config.hedgeSymbol);
         }
+      } else {
+        this.lastHedgeDecision = null;
       }
 
       if (this.config.hedgeEnabled && status.positionMint && !this.hedgeManager.getState()?.active) {
@@ -557,6 +573,7 @@ export class BotRunner {
 
   private recordEvent(status: BotStatus, options?: { hedgeClose?: HedgeCloseResult | null }): void {
     const action = status.lastAction;
+    const hedgeDecision = this.lastHedgeDecision;
     const eventPositionMint = status.eventPositionMint ?? null;
     const eventPositionEntryUsd = status.eventPositionEntryUsd ?? null;
     const eventPositionFeesUsd = status.eventPositionFeesUsd ?? null;
@@ -658,8 +675,11 @@ export class BotRunner {
           hedgeNotionalUsd: null,
           hedgeLeverage: null,
           hedgeFeesUsd: null,
-          hedgePnlUsd: null
+          hedgePnlUsd: null,
+          hedgeDecision: hedgeDecision?.status ?? null,
+          hedgeDecisionReason: hedgeDecision?.reason ?? null
         });
+        this.lastHedgeDecision = null;
       }
       return;
     }
@@ -730,7 +750,9 @@ export class BotRunner {
         hedgeNotionalUsd: hedgeClose?.notionalUsd ?? null,
         hedgeLeverage: hedgeClose?.leverage ?? null,
         hedgeFeesUsd: hedgeClose?.feesUsd ?? null,
-        hedgePnlUsd: hedgeClose?.pnlUsd ?? null
+        hedgePnlUsd: hedgeClose?.pnlUsd ?? null,
+        hedgeDecision: null,
+        hedgeDecisionReason: null
       };
       this.pushEvent(closeEvent);
       if (closeMint) {
@@ -785,9 +807,12 @@ export class BotRunner {
         hedgeNotionalUsd: null,
         hedgeLeverage: null,
         hedgeFeesUsd: null,
-        hedgePnlUsd: null
+        hedgePnlUsd: null,
+        hedgeDecision: hedgeDecision?.status ?? null,
+        hedgeDecisionReason: hedgeDecision?.reason ?? null
       };
       this.pushEvent(openEvent);
+      this.lastHedgeDecision = null;
       return;
     }
     const pnlDelta = status.portfolioValue != null && this.lastEventPortfolioValue != null
@@ -850,9 +875,12 @@ export class BotRunner {
       hedgeNotionalUsd: hedgeClose?.notionalUsd ?? null,
       hedgeLeverage: hedgeClose?.leverage ?? null,
       hedgeFeesUsd: hedgeClose?.feesUsd ?? null,
-      hedgePnlUsd: hedgeClose?.pnlUsd ?? null
+      hedgePnlUsd: hedgeClose?.pnlUsd ?? null,
+      hedgeDecision: hedgeDecision?.status ?? null,
+      hedgeDecisionReason: hedgeDecision?.reason ?? null
     };
     this.pushEvent(event);
+    this.lastHedgeDecision = null;
     if (action === "close-position" && mergedPositionMint) {
       this.trendByMint.delete(mergedPositionMint);
       this.autoAddRequestedByMint.delete(mergedPositionMint);
