@@ -63,7 +63,16 @@ export type Config = {
   hedgeSymbol: string;
   hedgeLeverage: number;
   hedgeMarginPct: number;
+  hedgeEntryMode: HedgeEntryMode;
 };
+
+export type HedgeEntryMode =
+  | "off"
+  | "trend-down"
+  | "trend-up"
+  | "trend-any"
+  | "force-down"
+  | "force-up";
 
 function parseEnvNumber(value: string | undefined): number | undefined {
   if (value == null || value.trim() === "") return undefined;
@@ -125,6 +134,20 @@ function parseExitToken(value: unknown): "tokenA" | "tokenB" | null | undefined 
   const lower = trimmed.toLowerCase();
   if (lower === "tokena" || lower === "a" || lower === "token_a") return "tokenA";
   if (lower === "tokenb" || lower === "b" || lower === "token_b") return "tokenB";
+  return undefined;
+}
+
+function parseHedgeEntryMode(value: unknown): HedgeEntryMode | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "off") return "off";
+  if (trimmed === "trend-down") return "trend-down";
+  if (trimmed === "trend-up") return "trend-up";
+  if (trimmed === "trend-any") return "trend-any";
+  if (trimmed === "force-down") return "force-down";
+  if (trimmed === "force-up") return "force-up";
   return undefined;
 }
 
@@ -243,6 +266,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
 
   const trendNetworkId = (process.env.TREND_NETWORK_ID ?? (data as any).trendNetworkId ?? "").trim()
     || inferTrendNetworkId(process.env.NETWORK ?? data.network ?? "mainnet-beta");
+  const envHedgeEntryMode = parseHedgeEntryMode(process.env.HEDGE_ENTRY_MODE)
+    ?? parseHedgeEntryMode((data as any).hedgeEntryMode);
 
   const config: Config = {
     network: process.env.NETWORK ?? data.network ?? "mainnet-beta",
@@ -342,7 +367,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     hedgePct: parseEnvNumber(process.env.HEDGE_PCT) ?? Number((data as any).hedgePct ?? 50),
     hedgeSymbol: (process.env.HEDGE_SYMBOL ?? (data as any).hedgeSymbol ?? "").trim().toUpperCase(),
     hedgeLeverage: parseEnvNumber(process.env.HEDGE_LEVERAGE) ?? Number((data as any).hedgeLeverage ?? 1),
-    hedgeMarginPct: parseEnvNumber(process.env.HEDGE_MARGIN_PCT) ?? Number((data as any).hedgeMarginPct ?? 0)
+    hedgeMarginPct: parseEnvNumber(process.env.HEDGE_MARGIN_PCT) ?? Number((data as any).hedgeMarginPct ?? 0),
+    hedgeEntryMode: envHedgeEntryMode ?? "off"
   };
 
   if (!configPath && !envJson && !envPath && !config.rpcUrl) {
@@ -458,6 +484,13 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.hedgeMarginPct) || config.hedgeMarginPct < 0 || config.hedgeMarginPct > 100) {
     throw new Error("hedgeMarginPct must be between 0 and 100");
+  }
+  if (!parseHedgeEntryMode(config.hedgeEntryMode)) {
+    throw new Error("hedgeEntryMode must be off, trend-down, trend-up, trend-any, force-down, or force-up");
+  }
+  const hedgeNeedsTrend = ["trend-down", "trend-up", "trend-any"].includes(config.hedgeEntryMode);
+  if (hedgeNeedsTrend && (!config.trendNetworkId || !config.trendNetworkId.trim())) {
+    throw new Error("trendNetworkId is required when hedgeEntryMode uses trend");
   }
   if (config.hedgeEnabled) {
     if (!config.hedgeSymbol || !config.hedgeSymbol.trim()) {

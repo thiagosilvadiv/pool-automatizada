@@ -120,7 +120,7 @@ export type HedgeLogEntry = {
   id: string;
   timestamp: string;
   level: "info" | "warn" | "error";
-  action: "open" | "close" | "open-failed" | "close-failed";
+  action: "open" | "close" | "open-failed" | "close-failed" | "open-skip";
   message: string;
   symbol: string | null;
   qty: number | null;
@@ -452,13 +452,15 @@ export class BotRunner {
         }
       }
 
-      let hedgeResult: { status: "opened" | "skipped" | "failed"; error?: string } = { status: "skipped" };
+      let hedgeResult: { status: "opened" | "skipped" | "failed"; error?: string; reason?: string } = { status: "skipped" };
       const allowHedgeOpen = !isRebalanced || !hadHedge || hedgeCloseForRebalance != null;
       if (this.config.hedgeEnabled && allowHedgeOpen) {
         hedgeResult = await this.hedgeManager.ensureOpen(status);
         if (hedgeResult.status === "opened") {
           const message = isRebalanced ? "Hedge aberto apos re-range" : "Hedge aberto";
           this.logHedgeOpen(message);
+        } else if (hedgeResult.status === "skipped" && hedgeResult.reason) {
+          this.logHedgeSkip(hedgeResult.reason, this.config.hedgeSymbol);
         } else if (hedgeResult.status === "failed") {
           const reason = hedgeResult.error ?? this.hedgeManager.getLastError() ?? "Falha ao abrir hedge";
           this.logHedgeError("open-failed", `Falha ao abrir hedge: ${reason}`, this.config.hedgeSymbol);
@@ -1200,6 +1202,19 @@ export class BotRunner {
       leverage: result.leverage ?? null,
       pnlUsd: result.pnlUsd ?? null,
       timestamp: result.closedAt ?? undefined
+    });
+  }
+
+  private logHedgeSkip(message: string, symbol?: string | null): void {
+    this.addHedgeLog({
+      level: "info",
+      action: "open-skip",
+      message,
+      symbol: symbol ? String(symbol).trim().toUpperCase() : null,
+      qty: null,
+      notionalUsd: null,
+      leverage: null,
+      pnlUsd: null
     });
   }
 

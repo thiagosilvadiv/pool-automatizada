@@ -1,7 +1,8 @@
 ﻿import { BybitClient } from "./bybit.js";
 import { logger } from "./logger.js";
-import type { Config } from "./config.js";
+import type { Config, HedgeEntryMode } from "./config.js";
 import type { BotStatus } from "./orca.js";
+import { getTrendSnapshot } from "./trend.js";
 
 export type HedgeState = {
   active: boolean;
@@ -27,6 +28,7 @@ export type HedgeCloseResult = {
 export type HedgeOpenResult = {
   status: "opened" | "skipped" | "failed";
   error?: string;
+  reason?: string;
 };
 
 const OPEN_COOLDOWN_MS = 60_000;
@@ -197,6 +199,52 @@ export class HedgeManager {
       this.setError(message);
       return { status: "failed", error: message };
     }
+
+    const entryMode: HedgeEntryMode = this.config.hedgeEntryMode ?? "off";
+    if (entryMode === "trend-down" || entryMode === "trend-up" || entryMode === "trend-any") {
+      if (!this.config.trendNetworkId || !this.config.trendNetworkId.trim()) {
+        const message = "trendNetworkId ausente para hedgeEntryMode";
+        logger.warn(message);
+        this.setError(message);
+        return { status: "failed", error: message };
+      }
+      try {
+        const snapshot = await getTrendSnapshot({
+          networkId: this.config.trendNetworkId,
+          poolAddress: this.config.whirlpoolAddress,
+          timeframe: this.config.trendTimeframe,
+          staleSec: this.config.trendStaleSec,
+          cacheSec: this.config.trendCacheSec
+        });
+        const direction = snapshot?.direction ?? null;
+        const stale = snapshot?.stale ?? true;
+        if (!direction || stale) {
+          const reason = snapshot?.error
+            ? `Tendência indisponível: ${snapshot.error}`
+            : "Tendência indisponível";
+          this.setError(null);
+          return { status: "skipped", reason };
+        }
+        if (entryMode === "trend-down" && direction !== "down") {
+          this.setError(null);
+          return { status: "skipped", reason: "Ignorado: tendência alta" };
+        }
+        if (entryMode === "trend-up" && direction !== "up") {
+          this.setError(null);
+          return { status: "skipped", reason: "Ignorado: tendência baixa" };
+        }
+        if (entryMode === "trend-any" && direction !== "up" && direction !== "down") {
+          this.setError(null);
+          return { status: "skipped", reason: "Tendência indefinida" };
+        }
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        logger.warn({ err }, "failed to fetch hedge trend snapshot");
+        this.setError(null);
+        return { status: "skipped", reason: `Tendência indisponível: ${reason}` };
+      }
+    }
+
     if (!this.client) {
       const message = "Bybit nao configurado";
       logger.warn(message);
