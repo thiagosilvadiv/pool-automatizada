@@ -154,7 +154,7 @@ export class BotRunner {
   private trendByMint = new Map<string, "up" | "down">();
   private hedgeManager: HedgeManager;
   private lastHedgeClose: HedgeCloseResult | null = null;
-  private lastHedgeDecision: { status: "opened" | "skipped" | "failed"; reason: string | null } | null = null;
+  private hedgeDecisionByMint = new Map<string, { status: "opened" | "skipped" | "failed"; reason: string | null }>();
   private pendingClose = false;
   private pendingCloseRequestedAt: string | null = null;
   private autoAddRequestedByMint = new Set<string>();
@@ -348,6 +348,7 @@ export class BotRunner {
     this.lastEventPortfolioUsd = null;
     this.entryByMint = new Map();
     this.trendByMint = new Map();
+    this.hedgeDecisionByMint = new Map();
     this.autoAddRequestedByMint = new Set();
     await this.saveHistory();
   }
@@ -397,8 +398,25 @@ export class BotRunner {
         autoAddByMint.delete(item.positionMint);
       }
     }
+    const hedgeDecisionByMint = new Map<string, { status: "opened" | "skipped" | "failed"; reason: string | null }>();
+    for (const item of this.history) {
+      const mint = item.positionMint ?? null;
+      if (!mint) {
+        continue;
+      }
+      if (item.action === "open-position") {
+        const decision = item.hedgeDecision;
+        if (decision === "opened" || decision === "skipped" || decision === "failed") {
+          hedgeDecisionByMint.set(mint, { status: decision, reason: item.hedgeDecisionReason ?? null });
+        }
+      }
+      if (item.action === "close-position") {
+        hedgeDecisionByMint.delete(mint);
+      }
+    }
     this.entryByMint = entryByMint;
     this.trendByMint = trendByMint;
+    this.hedgeDecisionByMint = hedgeDecisionByMint;
     this.autoAddRequestedByMint = autoAddByMint;
     await this.saveHistory();
   }
@@ -418,6 +436,25 @@ export class BotRunner {
       return null;
     }
     return { status: result.status, reason: reason ?? null };
+  }
+
+  private rememberHedgeDecision(
+    mint: string | null,
+    decision: { status: "opened" | "skipped" | "failed"; reason: string | null } | null
+  ): void {
+    if (!mint || !decision) {
+      return;
+    }
+    this.hedgeDecisionByMint.set(mint, decision);
+  }
+
+  private getHedgeDecision(
+    mint: string | null
+  ): { status: "opened" | "skipped" | "failed"; reason: string | null } | null {
+    if (!mint) {
+      return null;
+    }
+    return this.hedgeDecisionByMint.get(mint) ?? null;
   }
 
   private schedule(): void {
@@ -466,10 +503,12 @@ export class BotRunner {
       }
 
       let hedgeResult: { status: "opened" | "skipped" | "failed"; error?: string; reason?: string } = { status: "skipped" };
+      let hedgeDecision: { status: "opened" | "skipped" | "failed"; reason: string | null } | null = null;
       const allowHedgeOpen = !isRebalanced || !hadHedge || hedgeCloseForRebalance != null;
       if (this.config.hedgeEnabled && allowHedgeOpen) {
         hedgeResult = await this.hedgeManager.ensureOpen(status);
-        this.lastHedgeDecision = this.normalizeHedgeDecision(hedgeResult);
+        hedgeDecision = this.normalizeHedgeDecision(hedgeResult);
+        this.rememberHedgeDecision(status.positionMint ?? null, hedgeDecision);
         if (hedgeResult.status === "opened") {
           const message = isRebalanced ? "Hedge aberto apos re-range" : "Hedge aberto";
           this.logHedgeOpen(message);
@@ -479,8 +518,6 @@ export class BotRunner {
           const reason = hedgeResult.error ?? this.hedgeManager.getLastError() ?? "Falha ao abrir hedge";
           this.logHedgeError("open-failed", `Falha ao abrir hedge: ${reason}`, this.config.hedgeSymbol);
         }
-      } else {
-        this.lastHedgeDecision = null;
       }
 
       if (this.config.hedgeEnabled && status.positionMint && !this.hedgeManager.getState()?.active) {
@@ -573,11 +610,11 @@ export class BotRunner {
 
   private recordEvent(status: BotStatus, options?: { hedgeClose?: HedgeCloseResult | null }): void {
     const action = status.lastAction;
-    const hedgeDecision = this.lastHedgeDecision;
     const eventPositionMint = status.eventPositionMint ?? null;
     const eventPositionEntryUsd = status.eventPositionEntryUsd ?? null;
     const eventPositionFeesUsd = status.eventPositionFeesUsd ?? null;
     const eventPositionExitUsd = status.eventPositionExitUsd ?? null;
+    const decisionForMint = (mint: string | null) => this.getHedgeDecision(mint);
     const resolveEntryFallback = (entry: number | null, mint: string | null): number | null => {
       if (entry != null) {
         return entry;
@@ -633,6 +670,7 @@ export class BotRunner {
         const openedAt = mergedPositionMint ? this.openedAtByMint.get(mergedPositionMint) ?? null : null;
         const actionType = resolveActionType("resume-position");
         const trendForMint = this.resolveTrendForMint(mergedPositionMint, trendNow);
+        const hedgeDecision = decisionForMint(mergedPositionMint);
         if (mergedPositionMint && trendNow && !this.trendByMint.has(mergedPositionMint)) {
           this.trendByMint.set(mergedPositionMint, trendNow);
         }
@@ -679,7 +717,6 @@ export class BotRunner {
           hedgeDecision: hedgeDecision?.status ?? null,
           hedgeDecisionReason: hedgeDecision?.reason ?? null
         });
-        this.lastHedgeDecision = null;
       }
       return;
     }
@@ -709,6 +746,7 @@ export class BotRunner {
         closePnlUsd -= txFeeUsd;
       }
       const hedgeClose = options?.hedgeClose ?? null;
+      const closeHedgeDecision = decisionForMint(closeMint);
 
       const trendForClose = this.resolveTrendForMint(closeMint, trendNow);
       const closeEvent: HistoryEvent = {
@@ -751,8 +789,8 @@ export class BotRunner {
         hedgeLeverage: hedgeClose?.leverage ?? null,
         hedgeFeesUsd: hedgeClose?.feesUsd ?? null,
         hedgePnlUsd: hedgeClose?.pnlUsd ?? null,
-        hedgeDecision: null,
-        hedgeDecisionReason: null
+        hedgeDecision: closeHedgeDecision?.status ?? null,
+        hedgeDecisionReason: closeHedgeDecision?.reason ?? null
       };
       this.pushEvent(closeEvent);
       if (closeMint) {
@@ -760,6 +798,7 @@ export class BotRunner {
       }
 
       const openMint = status.positionMint ?? null;
+      const openHedgeDecision = decisionForMint(openMint);
       let openOpenedAt = openMint ? this.openedAtByMint.get(openMint) ?? null : null;
       if (openMint) {
         this.openedAtByMint.set(openMint, timestamp);
@@ -808,11 +847,16 @@ export class BotRunner {
         hedgeLeverage: null,
         hedgeFeesUsd: null,
         hedgePnlUsd: null,
-        hedgeDecision: hedgeDecision?.status ?? null,
-        hedgeDecisionReason: hedgeDecision?.reason ?? null
+        hedgeDecision: openHedgeDecision?.status ?? null,
+        hedgeDecisionReason: openHedgeDecision?.reason ?? null
       };
       this.pushEvent(openEvent);
-      this.lastHedgeDecision = null;
+      if (closeMint) {
+        this.hedgeDecisionByMint.delete(closeMint);
+      }
+      if (openMint && openHedgeDecision) {
+        this.hedgeDecisionByMint.set(openMint, openHedgeDecision);
+      }
       return;
     }
     const pnlDelta = status.portfolioValue != null && this.lastEventPortfolioValue != null
@@ -836,6 +880,7 @@ export class BotRunner {
     }
     const actionType = resolveActionType(action);
     const eventTrend = this.resolveTrendForMint(mergedPositionMint, trendNow);
+    const eventHedgeDecision = decisionForMint(mergedPositionMint);
     const event: HistoryEvent = {
       id: this.createEventId(timestamp),
       timestamp,
@@ -876,14 +921,14 @@ export class BotRunner {
       hedgeLeverage: hedgeClose?.leverage ?? null,
       hedgeFeesUsd: hedgeClose?.feesUsd ?? null,
       hedgePnlUsd: hedgeClose?.pnlUsd ?? null,
-      hedgeDecision: hedgeDecision?.status ?? null,
-      hedgeDecisionReason: hedgeDecision?.reason ?? null
+      hedgeDecision: eventHedgeDecision?.status ?? null,
+      hedgeDecisionReason: eventHedgeDecision?.reason ?? null
     };
     this.pushEvent(event);
-    this.lastHedgeDecision = null;
     if (action === "close-position" && mergedPositionMint) {
       this.trendByMint.delete(mergedPositionMint);
       this.autoAddRequestedByMint.delete(mergedPositionMint);
+      this.hedgeDecisionByMint.delete(mergedPositionMint);
     }
     if (action === "close-position") {
       this.lastHedgeClose = null;
@@ -1116,6 +1161,22 @@ export class BotRunner {
               autoAddByMint.delete(item.positionMint);
             }
           }
+          const hedgeDecisionByMint = new Map<string, { status: "opened" | "skipped" | "failed"; reason: string | null }>();
+          for (const item of normalized) {
+            const mint = item.positionMint ?? null;
+            if (!mint) {
+              continue;
+            }
+            if (item.action === "open-position") {
+              const decision = item.hedgeDecision;
+              if (decision === "opened" || decision === "skipped" || decision === "failed") {
+                hedgeDecisionByMint.set(mint, { status: decision, reason: item.hedgeDecisionReason ?? null });
+              }
+            }
+            if (item.action === "close-position") {
+              hedgeDecisionByMint.delete(mint);
+            }
+          }
           const maxHistory = Number.isFinite(this.config.historyMaxEvents)
             ? Math.floor(this.config.historyMaxEvents)
             : 0;
@@ -1127,6 +1188,7 @@ export class BotRunner {
           this.openedAtByMint = openedByMint;
           this.entryByMint = entryByMint;
           this.trendByMint = trendByMint;
+          this.hedgeDecisionByMint = hedgeDecisionByMint;
           this.autoAddRequestedByMint = autoAddByMint;
           if (mutated) {
             await this.saveHistory();
