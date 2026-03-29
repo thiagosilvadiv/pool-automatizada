@@ -80,6 +80,8 @@ const analyticsColumnDefaults = {
   hedgeLeverage: true,
   hedgeFees: true,
   hedgePnl: true,
+  hedgeDecision: true,
+  hedgeDecisionReason: true,
   pnlTotal: true,
   pnlTotalNet: true
 };
@@ -218,6 +220,13 @@ function formatTrendDirection(value) {
   return "-";
 }
 
+function formatHedgeDecision(value) {
+  if (value === "opened") return "Abriu";
+  if (value === "skipped") return "Ignorado";
+  if (value === "failed") return "Falhou";
+  return value ?? "-";
+}
+
 function sumNumeric(items, key) {
   if (!Array.isArray(items)) return 0;
   return items.reduce((acc, item) => acc + (Number(item?.[key]) || 0), 0);
@@ -344,7 +353,7 @@ async function fetchHistory(poolId) {
 
 function renderHistory(items) {
   if (!items || items.length === 0) {
-    historyBody.innerHTML = "<tr><td colspan=\"21\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"23\">Sem eventos ainda</td></tr>";
     return;
   }
   const limit = analyticsRowLimit ?? 30;
@@ -382,6 +391,8 @@ function renderHistory(items) {
         <td data-col="hedgeLeverage">${formatNumber(item.hedgeLeverage, 2)}</td>
         <td data-col="hedgeFees">${formatNumber(item.hedgeFeesUsd, 2)}</td>
         <td data-col="hedgePnl">${formatNumber(item.hedgePnlUsd, 2)}</td>
+        <td data-col="hedgeDecision">${formatHedgeDecision(item.hedgeDecision)}</td>
+        <td data-col="hedgeDecisionReason">${item.hedgeDecisionReason ?? "-"}</td>
         <td data-col="pnlTotal">${formatNumber(pnlTotal, 2)}</td>
         <td data-col="pnlTotalNet">${formatNumber(pnlTotalNet, 2)}</td>
       </tr>

@@ -201,6 +201,7 @@ export class HedgeManager {
     }
 
     const entryMode: HedgeEntryMode = this.config.hedgeEntryMode ?? "off";
+    let openReason: string | null = null;
     if (entryMode === "trend-down" || entryMode === "trend-up" || entryMode === "trend-any") {
       if (!this.config.trendNetworkId || !this.config.trendNetworkId.trim()) {
         const message = "trendNetworkId ausente para hedgeEntryMode";
@@ -237,12 +238,19 @@ export class HedgeManager {
           this.setError(null);
           return { status: "skipped", reason: "Tendência indefinida" };
         }
+        openReason = `Tendência ${direction === "down" ? "baixa" : "alta"} ${this.config.trendTimeframe ?? ""}`.trim();
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         logger.warn({ err }, "failed to fetch hedge trend snapshot");
         this.setError(null);
         return { status: "skipped", reason: `Tendência indisponível: ${reason}` };
       }
+    } else if (entryMode === "force-down") {
+      openReason = "Modo sempre baixa";
+    } else if (entryMode === "force-up") {
+      openReason = "Modo sempre alta";
+    } else if (entryMode === "off") {
+      openReason = "Modo sempre";
     }
 
     if (!this.client) {
@@ -302,7 +310,7 @@ export class HedgeManager {
           }
         }
       }
-      return { status: "opened" };
+      return { status: "opened", reason: openReason ?? undefined };
     } catch (err) {
       const message = err instanceof Error ? err.message : "Falha ao abrir hedge";
       logger.warn({ err }, "failed to open hedge");
