@@ -161,11 +161,14 @@ export class PoolManager {
         ...(entry.overrides ?? {})
       };
       const trendEnabled = Boolean(poolConfig.trendEnabled);
+      const hedgeEntryMode = poolConfig.hedgeEntryMode ?? "off";
+      const hedgeUsesTrend = ["trend-down", "trend-up", "trend-any"].includes(hedgeEntryMode);
+      const trendRequested = trendEnabled || hedgeUsesTrend;
       let trendDirection: "up" | "down" | null = null;
       let trendUpdatedAt: string | null = null;
-      let trendTimeframe: "1m" | "5m" | "15m" | "30m" | "1h" | null = trendEnabled ? poolConfig.trendTimeframe : null;
+      let trendTimeframe: "1m" | "5m" | "15m" | "30m" | "1h" | null = trendRequested ? poolConfig.trendTimeframe : null;
       let trendStale = false;
-      if (trendEnabled) {
+      if (trendRequested) {
         try {
           const snapshot = await getTrendSnapshot({
             networkId: poolConfig.trendNetworkId,

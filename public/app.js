@@ -534,21 +534,22 @@ function parseTrendTargetInput(value) {
   return null;
 }
 
-function formatTrendBadge(pool) {
-  if (!pool?.trendEnabled) {
+function formatTrendBadge(pool, usageLabel) {
+  if (!usageLabel) {
     return "<span class=\"trend-badge trend-off\">Desativado</span>";
   }
   const timeframe = pool?.trendTimeframe ? ` ${pool.trendTimeframe}` : "";
+  const usage = usageLabel ? ` ${usageLabel}` : "";
   if (pool?.trendStale) {
-    return `<span class="trend-badge trend-unknown">Desatualizado${timeframe}</span>`;
+    return `<span class="trend-badge trend-unknown">Desatualizado${timeframe}${usage}</span>`;
   }
   if (pool?.trendDirection === "up") {
-    return `<span class="trend-badge trend-up">Alta${timeframe}</span>`;
+    return `<span class="trend-badge trend-up">Alta${timeframe}${usage}</span>`;
   }
   if (pool?.trendDirection === "down") {
-    return `<span class="trend-badge trend-down">Baixa${timeframe}</span>`;
+    return `<span class="trend-badge trend-down">Baixa${timeframe}${usage}</span>`;
   }
-  return `<span class="trend-badge trend-unknown">Indisponível${timeframe}</span>`;
+  return `<span class="trend-badge trend-unknown">Indisponível${timeframe}${usage}</span>`;
 }
 
 function openModal(modal) {
@@ -951,6 +952,16 @@ function renderPools(data, config) {
     const defaultHedgeLeverage = config?.hedgeLeverage ?? "-";
     const defaultHedgeEntryMode = config?.hedgeEntryMode ?? "off";
     const poolTokenInfo = getTokenInfo(pool);
+    const hedgeEntryModeValue = hedgeEntryModeDisplay == null ? defaultHedgeEntryMode : hedgeEntryModeDisplay;
+    const hedgeUsesTrend = ["trend-down", "trend-up", "trend-any"].includes(String(hedgeEntryModeValue));
+    const poolUsesTrend = Boolean(pool.trendEnabled);
+    const trendUsageLabel = poolUsesTrend && hedgeUsesTrend
+      ? "pool/trade"
+      : poolUsesTrend
+        ? "pool"
+        : hedgeUsesTrend
+          ? "trade"
+          : "";
     const rangeLabel = rangeDisplay == null ? `Padrão (${defaultRange})` : Number(rangeDisplay).toFixed(2);
     const budgetLabel = budgetDisplay == null ? `Padrão (${defaultBudget})` : Number(budgetDisplay).toFixed(2);
     const exitTokenLabel = exitTokenDisplay == null
@@ -981,7 +992,7 @@ function renderPools(data, config) {
         <td>${rangeLabel}</td>
         <td>${exitTokenLabel}</td>
         <td>${exitBiasLabel}</td>
-        <td>${formatTrendBadge(pool)}</td>
+        <td>${formatTrendBadge(pool, trendUsageLabel)}</td>
         <td>${budgetLabel}</td>
         <td>${hedgeEnabledValue ? hedgePctLabel : "Desativado"}</td>
         <td>${hedgeEnabledValue ? hedgeSymbolLabel : "-"}</td>
