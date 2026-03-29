@@ -922,7 +922,7 @@ function renderPools(data, config) {
   cachedPools = pools;
   cachedConfig = config;
   if (!pools.length) {
-    poolsBody.innerHTML = "<tr><td colspan=\"16\">Sem pools cadastradas</td></tr>";
+    poolsBody.innerHTML = "<tr><td colspan=\"17\">Sem pools cadastradas</td></tr>";
     return;
   }
   const rows = pools.map((pool) => {
@@ -940,6 +940,7 @@ function renderPools(data, config) {
     const hedgePctDisplay = pool.overrides?.hedgePct ?? null;
     const hedgeSymbolDisplay = pool.overrides?.hedgeSymbol ?? null;
     const hedgeLeverageDisplay = pool.overrides?.hedgeLeverage ?? null;
+    const hedgeEntryModeDisplay = pool.overrides?.hedgeEntryMode ?? null;
     const defaultRange = config?.rangeWidthPct ?? "-";
     const defaultBudget = config?.budgetUsd ?? "-";
     const defaultExitToken = config?.preferredExitToken ?? null;
@@ -948,6 +949,7 @@ function renderPools(data, config) {
     const defaultHedgePct = config?.hedgePct ?? "-";
     const defaultHedgeSymbol = config?.hedgeSymbol ?? "-";
     const defaultHedgeLeverage = config?.hedgeLeverage ?? "-";
+    const defaultHedgeEntryMode = config?.hedgeEntryMode ?? "off";
     const poolTokenInfo = getTokenInfo(pool);
     const rangeLabel = rangeDisplay == null ? `Padrão (${defaultRange})` : Number(rangeDisplay).toFixed(2);
     const budgetLabel = budgetDisplay == null ? `Padrão (${defaultBudget})` : Number(budgetDisplay).toFixed(2);
@@ -967,6 +969,9 @@ function renderPools(data, config) {
     const hedgeLeverageLabel = hedgeLeverageDisplay == null
       ? `Padrão (${formatNumber(defaultHedgeLeverage, 2)})`
       : formatNumber(hedgeLeverageDisplay, 2);
+    const hedgeEntryModeLabel = hedgeEntryModeDisplay == null
+      ? `Padrão (${formatHedgeEntryMode(defaultHedgeEntryMode)})`
+      : formatHedgeEntryMode(hedgeEntryModeDisplay);
     const createdAt = formatTimestamp(pool.createdAt);
     return `
       <tr>
@@ -981,6 +986,7 @@ function renderPools(data, config) {
         <td>${hedgeEnabledValue ? hedgePctLabel : "Desativado"}</td>
         <td>${hedgeEnabledValue ? hedgeSymbolLabel : "-"}</td>
         <td>${hedgeEnabledValue ? hedgeLeverageLabel : "-"}</td>
+        <td>${hedgeEnabledValue ? hedgeEntryModeLabel : "-"}</td>
         <td>${statusLabel}</td>
         <td>${lastActionLabel}</td>
         <td>${formatNumber(pool.positionPnlUsd, 2)}</td>
