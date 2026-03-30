@@ -8,9 +8,27 @@ import { logger } from "./logger.js";
 import { PoolManager } from "./pool-manager.js";
 import { getTrendSeries } from "./trend.js";
 import { listLinearSymbols } from "./bybit.js";
+import type { HistoryEvent } from "./runner.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const HISTORY_EDITABLE_FIELDS = new Set<keyof HistoryEvent>([
+  "price",
+  "positionEntryUsd",
+  "positionFeesUsd",
+  "txFeeUsd",
+  "positionExitUsd",
+  "positionPnlUsd",
+  "hedgeNotionalUsd",
+  "hedgeLeverage",
+  "hedgeFeesUsd",
+  "hedgePnlUsd"
+]);
+
+function isEditableHistoryField(field: string): field is keyof HistoryEvent {
+  return HISTORY_EDITABLE_FIELDS.has(field as keyof HistoryEvent);
+}
 
 export async function startServer(config: Config): Promise<void> {
   const app = express();
@@ -371,6 +389,33 @@ export async function startServer(config: Config): Promise<void> {
         return;
       }
       await poolManager.deleteSelectedHistoryEvents(filtered);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post("/api/history/update", async (req: Request, res: Response) => {
+    try {
+      if (!poolManager.getSelectedPoolId()) {
+        res.status(400).json({ ok: false, error: "No pool selected" });
+        return;
+      }
+      const { id, field, value } = req.body ?? {};
+      if (typeof id !== "string" || !id.trim()) {
+        res.status(400).json({ ok: false, error: "id is required" });
+        return;
+      }
+      if (typeof field !== "string" || !isEditableHistoryField(field)) {
+        res.status(400).json({ ok: false, error: "field is not editable" });
+        return;
+      }
+      const num = typeof value === "number" ? value : Number(value);
+      if (!Number.isFinite(num)) {
+        res.status(400).json({ ok: false, error: "value must be a number" });
+        return;
+      }
+      await poolManager.updateSelectedHistoryEvent(id, field, num);
       res.json({ ok: true });
     } catch (err) {
       res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });

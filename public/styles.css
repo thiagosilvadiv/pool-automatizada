@@ -916,6 +916,43 @@ td {
   text-align: left;
 }
 
+.history-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px dashed #2c3a4a;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}
+
+.history-edit-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.history-edit-input {
+  width: 100%;
+  min-width: 60px;
+  background: #0f1419;
+  border: 1px solid #2c3a4a;
+  border-radius: 8px;
+  padding: 4px 6px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.history-edit-input.error {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px rgba(255, 107, 107, 0.12);
+}
+
 tbody tr:nth-child(even) {
   background: rgba(255, 255, 255, 0.02);
 }

@@ -6,6 +6,7 @@ import { createCloseAccountInstruction, TOKEN_PROGRAM_ID } from "@solana/spl-tok
 import { Config } from "./config.js";
 import { OrcaBot } from "./orca.js";
 import { BotRunner } from "./runner.js";
+import type { HistoryEvent } from "./runner.js";
 import { logger } from "./logger.js";
 import {
   createHistoryStore,
@@ -358,6 +359,16 @@ export class PoolManager {
     await record.runner.deleteHistoryEvents(ids);
   }
 
+  async updateHistoryEvent(
+    id: string,
+    eventId: string,
+    field: keyof HistoryEvent,
+    value: number
+  ): Promise<void> {
+    const record = this.getRecord(id);
+    await record.runner.updateHistoryEvent(eventId, field, value);
+  }
+
   async startSelected(): Promise<void> {
     if (!this.selectedPoolId) {
       throw new Error("No pool selected");
@@ -571,6 +582,17 @@ export class PoolManager {
       return;
     }
     await this.deleteHistoryEvents(this.selectedPoolId, ids);
+  }
+
+  async updateSelectedHistoryEvent(
+    eventId: string,
+    field: keyof HistoryEvent,
+    value: number
+  ): Promise<void> {
+    if (!this.selectedPoolId) {
+      throw new Error("No pool selected");
+    }
+    await this.updateHistoryEvent(this.selectedPoolId, eventId, field, value);
   }
 
   private getRecord(id: string): PoolRecord {

@@ -431,6 +431,39 @@ export class BotRunner {
     await this.saveHistory();
   }
 
+  async updateHistoryEvent(id: string, field: keyof HistoryEvent, value: number): Promise<void> {
+    await this.loadHistoryIfNeeded();
+    const index = this.history.findIndex((event) => event.id === id);
+    if (index < 0) {
+      throw new Error("History event not found");
+    }
+    const current = this.history[index];
+    const next: HistoryEvent = { ...current, [field]: value };
+    this.history[index] = next;
+    if (field === "positionEntryUsd") {
+      const mint = next.positionMint ?? null;
+      if (mint) {
+        let latestEntry: number | null = null;
+        for (const item of this.history) {
+          if (item.positionMint !== mint || typeof item.positionEntryUsd !== "number") {
+            continue;
+          }
+          if (isEntryUsdSane(item.positionEntryUsd, item.budgetUsd ?? null, item.portfolioUsd ?? null, {
+            minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
+          })) {
+            latestEntry = item.positionEntryUsd;
+          }
+        }
+        if (latestEntry != null) {
+          this.entryByMint.set(mint, latestEntry);
+        } else {
+          this.entryByMint.delete(mint);
+        }
+      }
+    }
+    await this.saveHistory();
+  }
+
   private resolveTrendForMint(mint: string | null, fallback: "up" | "down" | null): "up" | "down" | null {
     if (!mint) {
       return fallback ?? null;

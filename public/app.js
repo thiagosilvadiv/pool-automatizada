@@ -91,6 +91,8 @@ let cachedConfig = null;
 let cachedHistory = [];
 let activeActionMenu = null;
 let swapErrorDetails = [];
+let historyEditState = null;
+let historyEditPendingRender = false;
 
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
@@ -168,6 +170,19 @@ const actionTypeLabels = {
   "fechamento + abertura": "Fechamento + abertura",
   "monitorando": "Monitorando",
   "operacional": "Operacional"
+};
+
+const HISTORY_EDITABLE_FIELDS = {
+  price: { digits: 8, label: "Preço" },
+  positionEntryUsd: { digits: 2, label: "Entrada (USD)" },
+  positionFeesUsd: { digits: 2, label: "Taxas (USD)" },
+  txFeeUsd: { digits: 6, label: "Taxa TX (USD)" },
+  positionExitUsd: { digits: 2, label: "Saída (USD)" },
+  positionPnlUsd: { digits: 2, label: "PnL líquido (USD)" },
+  hedgeNotionalUsd: { digits: 2, label: "Hedge notional (USD)" },
+  hedgeLeverage: { digits: 2, label: "Hedge lev" },
+  hedgeFeesUsd: { digits: 2, label: "Hedge taxas (USD)" },
+  hedgePnlUsd: { digits: 2, label: "Hedge PnL (USD)" }
 };
 
 const hedgeEntryModeLabels = {
@@ -865,7 +880,125 @@ function closeEditPoolModal() {
   closeModal(editPoolModal);
 }
 
+function getFiniteNumber(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const num = Number(trimmed);
+    return Number.isFinite(num) ? num : null;
+  }
+  return null;
+}
+
+function renderEditableNumberCell(value, field, editId) {
+  const config = HISTORY_EDITABLE_FIELDS[field];
+  if (!config) {
+    return formatNumber(value, 2);
+  }
+  const num = getFiniteNumber(value);
+  if (num != null) {
+    return formatNumber(num, config.digits);
+  }
+  if (!editId) {
+    return "-";
+  }
+  return `<button type="button" class="history-edit-btn" data-edit-id="${editId}" data-edit-field="${field}" aria-label="Editar ${config.label}" title="Editar ${config.label}">+</button>`;
+}
+
+function closeHistoryEdit(options = {}) {
+  historyEditState = null;
+  const shouldRender = options.rerender !== false;
+  if (shouldRender) {
+    renderHistory(cachedHistory);
+    historyEditPendingRender = false;
+    return;
+  }
+  if (historyEditPendingRender) {
+    historyEditPendingRender = false;
+    renderHistory(cachedHistory);
+  }
+}
+
+async function commitHistoryEdit(id, field, inputEl) {
+  const parsed = parseOptionalNumber(inputEl.value);
+  if (parsed === undefined) {
+    inputEl.classList.add("error");
+    inputEl.focus();
+    return;
+  }
+  inputEl.classList.remove("error");
+  inputEl.disabled = true;
+  inputEl.title = "";
+  try {
+    const res = await fetch("/api/history/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, field, value: parsed })
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) {
+      throw new Error(data?.error ?? "Erro ao atualizar histórico.");
+    }
+    const idx = cachedHistory.findIndex((item) => item?.id === id);
+    if (idx >= 0) {
+      cachedHistory[idx] = { ...cachedHistory[idx], [field]: parsed };
+    }
+    closeHistoryEdit({ rerender: true });
+  } catch (err) {
+    inputEl.disabled = false;
+    inputEl.classList.add("error");
+    inputEl.title = err instanceof Error ? err.message : String(err);
+    inputEl.focus();
+  }
+}
+
+function startHistoryEdit(button) {
+  const editId = button.getAttribute("data-edit-id");
+  const field = button.getAttribute("data-edit-field");
+  if (!editId || !field) return;
+
+  if (historyEditState && (historyEditState.id !== editId || historyEditState.field !== field)) {
+    closeHistoryEdit({ rerender: true });
+  }
+
+  const cell = button.closest("td");
+  if (!cell) return;
+
+  historyEditState = { id: editId, field };
+  cell.innerHTML = "";
+  const input = document.createElement("input");
+  input.type = "number";
+  input.step = "any";
+  input.className = "history-edit-input";
+  input.setAttribute("data-edit-input", "true");
+  cell.appendChild(input);
+  input.focus();
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeHistoryEdit({ rerender: true });
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void commitHistoryEdit(editId, field, input);
+    }
+  });
+  input.addEventListener("blur", () => {
+    if (historyEditState) {
+      closeHistoryEdit({ rerender: true });
+    }
+  });
+}
+
 function renderHistory(items) {
+  if (historyEditState) {
+    historyEditState = null;
+    historyEditPendingRender = false;
+  }
   const filteredItems = applyHistoryTypeFilter(items);
   if (!filteredItems || filteredItems.length === 0) {
     selectedHistoryIds.clear();
@@ -878,7 +1011,9 @@ function renderHistory(items) {
   const rows = filteredItems.slice(0, limit).map((item, index) => {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
     const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
-    const eventId = item.id ?? `legacy-${index}`;
+    const rawEventId = typeof item.id === "string" && item.id.trim().length > 0 ? item.id : null;
+    const eventId = rawEventId ?? `legacy-${index}`;
+    const editId = rawEventId;
     currentIds.add(eventId);
     const checked = selectedHistoryIds.has(eventId) ? "checked" : "";
     const pnlRaw = Number(item.positionPnlUsd);
@@ -892,6 +1027,16 @@ function renderHistory(items) {
     const hedgePnl = Number.isFinite(hedgeRaw) ? hedgeRaw : 0;
     const pnlTotal = hasPnl || hasHedge ? poolPnl + hedgePnl : null;
     const pnlTotalNet = hasPnl || hasHedge ? (hasPnl ? poolPnl - fees : 0) + hedgePnl : null;
+    const priceCell = renderEditableNumberCell(item.price, "price", editId);
+    const entryCell = renderEditableNumberCell(item.positionEntryUsd, "positionEntryUsd", editId);
+    const feesCell = renderEditableNumberCell(item.positionFeesUsd, "positionFeesUsd", editId);
+    const txFeeCell = renderEditableNumberCell(item.txFeeUsd, "txFeeUsd", editId);
+    const exitCell = renderEditableNumberCell(item.positionExitUsd, "positionExitUsd", editId);
+    const pnlCell = renderEditableNumberCell(item.positionPnlUsd, "positionPnlUsd", editId);
+    const hedgeNotionalCell = renderEditableNumberCell(item.hedgeNotionalUsd, "hedgeNotionalUsd", editId);
+    const hedgeLeverageCell = renderEditableNumberCell(item.hedgeLeverage, "hedgeLeverage", editId);
+    const hedgeFeesCell = renderEditableNumberCell(item.hedgeFeesUsd, "hedgeFeesUsd", editId);
+    const hedgePnlCell = renderEditableNumberCell(item.hedgePnlUsd, "hedgePnlUsd", editId);
     return `
       <tr>
         <td><input type="checkbox" class="history-select" data-id="${eventId}" ${checked}></td>
@@ -901,19 +1046,19 @@ function renderHistory(items) {
         <td data-col="type">${typeLabel}</td>
         <td data-col="action">${actionLabel}</td>
         <td data-col="trend">${formatTrendDirection(item.trendDirection)}</td>
-        <td data-col="price">${formatNumber(item.price, 8)}</td>
+        <td data-col="price">${priceCell}</td>
         <td data-col="targetRange">${formatRange(item.targetRange)}</td>
         <td data-col="mint">${item.positionMint ?? "-"}</td>
-        <td data-col="entryUsd">${formatNumber(item.positionEntryUsd, 2)}</td>
-        <td data-col="feesUsd">${formatNumber(item.positionFeesUsd, 2)}</td>
-        <td data-col="txFeeUsd">${formatNumber(item.txFeeUsd, 6)}</td>
-        <td data-col="exitUsd">${formatNumber(item.positionExitUsd, 2)}</td>
-        <td data-col="pnlUsd">${formatNumber(item.positionPnlUsd, 2)}</td>
+        <td data-col="entryUsd">${entryCell}</td>
+        <td data-col="feesUsd">${feesCell}</td>
+        <td data-col="txFeeUsd">${txFeeCell}</td>
+        <td data-col="exitUsd">${exitCell}</td>
+        <td data-col="pnlUsd">${pnlCell}</td>
         <td data-col="hedgeSymbol">${item.hedgeSymbol ?? "-"}</td>
-        <td data-col="hedgeNotional">${formatNumber(item.hedgeNotionalUsd, 2)}</td>
-        <td data-col="hedgeLeverage">${formatNumber(item.hedgeLeverage, 2)}</td>
-        <td data-col="hedgeFees">${formatNumber(item.hedgeFeesUsd, 2)}</td>
-        <td data-col="hedgePnl">${formatNumber(item.hedgePnlUsd, 2)}</td>
+        <td data-col="hedgeNotional">${hedgeNotionalCell}</td>
+        <td data-col="hedgeLeverage">${hedgeLeverageCell}</td>
+        <td data-col="hedgeFees">${hedgeFeesCell}</td>
+        <td data-col="hedgePnl">${hedgePnlCell}</td>
         <td data-col="hedgeDecision">${formatHedgeDecision(item.hedgeDecision)}</td>
         <td data-col="hedgeDecisionReason">${item.hedgeDecisionReason ?? "-"}</td>
         <td data-col="pnlTotal">${formatNumber(pnlTotal, 2)}</td>
@@ -1169,7 +1314,11 @@ async function updateUI() {
     }
     updateTrendHint(poolTrendHint, tokenInfo);
 
-    renderHistory(history);
+    if (historyEditState) {
+      historyEditPendingRender = true;
+    } else {
+      renderHistory(cachedHistory);
+    }
     renderHedgeLogs(hedgeLogs);
     renderPools(pools, config);
     renderResults(pools);
@@ -1984,6 +2133,15 @@ historyBody.addEventListener("change", (event) => {
     selectedHistoryIds.delete(id);
   }
   updateHistorySelectionState();
+});
+
+historyBody.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const button = target.closest(".history-edit-btn");
+  if (!(button instanceof HTMLElement)) return;
+  event.preventDefault();
+  startHistoryEdit(button);
 });
 
 if (selectAllHistory) {
