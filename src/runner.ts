@@ -609,7 +609,17 @@ export class BotRunner {
 
       if (!isRebalanced && status.lastAction === "close-position" && this.config.hedgeEnabled) {
         const expectedMint = status.eventPositionMint ?? status.positionMint ?? null;
-        const allowUnowned = this.hedgeManager.getState()?.positionMint == null;
+        const closeDecision = this.getHedgeDecision(expectedMint);
+        let allowUnowned = this.hedgeManager.getState()?.positionMint == null;
+        if (!this.hedgeManager.getState()?.active) {
+          const synced = await this.hedgeManager.syncFromBybit();
+          if (synced) {
+            allowUnowned = this.hedgeManager.getState()?.positionMint == null;
+          }
+        }
+        if (!this.hedgeManager.getState()?.active && closeDecision?.status === "opened") {
+          allowUnowned = true;
+        }
         this.lastHedgeClose = await this.hedgeManager.closeIfOpen({
           expectedPositionMint: expectedMint,
           allowUnowned
