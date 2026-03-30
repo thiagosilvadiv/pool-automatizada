@@ -240,38 +240,6 @@
       </section>
 
       <section class="panel">
-        <div class="row row-between tight">
-          <h2>Log do Hedge</h2>
-          <div class="row tight">
-            <button id="clearHedgeLogBtn" class="ghost danger">Limpar log</button>
-          </div>
-        </div>
-        <p class="subtitle">Limite: 80 eventos (mais recentes).</p>
-        <div class="table-wrap">
-          <div class="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Data/Hora</th>
-                  <th>Nivel</th>
-                  <th>Acao</th>
-                  <th>Simbolo</th>
-                  <th>Qtd</th>
-                  <th>Notional (USD)</th>
-                  <th>Lev</th>
-                  <th>PnL (USD)</th>
-                  <th>Mensagem</th>
-                </tr>
-              </thead>
-              <tbody id="hedgeLogBody">
-                <tr><td colspan="9">Sem eventos ainda</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel">
         <h2>Resultados</h2>
         <div class="table-wrap">
           <div class="table-scroll">
@@ -379,6 +347,38 @@
             <tbody id="historyBody">
               <tr><td colspan="24">Sem eventos ainda</td></tr>
             </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="row row-between tight">
+          <h2>Log do Hedge</h2>
+          <div class="row tight">
+            <button id="clearHedgeLogBtn" class="ghost danger">Limpar log</button>
+          </div>
+        </div>
+        <p class="subtitle">Limite: 20 eventos (mais recentes).</p>
+        <div class="table-wrap">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Data/Hora</th>
+                  <th>Nivel</th>
+                  <th>Acao</th>
+                  <th>Simbolo</th>
+                  <th>Qtd</th>
+                  <th>Notional (USD)</th>
+                  <th>Lev</th>
+                  <th>PnL (USD)</th>
+                  <th>Mensagem</th>
+                </tr>
+              </thead>
+              <tbody id="hedgeLogBody">
+                <tr><td colspan="9">Sem eventos ainda</td></tr>
+              </tbody>
             </table>
           </div>
         </div>
