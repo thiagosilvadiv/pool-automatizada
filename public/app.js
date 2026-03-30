@@ -508,8 +508,16 @@ async function ensureHedgeSymbolsLoaded() {
 
 function parseOptionalNumber(value) {
   if (value == null) return undefined;
-  const trimmed = String(value).trim();
+  let trimmed = String(value).trim();
   if (!trimmed) return undefined;
+  if (trimmed.includes(",")) {
+    const hasDot = trimmed.includes(".");
+    if (hasDot && /^\d{1,3}(\.\d{3})*,\d+$/.test(trimmed)) {
+      trimmed = trimmed.replace(/\./g, "").replace(",", ".");
+    } else if (!hasDot) {
+      trimmed = trimmed.replace(",", ".");
+    }
+  }
   const num = Number(trimmed);
   return Number.isFinite(num) ? num : undefined;
 }
