@@ -132,6 +132,14 @@
               <option value="force-up">Sempre alta (ignora tendência)</option>
             </select>
           </div>
+          <div class="field">
+            <label for="poolPnlTargetUsd">PnL alvo (USD)</label>
+            <input id="poolPnlTargetUsd" type="number" min="0" step="0.01" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="poolPnlTargetPct">PnL alvo (%)</label>
+            <input id="poolPnlTargetPct" type="number" min="0" max="100" step="0.1" placeholder="Padrão" />
+          </div>
           <button id="addPoolBtn" class="primary">Adicionar</button>
         </div>
         <div id="poolTrendHint" class="hint hidden"></div>
@@ -488,6 +496,14 @@
               <option value="force-down">Sempre baixa (ignora tendência)</option>
               <option value="force-up">Sempre alta (ignora tendência)</option>
             </select>
+          </div>
+          <div class="field">
+            <label for="editPoolPnlTargetUsd">PnL alvo (USD)</label>
+            <input id="editPoolPnlTargetUsd" type="number" min="0" step="0.01" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="editPoolPnlTargetPct">PnL alvo (%)</label>
+            <input id="editPoolPnlTargetPct" type="number" min="0" max="100" step="0.1" placeholder="Padrão" />
           </div>
           <div id="editPoolTrendHint" class="hint hidden"></div>
           <div class="modal-actions">

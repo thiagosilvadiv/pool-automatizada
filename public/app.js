@@ -51,6 +51,8 @@ const poolHedgeMarginPctInput = document.getElementById("poolHedgeMarginPct");
 const poolHedgeSymbolInput = document.getElementById("poolHedgeSymbol");
 const poolHedgeLeverageInput = document.getElementById("poolHedgeLeverage");
 const poolHedgeEntryModeInput = document.getElementById("poolHedgeEntryMode");
+const poolPnlTargetUsdInput = document.getElementById("poolPnlTargetUsd");
+const poolPnlTargetPctInput = document.getElementById("poolPnlTargetPct");
 const poolTrendHint = document.getElementById("poolTrendHint");
 const addPoolBtn = document.getElementById("addPoolBtn");
 const poolsBody = document.getElementById("poolsBody");
@@ -74,6 +76,8 @@ const editPoolHedgeMarginPctInput = document.getElementById("editPoolHedgeMargin
 const editPoolHedgeSymbolInput = document.getElementById("editPoolHedgeSymbol");
 const editPoolHedgeLeverageInput = document.getElementById("editPoolHedgeLeverage");
 const editPoolHedgeEntryModeInput = document.getElementById("editPoolHedgeEntryMode");
+const editPoolPnlTargetUsdInput = document.getElementById("editPoolPnlTargetUsd");
+const editPoolPnlTargetPctInput = document.getElementById("editPoolPnlTargetPct");
 const editPoolTrendHint = document.getElementById("editPoolTrendHint");
 const editPoolError = document.getElementById("editPoolError");
 const swapResultModal = document.getElementById("swapResultModal");
@@ -765,6 +769,8 @@ function openEditPoolModal(pool) {
   const defaultHedgeSymbol = cachedConfig?.hedgeSymbol ?? "-";
   const defaultHedgeLeverage = cachedConfig?.hedgeLeverage ?? "-";
   const defaultHedgeEntryMode = cachedConfig?.hedgeEntryMode ?? "off";
+  const defaultPnlTargetUsd = cachedConfig?.pnlTargetUsd ?? "-";
+  const defaultPnlTargetPct = cachedConfig?.pnlTargetPct ?? "-";
   const tokenInfo = getTokenInfo(pool);
 
   if (editPoolIdInput) editPoolIdInput.value = pool.id ?? "";
@@ -803,6 +809,14 @@ function openEditPoolModal(pool) {
   if (editPoolHedgeEntryModeInput) {
     editPoolHedgeEntryModeInput.value = overrides.hedgeEntryMode ?? "";
     setSelectPlaceholder(editPoolHedgeEntryModeInput, `Padrão (${formatHedgeEntryMode(defaultHedgeEntryMode)})`);
+  }
+  if (editPoolPnlTargetUsdInput) {
+    editPoolPnlTargetUsdInput.value = overrides.pnlTargetUsd ?? "";
+    editPoolPnlTargetUsdInput.placeholder = `Padrão (${formatNumber(defaultPnlTargetUsd, 2)})`;
+  }
+  if (editPoolPnlTargetPctInput) {
+    editPoolPnlTargetPctInput.value = overrides.pnlTargetPct ?? "";
+    editPoolPnlTargetPctInput.placeholder = `Padrão (${formatNumber(defaultPnlTargetPct, 2)})`;
   }
   if (editPoolExitTokenInput) {
     updateExitTokenSelectHints(editPoolExitTokenInput, tokenInfo);
@@ -1134,6 +1148,12 @@ async function updateUI() {
     if (poolHedgeEntryModeInput) {
       setSelectPlaceholder(poolHedgeEntryModeInput, `Padrão (${formatHedgeEntryMode(config.hedgeEntryMode ?? "off")})`);
     }
+    if (poolPnlTargetUsdInput) {
+      poolPnlTargetUsdInput.placeholder = `Padrão (${formatNumber(config.pnlTargetUsd ?? "-", 2)})`;
+    }
+    if (poolPnlTargetPctInput) {
+      poolPnlTargetPctInput.placeholder = `Padrão (${formatNumber(config.pnlTargetPct ?? "-", 2)})`;
+    }
     if (poolTrendTimeframeInput) {
       setSelectPlaceholder(poolTrendTimeframeInput, `Padrão (${config.trendTimeframe ?? "1m"})`);
     }
@@ -1249,6 +1269,8 @@ addPoolBtn.addEventListener("click", async () => {
   const hedgeSymbol = poolHedgeSymbolInput?.value?.trim();
   const hedgeLeverage = parseOptionalNumber(poolHedgeLeverageInput?.value);
   const hedgeEntryMode = poolHedgeEntryModeInput?.value?.trim();
+  const pnlTargetUsd = parseOptionalNumber(poolPnlTargetUsdInput?.value);
+  const pnlTargetPct = parseOptionalNumber(poolPnlTargetPctInput?.value);
   poolError.classList.add("hidden");
   try {
     const overrides = {};
@@ -1321,6 +1343,12 @@ addPoolBtn.addEventListener("click", async () => {
     if (hedgeEntryMode) {
       overrides.hedgeEntryMode = hedgeEntryMode;
     }
+    if (pnlTargetUsd !== undefined) {
+      overrides.pnlTargetUsd = pnlTargetUsd;
+    }
+    if (pnlTargetPct !== undefined) {
+      overrides.pnlTargetPct = pnlTargetPct;
+    }
     const res = await fetch("/api/pools", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1347,6 +1375,8 @@ addPoolBtn.addEventListener("click", async () => {
     if (poolHedgeSymbolInput) poolHedgeSymbolInput.value = "";
     if (poolHedgeLeverageInput) poolHedgeLeverageInput.value = "";
     if (poolHedgeEntryModeInput) poolHedgeEntryModeInput.value = "";
+    if (poolPnlTargetUsdInput) poolPnlTargetUsdInput.value = "";
+    if (poolPnlTargetPctInput) poolPnlTargetPctInput.value = "";
     updateUI();
   } catch (err) {
     poolError.textContent = err instanceof Error ? err.message : String(err);
@@ -1574,6 +1604,36 @@ if (editPoolForm) {
       overrides.hedgeEntryMode = null;
     } else {
       overrides.hedgeEntryMode = hedgeEntryModeRaw;
+    }
+
+    const pnlTargetUsdRaw = editPoolPnlTargetUsdInput?.value?.trim() ?? "";
+    if (!pnlTargetUsdRaw) {
+      overrides.pnlTargetUsd = null;
+    } else {
+      const parsed = parseOptionalNumber(pnlTargetUsdRaw);
+      if (parsed === undefined) {
+        if (editPoolError) {
+          editPoolError.textContent = "PnL alvo (USD) inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.pnlTargetUsd = parsed;
+    }
+
+    const pnlTargetPctRaw = editPoolPnlTargetPctInput?.value?.trim() ?? "";
+    if (!pnlTargetPctRaw) {
+      overrides.pnlTargetPct = null;
+    } else {
+      const parsed = parseOptionalNumber(pnlTargetPctRaw);
+      if (parsed === undefined) {
+        if (editPoolError) {
+          editPoolError.textContent = "PnL alvo (%) inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.pnlTargetPct = parsed;
     }
 
     try {
