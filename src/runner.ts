@@ -761,6 +761,7 @@ export class BotRunner {
     status: BotStatus,
     successMessage: string
   ): Promise<HedgeCloseResult | null> {
+    const stateBeforeClose = this.hedgeManager.getState();
     const closeDecision = this.getHedgeDecision(expectedMint);
     let allowUnowned = this.hedgeManager.getState()?.positionMint == null;
     if (!this.hedgeManager.getState()?.active) {
@@ -777,9 +778,17 @@ export class BotRunner {
       allowUnowned
     });
     if (!hedgeClose && closeDecision?.status === "opened") {
-      const symbol = (this.config.hedgeSymbol ?? "").trim().toUpperCase();
+      hedgeClose = await this.hedgeManager.closeIfOpen({
+        expectedPositionMint: expectedMint,
+        allowUnowned: true
+      });
+    }
+    if (!hedgeClose && closeDecision?.status === "opened") {
+      const symbol = (stateBeforeClose?.symbol ?? this.config.hedgeSymbol ?? "").trim().toUpperCase();
       if (symbol) {
-        const openedAt = expectedMint ? this.openedAtByMint.get(expectedMint) ?? null : null;
+        const openedAt = expectedMint
+          ? this.openedAtByMint.get(expectedMint) ?? null
+          : stateBeforeClose?.openedAt ?? null;
         const openedAfterMs = openedAt ? Date.parse(openedAt) : undefined;
         const fallback = await this.hedgeManager.fetchClosedPnlFallback(symbol, {
           openedAfterMs,
@@ -792,13 +801,25 @@ export class BotRunner {
             ?? status.budgetUsd
             ?? null;
           const pct = Number(this.config.hedgePct ?? NaN);
-          const notionalUsd = Number.isFinite(baseUsd ?? NaN) && baseUsd != null && Number.isFinite(pct) && pct > 0
+          const fallbackNotional = Number.isFinite(stateBeforeClose?.notionalUsd ?? NaN)
+            ? Number(stateBeforeClose?.notionalUsd ?? 0)
+            : null;
+          const notionalUsd = fallbackNotional != null && fallbackNotional > 0
+            ? fallbackNotional
+            : Number.isFinite(baseUsd ?? NaN) && baseUsd != null && Number.isFinite(pct) && pct > 0
             ? Number(baseUsd) * (pct / 100)
             : 0;
-          const leverage = Number.isFinite(Number(this.config.hedgeLeverage ?? NaN))
+          const leverage = Number.isFinite(Number(stateBeforeClose?.leverage ?? NaN))
+            ? Number(stateBeforeClose?.leverage ?? 1)
+            : Number.isFinite(Number(this.config.hedgeLeverage ?? NaN))
             ? Number(this.config.hedgeLeverage ?? 1)
             : 1;
-          const qtyEst = await this.hedgeManager.estimateQtyFromNotional(symbol, notionalUsd);
+          const qtyFromState = Number.isFinite(stateBeforeClose?.qty ?? NaN)
+            ? Number(stateBeforeClose?.qty ?? 0)
+            : null;
+          const qtyEst = qtyFromState != null && qtyFromState > 0
+            ? qtyFromState
+            : await this.hedgeManager.estimateQtyFromNotional(symbol, notionalUsd);
           hedgeClose = {
             symbol,
             qty: Number.isFinite(qtyEst ?? NaN) ? Number(qtyEst) : 0,
