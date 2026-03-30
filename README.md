@@ -1,5 +1,7 @@
 ﻿# Orca Liquidity Bot (MVP)
 
+> Teste rápido de edição para validar desfazer/reverter.
+
 Bot de liquidez concentrada para Orca Whirlpools na Solana, com re-range automático quando o preço sai da faixa.
 
 ## Requisitos
