@@ -783,53 +783,67 @@ export class BotRunner {
         allowUnowned: true
       });
     }
-    if (!hedgeClose && closeDecision?.status === "opened") {
-      const symbol = (stateBeforeClose?.symbol ?? this.config.hedgeSymbol ?? "").trim().toUpperCase();
-      if (symbol) {
-        const openedAt = expectedMint
-          ? this.openedAtByMint.get(expectedMint) ?? null
-          : stateBeforeClose?.openedAt ?? null;
-        const openedAfterMs = openedAt ? Date.parse(openedAt) : undefined;
+    if (!hedgeClose) {
+      const symbols = Array.from(
+        new Set(
+          [
+            stateBeforeClose?.symbol ?? null,
+            this.config.hedgeSymbol ?? null
+          ]
+            .map((item) => String(item ?? "").trim().toUpperCase())
+            .filter((item) => item.length > 0)
+        )
+      );
+      const openedAt = expectedMint
+        ? this.openedAtByMint.get(expectedMint) ?? null
+        : stateBeforeClose?.openedAt ?? null;
+      const openedAfterMs = openedAt ? Date.parse(openedAt) : undefined;
+      const closeAtMs = Date.now();
+
+      for (const symbol of symbols) {
         const fallback = await this.hedgeManager.fetchClosedPnlFallback(symbol, {
           openedAfterMs,
-          closeAtMs: Date.now()
+          closeAtMs
         });
-        if (fallback) {
-          const baseUsd = status.eventPositionEntryUsd
-            ?? status.positionEntryUsd
-            ?? status.positionValueUsd
-            ?? status.budgetUsd
-            ?? null;
-          const pct = Number(this.config.hedgePct ?? NaN);
-          const fallbackNotional = Number.isFinite(stateBeforeClose?.notionalUsd ?? NaN)
-            ? Number(stateBeforeClose?.notionalUsd ?? 0)
-            : null;
-          const notionalUsd = fallbackNotional != null && fallbackNotional > 0
-            ? fallbackNotional
-            : Number.isFinite(baseUsd ?? NaN) && baseUsd != null && Number.isFinite(pct) && pct > 0
-            ? Number(baseUsd) * (pct / 100)
-            : 0;
-          const leverage = Number.isFinite(Number(stateBeforeClose?.leverage ?? NaN))
-            ? Number(stateBeforeClose?.leverage ?? 1)
-            : Number.isFinite(Number(this.config.hedgeLeverage ?? NaN))
-            ? Number(this.config.hedgeLeverage ?? 1)
-            : 1;
-          const qtyFromState = Number.isFinite(stateBeforeClose?.qty ?? NaN)
-            ? Number(stateBeforeClose?.qty ?? 0)
-            : null;
-          const qtyEst = qtyFromState != null && qtyFromState > 0
-            ? qtyFromState
-            : await this.hedgeManager.estimateQtyFromNotional(symbol, notionalUsd);
-          hedgeClose = {
-            symbol,
-            qty: Number.isFinite(qtyEst ?? NaN) ? Number(qtyEst) : 0,
-            notionalUsd,
-            leverage,
-            feesUsd: fallback.feesUsd ?? null,
-            pnlUsd: fallback.pnlUsd ?? null,
-            closedAt: new Date().toISOString()
-          };
+        if (!fallback) {
+          continue;
         }
+        const baseUsd = status.eventPositionEntryUsd
+          ?? status.positionEntryUsd
+          ?? status.positionValueUsd
+          ?? status.budgetUsd
+          ?? null;
+        const pct = Number(this.config.hedgePct ?? NaN);
+        const fallbackNotional = Number.isFinite(stateBeforeClose?.notionalUsd ?? NaN)
+          ? Number(stateBeforeClose?.notionalUsd ?? 0)
+          : null;
+        const notionalUsd = fallbackNotional != null && fallbackNotional > 0
+          ? fallbackNotional
+          : Number.isFinite(baseUsd ?? NaN) && baseUsd != null && Number.isFinite(pct) && pct > 0
+          ? Number(baseUsd) * (pct / 100)
+          : 0;
+        const leverage = Number.isFinite(Number(stateBeforeClose?.leverage ?? NaN))
+          ? Number(stateBeforeClose?.leverage ?? 1)
+          : Number.isFinite(Number(this.config.hedgeLeverage ?? NaN))
+          ? Number(this.config.hedgeLeverage ?? 1)
+          : 1;
+        const qtyFromState = Number.isFinite(stateBeforeClose?.qty ?? NaN)
+          ? Number(stateBeforeClose?.qty ?? 0)
+          : null;
+        const qtyEst = qtyFromState != null && qtyFromState > 0
+          ? qtyFromState
+          : await this.hedgeManager.estimateQtyFromNotional(symbol, notionalUsd);
+        hedgeClose = {
+          symbol,
+          qty: Number.isFinite(qtyEst ?? NaN) ? Number(qtyEst) : 0,
+          notionalUsd,
+          leverage,
+          feesUsd: fallback.feesUsd ?? null,
+          pnlUsd: fallback.pnlUsd ?? null,
+          closedAt: new Date().toISOString()
+        };
+        this.logHedgeClose(hedgeClose, "Hedge reconciliado via Bybit (fallback)");
+        return hedgeClose;
       }
     }
     if (hedgeClose) {

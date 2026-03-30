@@ -258,6 +258,7 @@ export async function createSwapAllowlistStore(): Promise<SwapAllowlistStore> {
 
 export type AiAnalysisState = {
   analyses: unknown[];
+  chats?: Record<string, unknown>;
   updatedAt: string | null;
 };
 
@@ -288,12 +289,15 @@ class FileAiAnalysisStore implements AiAnalysisStore {
         const analyses = Array.isArray((parsed as any).analyses)
           ? (parsed as any).analyses
           : [];
+        const chats = (parsed as any).chats && typeof (parsed as any).chats === "object"
+          ? (parsed as any).chats as Record<string, unknown>
+          : {};
         const updatedAt = typeof (parsed as any).updatedAt === "string"
           ? (parsed as any).updatedAt
           : null;
-        return { analyses, updatedAt };
+        return { analyses, chats, updatedAt };
       }
-      return { analyses: [], updatedAt: null };
+      return { analyses: [], chats: {}, updatedAt: null };
     } catch {
       return null;
     }
@@ -329,12 +333,15 @@ class RedisAiAnalysisStore implements AiAnalysisStore {
       const analyses = Array.isArray((parsed as any).analyses)
         ? (parsed as any).analyses
         : [];
+      const chats = (parsed as any).chats && typeof (parsed as any).chats === "object"
+        ? (parsed as any).chats as Record<string, unknown>
+        : {};
       const updatedAt = typeof (parsed as any).updatedAt === "string"
         ? (parsed as any).updatedAt
         : null;
-      return { analyses, updatedAt };
+      return { analyses, chats, updatedAt };
     }
-    return { analyses: [], updatedAt: null };
+    return { analyses: [], chats: {}, updatedAt: null };
   }
 
   async save(state: AiAnalysisState): Promise<void> {

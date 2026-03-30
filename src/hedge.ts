@@ -34,8 +34,8 @@ export type HedgeOpenResult = {
 };
 
 const OPEN_COOLDOWN_MS = 60_000;
-const CLOSED_PNL_RETRIES = 3;
-const CLOSED_PNL_RETRY_DELAY_MS = 1000;
+const CLOSED_PNL_RETRIES = 6;
+const CLOSED_PNL_RETRY_DELAY_MS = 1200;
 
 type ClosedPnlOptions = {
   openedAfterMs?: number;

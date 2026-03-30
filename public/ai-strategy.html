@@ -96,6 +96,14 @@
       </section>
 
       <section class="panel">
+        <h2>Acoes Recomendadas Agora</h2>
+        <ul id="aiActionList" class="ai-list ai-action-list">
+          <li>Execute uma analise para ver as acoes prioritarias.</li>
+        </ul>
+        <div class="hint">Sugestoes manuais em ordem de prioridade defensiva para reduzir volatilidade.</div>
+      </section>
+
+      <section class="panel">
         <h2>Risco por Pool</h2>
         <div class="table-wrap">
           <div class="table-scroll">
@@ -172,6 +180,25 @@
             </table>
           </div>
         </div>
+      </section>
+
+      <section class="panel">
+        <div class="row row-between tight">
+          <h2>Converse com a IA</h2>
+          <span id="aiChatContext" class="badge">Sem analise selecionada</span>
+        </div>
+        <p id="aiChatUpdatedAt" class="subtitle">Abra uma analise do historico ou execute uma nova para iniciar a conversa.</p>
+        <div id="aiChatMessages" class="ai-chat-box">
+          <div class="ai-chat-empty">Sem conversa ainda.</div>
+        </div>
+        <div class="field">
+          <label for="aiChatInput">Sua pergunta</label>
+          <textarea id="aiChatInput" rows="4" placeholder="Ex: Qual parametro eu devo ajustar primeiro e por que?"></textarea>
+        </div>
+        <div class="row tight">
+          <button id="aiChatSendBtn" class="primary" type="button">Enviar pergunta</button>
+        </div>
+        <div class="hint">Chat vinculado a cada analise. A IA responde em template defensivo e nao aplica mudancas automaticamente.</div>
       </section>
     </main>
     <script src="ai-strategy.js"></script>

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AiStrategyService, StrategyModelError, computePoolMetrics, resolveModel } from "../src/ai-strategy.js";
 import type { Config } from "../src/config.js";
 import { loadConfig } from "../src/config.js";
@@ -6,6 +6,7 @@ import type { HistoryEvent } from "../src/runner.js";
 import type { PoolManager } from "../src/pool-manager.js";
 
 const originalEnv = { ...process.env };
+const originalFetch = globalThis.fetch;
 
 function resetEnv() {
   for (const key of Object.keys(process.env)) {
@@ -73,6 +74,48 @@ function createEvent(partial: Partial<HistoryEvent>): HistoryEvent {
   };
 }
 
+function createPoolManagerStub(config: Config, history: HistoryEvent[]): PoolManager {
+  return {
+    listSummaries: async () => [{
+      id: "pool-1",
+      name: "SOL/USDC",
+      whirlpoolAddress: "So11111111111111111111111111111111111111112",
+      createdAt: "2026-02-01T00:00:00.000Z",
+      selected: true,
+      running: false,
+      lastAction: "no-action",
+      lastError: null,
+      lastPrice: 100,
+      positionValueUsd: null,
+      positionPnlUsd: null,
+      positionValueSol: null,
+      positionPnlSol: null,
+      tokenAMint: null,
+      tokenBMint: null,
+      isTokenASol: null,
+      isTokenBSol: null,
+      trendDirection: null,
+      trendUpdatedAt: null,
+      trendTimeframe: null,
+      trendEnabled: false,
+      trendStale: false,
+      overrides: null
+    }],
+    listPools: () => [{
+      id: "pool-1",
+      name: "SOL/USDC",
+      whirlpoolAddress: "So11111111111111111111111111111111111111112",
+      createdAt: "2026-02-01T00:00:00.000Z",
+      overrides: {}
+    }],
+    getSelectedPoolId: () => "pool-1",
+    getHistory: () => history,
+    getHedgeLogs: () => [],
+    getStatus: () => null,
+    getPoolConfig: () => ({ ...config, rangeWidthPct: 1 })
+  } as unknown as PoolManager;
+}
+
 describe("ai-strategy", () => {
   beforeEach(() => {
     resetEnv();
@@ -80,6 +123,8 @@ describe("ai-strategy", () => {
 
   afterEach(() => {
     resetEnv();
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
   });
 
   it("validates model against allowlist when custom is disabled", () => {
@@ -171,46 +216,7 @@ describe("ai-strategy", () => {
       })
     ];
 
-    const poolManagerStub = {
-      listSummaries: async () => [{
-        id: "pool-1",
-        name: "SOL/USDC",
-        whirlpoolAddress: "So11111111111111111111111111111111111111112",
-        createdAt: "2026-02-01T00:00:00.000Z",
-        selected: true,
-        running: false,
-        lastAction: "no-action",
-        lastError: null,
-        lastPrice: 100,
-        positionValueUsd: null,
-        positionPnlUsd: null,
-        positionValueSol: null,
-        positionPnlSol: null,
-        tokenAMint: null,
-        tokenBMint: null,
-        isTokenASol: null,
-        isTokenBSol: null,
-        trendDirection: null,
-        trendUpdatedAt: null,
-        trendTimeframe: null,
-        trendEnabled: false,
-        trendStale: false,
-        overrides: null
-      }],
-      listPools: () => [{
-        id: "pool-1",
-        name: "SOL/USDC",
-        whirlpoolAddress: "So11111111111111111111111111111111111111112",
-        createdAt: "2026-02-01T00:00:00.000Z",
-        overrides: {}
-      }],
-      getSelectedPoolId: () => "pool-1",
-      getHistory: () => history,
-      getHedgeLogs: () => [],
-      getStatus: () => null,
-      getPoolConfig: () => ({ ...config, rangeWidthPct: 1 })
-    } as unknown as PoolManager;
-
+    const poolManagerStub = createPoolManagerStub(config, history);
     const service = new AiStrategyService(poolManagerStub, config);
     await service.init();
     const result = await service.runAnalysis({
@@ -221,5 +227,142 @@ describe("ai-strategy", () => {
     const rangeRec = result.recommendations.find((item) => item.parameter === "rangeWidthPct");
     expect(rangeRec).toBeTruthy();
     expect(Number(rangeRec?.suggestedValue)).toBeLessThanOrEqual(1.25);
+  });
+
+  it("always returns complete numeric recommendations per pool", async () => {
+    const config = buildConfig();
+    const history: HistoryEvent[] = [
+      createEvent({
+        id: "base-a",
+        timestamp: "2026-03-01T00:00:00.000Z",
+        action: "open-position",
+        price: 150
+      }),
+      createEvent({
+        id: "base-b",
+        timestamp: "2026-03-01T12:00:00.000Z",
+        action: "close-position",
+        price: 152,
+        positionPnlUsd: 4,
+        positionFeesUsd: 1,
+        txFeeUsd: 0.2,
+        hedgePnlUsd: 0
+      })
+    ];
+
+    const service = new AiStrategyService(createPoolManagerStub(config, history), config);
+    await service.init();
+    const result = await service.runAnalysis({
+      scope: "all",
+      riskProfile: "defensivo",
+      changeBounds: "conservative"
+    });
+
+    const required = [
+      "rangeWidthPct",
+      "rangeExitBiasPct",
+      "outOfRangeConfirmSec",
+      "rebalanceCooldownSec",
+      "pollIntervalMs",
+      "hedgePct",
+      "hedgeLeverage",
+      "hedgeMarginPct"
+    ];
+
+    required.forEach((parameter) => {
+      const rec = result.recommendations.find((item) => item.poolId === "pool-1" && item.parameter === parameter);
+      expect(rec, `missing recommendation for ${parameter}`).toBeTruthy();
+      expect(Number.isFinite(Number(rec?.currentValue))).toBe(true);
+      expect(Number.isFinite(Number(rec?.suggestedValue))).toBe(true);
+    });
+  });
+
+  it("falls back to deterministic analysis when OpenAI model is unavailable", async () => {
+    const config = {
+      ...buildConfig(),
+      openaiApiKey: "test-key"
+    } as Config;
+    const history: HistoryEvent[] = [
+      createEvent({
+        id: "f-1",
+        timestamp: "2026-03-10T00:00:00.000Z",
+        action: "open-position",
+        price: 130
+      }),
+      createEvent({
+        id: "f-2",
+        timestamp: "2026-03-10T10:00:00.000Z",
+        action: "close-position",
+        price: 120,
+        positionPnlUsd: -12,
+        positionFeesUsd: 1.5,
+        txFeeUsd: 0.3
+      })
+    ];
+
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ error: { message: "The model does not exist or you do not have access." } }),
+      { status: 404, headers: { "Content-Type": "application/json" } }
+    )) as typeof fetch;
+
+    const service = new AiStrategyService(createPoolManagerStub(config, history), config);
+    await service.init();
+    const result = await service.runAnalysis({
+      scope: "all",
+      riskProfile: "defensivo",
+      changeBounds: "conservative",
+      model: "gpt-5.4-unavailable"
+    });
+
+    expect(result.fallbackUsed).toBe(true);
+    expect(result.aiUsed).toBe(false);
+    expect(result.modelUsed).toBe("gpt-5.4-unavailable");
+    expect(result.fallbackReason ?? "").toContain("indisponivel");
+    expect(result.recommendations.length).toBeGreaterThan(0);
+  });
+
+  it("persists chat turns by analysis and returns defensive template", async () => {
+    const config = buildConfig();
+    const history: HistoryEvent[] = [
+      createEvent({
+        id: "chat-a",
+        timestamp: "2026-03-15T00:00:00.000Z",
+        action: "open-position",
+        price: 170
+      }),
+      createEvent({
+        id: "chat-b",
+        timestamp: "2026-03-15T08:00:00.000Z",
+        action: "close-position",
+        price: 166,
+        positionPnlUsd: -5,
+        positionFeesUsd: 1.2,
+        txFeeUsd: 0.4
+      })
+    ];
+
+    const service = new AiStrategyService(createPoolManagerStub(config, history), config);
+    await service.init();
+    const analysis = await service.runAnalysis({
+      scope: "all",
+      riskProfile: "defensivo",
+      changeBounds: "conservative"
+    });
+
+    const thread = await service.sendChatMessage({
+      analysisId: analysis.id,
+      model: "gpt-5.4-mini",
+      message: "Qual parametro devo ajustar primeiro para reduzir volatilidade?"
+    });
+
+    expect(thread.analysisId).toBe(analysis.id);
+    expect(thread.turns.length).toBe(2);
+    expect(thread.turns[0].role).toBe("user");
+    expect(thread.turns[1].role).toBe("assistant");
+    expect(thread.turns[1].fallbackUsed).toBe(true);
+    expect(thread.turns[1].responseTemplate?.whatToChange?.length ?? 0).toBeGreaterThan(0);
+
+    const loaded = service.getChatThread(analysis.id);
+    expect(loaded?.turns.length).toBe(2);
   });
 });

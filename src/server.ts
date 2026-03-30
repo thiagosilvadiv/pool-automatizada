@@ -1,4 +1,4 @@
-import express, { Request, Response, NextFunction } from "express";
+import express, { Request, Response, NextFunction, type Express } from "express";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -9,7 +9,12 @@ import { PoolManager } from "./pool-manager.js";
 import { getTrendSeries } from "./trend.js";
 import { listLinearSymbols } from "./bybit.js";
 import type { HistoryEvent } from "./runner.js";
-import { AiStrategyService, StrategyModelError, type StrategyAnalysisRequest } from "./ai-strategy.js";
+import {
+  AiStrategyService,
+  StrategyModelError,
+  type AnalysisChatRequest,
+  type StrategyAnalysisRequest
+} from "./ai-strategy.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +34,85 @@ const HISTORY_EDITABLE_FIELDS = new Set<keyof HistoryEvent>([
 
 function isEditableHistoryField(field: string): field is keyof HistoryEvent {
   return HISTORY_EDITABLE_FIELDS.has(field as keyof HistoryEvent);
+}
+
+type AiStrategyRouteService = Pick<
+  AiStrategyService,
+  "getModelSettings"
+  | "listHistory"
+  | "getHistoryById"
+  | "runAnalysis"
+  | "getChatThread"
+  | "sendChatMessage"
+>;
+
+export function registerAiStrategyRoutes(app: Express, aiStrategy: AiStrategyRouteService): void {
+  app.get("/api/ai/models", (_req: Request, res: Response) => {
+    res.json(aiStrategy.getModelSettings());
+  });
+
+  app.get("/api/ai/analysis/history", (_req: Request, res: Response) => {
+    res.json({ analyses: aiStrategy.listHistory() });
+  });
+
+  app.get("/api/ai/analysis/history/:id", (req: Request, res: Response) => {
+    const item = aiStrategy.getHistoryById(String(req.params.id ?? ""));
+    if (!item) {
+      res.status(404).json({ ok: false, error: "Analysis not found" });
+      return;
+    }
+    res.json(item);
+  });
+
+  app.post("/api/ai/analysis", async (req: Request, res: Response) => {
+    try {
+      const raw = (req.body ?? {}) as StrategyAnalysisRequest;
+      const result = await aiStrategy.runAnalysis(raw);
+      res.json({ ok: true, result });
+    } catch (err) {
+      if (err instanceof StrategyModelError) {
+        res.status(400).json({
+          ok: false,
+          code: err.code,
+          error: err.message,
+          suggestedModel: err.suggestedModel,
+          canUseDefault: err.canUseDefault
+        });
+        return;
+      }
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.get("/api/ai/analysis/:id/chat", (req: Request, res: Response) => {
+    const analysisId = String(req.params.id ?? "").trim();
+    const thread = aiStrategy.getChatThread(analysisId);
+    if (!thread) {
+      res.status(404).json({ ok: false, error: "Analysis not found" });
+      return;
+    }
+    res.json({ ok: true, thread });
+  });
+
+  app.post("/api/ai/analysis/chat", async (req: Request, res: Response) => {
+    try {
+      const raw = (req.body ?? {}) as AnalysisChatRequest;
+      const thread = await aiStrategy.sendChatMessage(raw);
+      res.json({ ok: true, thread });
+    } catch (err) {
+      if (err instanceof StrategyModelError) {
+        res.status(400).json({
+          ok: false,
+          code: err.code,
+          error: err.message,
+          suggestedModel: err.suggestedModel,
+          canUseDefault: err.canUseDefault
+        });
+        return;
+      }
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
 }
 
 export async function startServer(config: Config): Promise<void> {
@@ -248,42 +332,7 @@ export async function startServer(config: Config): Promise<void> {
     });
   });
 
-  app.get("/api/ai/models", (_req: Request, res: Response) => {
-    res.json(aiStrategy.getModelSettings());
-  });
-
-  app.get("/api/ai/analysis/history", (_req: Request, res: Response) => {
-    res.json({ analyses: aiStrategy.listHistory() });
-  });
-
-  app.get("/api/ai/analysis/history/:id", (req: Request, res: Response) => {
-    const item = aiStrategy.getHistoryById(String(req.params.id ?? ""));
-    if (!item) {
-      res.status(404).json({ ok: false, error: "Analysis not found" });
-      return;
-    }
-    res.json(item);
-  });
-
-  app.post("/api/ai/analysis", async (req: Request, res: Response) => {
-    try {
-      const raw = (req.body ?? {}) as StrategyAnalysisRequest;
-      const result = await aiStrategy.runAnalysis(raw);
-      res.json({ ok: true, result });
-    } catch (err) {
-      if (err instanceof StrategyModelError) {
-        res.status(400).json({
-          ok: false,
-          code: err.code,
-          error: err.message,
-          suggestedModel: err.suggestedModel,
-          canUseDefault: err.canUseDefault
-        });
-        return;
-      }
-      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+  registerAiStrategyRoutes(app, aiStrategy);
 
   app.get("/api/trend-series/:id", async (req: Request, res: Response) => {
     try {
