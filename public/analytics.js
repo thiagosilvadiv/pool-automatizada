@@ -362,12 +362,13 @@ function renderHistory(items) {
     const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
     const pnlRaw = Number(item.positionPnlUsd);
     const hedgeRaw = Number(item.hedgePnlUsd);
+    const hedgeSkipped = item.hedgeDecision === "skipped";
     const hasPnl = Number.isFinite(pnlRaw);
-    const hasHedge = Number.isFinite(hedgeRaw);
+    const hasHedge = Number.isFinite(hedgeRaw) || hedgeSkipped;
     const feesRaw = Number(item.positionFeesUsd);
     const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
     const poolPnl = hasPnl ? pnlRaw : 0;
-    const hedgePnl = hasHedge ? hedgeRaw : 0;
+    const hedgePnl = Number.isFinite(hedgeRaw) ? hedgeRaw : 0;
     const pnlTotal = hasPnl || hasHedge ? poolPnl + hedgePnl : null;
     const pnlTotalNet = hasPnl || hasHedge ? (hasPnl ? poolPnl - fees : 0) + hedgePnl : null;
     return `
@@ -637,13 +638,14 @@ function aggregatePerformance(items, group) {
     const fees = Number(item.positionFeesUsd) || 0;
     const pnlRaw = Number(item.positionPnlUsd);
     const hedgeRaw = Number(item.hedgePnlUsd);
+    const hedgeSkipped = item.hedgeDecision === "skipped";
     const hasPnl = Number.isFinite(pnlRaw);
-    const hasHedge = Number.isFinite(hedgeRaw);
+    const hasHedge = Number.isFinite(hedgeRaw) || hedgeSkipped;
     if (!hasPnl && !hasHedge) {
       return;
     }
     const pnl = hasPnl ? pnlRaw : 0;
-    const hedgePnl = hasHedge ? hedgeRaw : 0;
+    const hedgePnl = Number.isFinite(hedgeRaw) ? hedgeRaw : 0;
     const entryUsd = Number(item.positionEntryUsd);
     bucket.fees += fees;
     if (Number.isFinite(entryUsd) && entryUsd > 0) {
