@@ -33,10 +33,23 @@ export type HedgeOpenResult = {
 };
 
 const OPEN_COOLDOWN_MS = 60_000;
+const CLOSED_PNL_RETRIES = 3;
+const CLOSED_PNL_RETRY_DELAY_MS = 1000;
+
+type ClosedPnlOptions = {
+  openedAfterMs?: number;
+  closeAtMs?: number;
+  closeQty?: number;
+  orderId?: string;
+};
 
 function clampNumber(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function floorToStep(value: number, step: number): number {
@@ -64,6 +77,33 @@ export class HedgeManager {
   updateConfig(config: Config): void {
     this.config = config;
     this.refreshClient();
+  }
+
+  private async fetchClosedPnlWithRetry(
+    symbol: string,
+    options?: ClosedPnlOptions
+  ): Promise<{ pnlUsd: number | null; updatedTime?: number; openFeeUsd?: number; closeFeeUsd?: number } | null> {
+    if (!this.client) {
+      return null;
+    }
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < CLOSED_PNL_RETRIES; attempt += 1) {
+      try {
+        const closed = await this.client.getClosedPnl(symbol, options);
+        if (closed) {
+          return closed;
+        }
+      } catch (err) {
+        lastErr = err;
+      }
+      if (attempt < CLOSED_PNL_RETRIES - 1) {
+        await sleep(CLOSED_PNL_RETRY_DELAY_MS);
+      }
+    }
+    if (lastErr) {
+      logger.warn({ err: lastErr }, "failed to fetch closed pnl");
+    }
+    return null;
   }
 
   hydrate(state: HedgeState | null | undefined): void {
@@ -179,7 +219,7 @@ export class HedgeManager {
       return null;
     }
     try {
-      const closed = await this.client.getClosedPnl(symbol, {
+      const closed = await this.fetchClosedPnlWithRetry(symbol, {
         openedAfterMs: options?.openedAfterMs,
         closeAtMs: options?.closeAtMs
       });
@@ -435,16 +475,83 @@ export class HedgeManager {
           closeQty = size;
         }
         if (Number.isFinite(size) && size <= 0) {
-          this.state = null;
-          return {
+          const openedAtMs = Date.parse(state.openedAt);
+          const closeAtMs = Date.now();
+          let pnlUsd: number | null = null;
+          let feesUsd: number | null = null;
+          let appliedFees = false;
+          const closed = await this.fetchClosedPnlWithRetry(state.symbol, {
+            openedAfterMs: Number.isFinite(openedAtMs) ? openedAtMs : undefined,
+            closeAtMs,
+            closeQty: state.qty
+          });
+          const closedPnl = closed?.pnlUsd ?? null;
+          if (closedPnl != null && Number.isFinite(closedPnl)) {
+            let feeTotal = 0;
+            let hasFee = false;
+            if (Number.isFinite(closed?.openFeeUsd ?? NaN)) {
+              feeTotal += Number(closed?.openFeeUsd ?? 0);
+              hasFee = true;
+            }
+            if (Number.isFinite(closed?.closeFeeUsd ?? NaN)) {
+              feeTotal += Number(closed?.closeFeeUsd ?? 0);
+              hasFee = true;
+            }
+            feesUsd = hasFee ? feeTotal : null;
+            pnlUsd = closedPnl - (hasFee ? feeTotal : 0);
+            appliedFees = hasFee;
+          } else {
+            pnlUsd = closedPnl;
+          }
+          if (feesUsd == null) {
+            try {
+              let feeTotal = 0;
+              let hasFee = false;
+              if (state.openOrderId) {
+                const openFee = await this.client.getExecutionFees(state.symbol, { orderId: state.openOrderId });
+                if (openFee != null && Number.isFinite(openFee)) {
+                  feeTotal += openFee;
+                  hasFee = true;
+                }
+              }
+              if (!hasFee && Number.isFinite(openedAtMs)) {
+                const feeWindow = await this.client.getExecutionFees(state.symbol, {
+                  startTime: Math.max(0, Math.floor(openedAtMs)),
+                  endTime: Math.max(0, Math.floor(closeAtMs))
+                });
+                if (feeWindow != null && Number.isFinite(feeWindow)) {
+                  feeTotal += feeWindow;
+                  hasFee = true;
+                }
+              }
+              if (hasFee) {
+                feesUsd = feeTotal;
+                if (pnlUsd != null && Number.isFinite(pnlUsd) && !appliedFees) {
+                  pnlUsd -= feeTotal;
+                  appliedFees = true;
+                }
+              }
+            } catch (err) {
+              logger.warn({ err }, "failed to fetch execution fees");
+            }
+          }
+          if (pnlUsd != null && Number.isFinite(pnlUsd) && feesUsd != null && !appliedFees) {
+            pnlUsd -= feesUsd;
+            appliedFees = true;
+          }
+          const result: HedgeCloseResult = {
             symbol: state.symbol,
             qty: state.qty,
             notionalUsd: state.notionalUsd,
             leverage: state.leverage,
-            feesUsd: null,
-            pnlUsd: null,
+            feesUsd,
+            pnlUsd: pnlUsd != null && Number.isFinite(pnlUsd) ? pnlUsd : null,
             closedAt: new Date().toISOString()
           };
+          this.state = null;
+          this.setError(null);
+          logger.info({ symbol: result.symbol, pnlUsd: result.pnlUsd }, "hedge closed (already zero)");
+          return result;
         }
       } catch (err) {
         logger.warn({ err }, "failed to read hedge position size");
@@ -456,7 +563,7 @@ export class HedgeManager {
       let feesUsd: number | null = null;
       let appliedFees = false;
       try {
-        const closed = await this.client.getClosedPnl(state.symbol, {
+        const closed = await this.fetchClosedPnlWithRetry(state.symbol, {
           openedAfterMs: Number.isFinite(openedAtMs) ? openedAtMs : undefined,
           closeAtMs,
           closeQty,
@@ -596,7 +703,7 @@ export class HedgeManager {
       let feesUsd: number | null = null;
       let appliedFees = false;
       try {
-        const closed = await this.client.getClosedPnl(symbol, {
+        const closed = await this.fetchClosedPnlWithRetry(symbol, {
           closeAtMs,
           closeQty: size,
           orderId: closeOrder.orderId ?? undefined
