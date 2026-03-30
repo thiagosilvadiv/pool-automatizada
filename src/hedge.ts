@@ -151,6 +151,64 @@ export class HedgeManager {
     }
   }
 
+  async estimateQtyFromNotional(symbol: string, notionalUsd: number): Promise<number | null> {
+    if (!this.client) {
+      return null;
+    }
+    if (!Number.isFinite(notionalUsd) || notionalUsd <= 0) {
+      return null;
+    }
+    try {
+      const ticker = await this.client.getTicker(symbol);
+      const price = Number(ticker.lastPrice ?? NaN);
+      if (!Number.isFinite(price) || price <= 0) {
+        return null;
+      }
+      return notionalUsd / price;
+    } catch (err) {
+      logger.warn({ err }, "failed to estimate hedge qty");
+      return null;
+    }
+  }
+
+  async fetchClosedPnlFallback(
+    symbol: string,
+    options?: { openedAfterMs?: number; closeAtMs?: number }
+  ): Promise<{ pnlUsd: number | null; feesUsd: number | null } | null> {
+    if (!this.client) {
+      return null;
+    }
+    try {
+      const closed = await this.client.getClosedPnl(symbol, {
+        openedAfterMs: options?.openedAfterMs,
+        closeAtMs: options?.closeAtMs
+      });
+      if (!closed) {
+        return null;
+      }
+      let feeTotal = 0;
+      let hasFee = false;
+      if (Number.isFinite(closed.openFeeUsd ?? NaN)) {
+        feeTotal += Number(closed.openFeeUsd ?? 0);
+        hasFee = true;
+      }
+      if (Number.isFinite(closed.closeFeeUsd ?? NaN)) {
+        feeTotal += Number(closed.closeFeeUsd ?? 0);
+        hasFee = true;
+      }
+      const pnlUsd = closed.pnlUsd != null && Number.isFinite(closed.pnlUsd)
+        ? closed.pnlUsd - (hasFee ? feeTotal : 0)
+        : null;
+      return {
+        pnlUsd,
+        feesUsd: hasFee ? feeTotal : null
+      };
+    } catch (err) {
+      logger.warn({ err }, "failed to fetch fallback closed pnl");
+      return null;
+    }
+  }
+
   getLastError(): string | null {
     return this.lastError;
   }
