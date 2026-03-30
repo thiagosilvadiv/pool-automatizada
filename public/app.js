@@ -404,12 +404,13 @@ function buildHistoryCsv(items) {
     const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
     const pnlRaw = Number(item.positionPnlUsd);
     const hedgeRaw = Number(item.hedgePnlUsd);
+    const hedgeSkipped = item.hedgeDecision === "skipped";
     const hasPnl = Number.isFinite(pnlRaw);
-    const hasHedge = Number.isFinite(hedgeRaw);
+    const hasHedge = Number.isFinite(hedgeRaw) || hedgeSkipped;
     const feesRaw = Number(item.positionFeesUsd);
     const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
     const poolPnl = hasPnl ? pnlRaw : 0;
-    const hedgePnl = hasHedge ? hedgeRaw : 0;
+    const hedgePnl = Number.isFinite(hedgeRaw) ? hedgeRaw : 0;
     const pnlTotal = hasPnl || hasHedge ? poolPnl + hedgePnl : null;
     const pnlTotalNet = hasPnl || hasHedge ? (hasPnl ? poolPnl - fees : 0) + hedgePnl : null;
     return [
@@ -882,12 +883,13 @@ function renderHistory(items) {
     const checked = selectedHistoryIds.has(eventId) ? "checked" : "";
     const pnlRaw = Number(item.positionPnlUsd);
     const hedgeRaw = Number(item.hedgePnlUsd);
+    const hedgeSkipped = item.hedgeDecision === "skipped";
     const hasPnl = Number.isFinite(pnlRaw);
-    const hasHedge = Number.isFinite(hedgeRaw);
+    const hasHedge = Number.isFinite(hedgeRaw) || hedgeSkipped;
     const feesRaw = Number(item.positionFeesUsd);
     const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
     const poolPnl = hasPnl ? pnlRaw : 0;
-    const hedgePnl = hasHedge ? hedgeRaw : 0;
+    const hedgePnl = Number.isFinite(hedgeRaw) ? hedgeRaw : 0;
     const pnlTotal = hasPnl || hasHedge ? poolPnl + hedgePnl : null;
     const pnlTotalNet = hasPnl || hasHedge ? (hasPnl ? poolPnl - fees : 0) + hedgePnl : null;
     return `
