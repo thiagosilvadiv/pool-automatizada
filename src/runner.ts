@@ -531,8 +531,15 @@ export class BotRunner {
       : null;
     const poolPnlNet = poolPnl != null && poolFees != null ? poolPnl - poolFees : poolPnl;
     let hedgePnl: number | null = null;
+    let hedgeFees: number | null = null;
     if (this.hedgeManager.getState()?.active) {
-      hedgePnl = await this.hedgeManager.getOpenPnlUsd();
+      const hedgeOpen = await this.hedgeManager.getOpenPnlNetUsd();
+      if (hedgeOpen) {
+        hedgePnl = hedgeOpen.pnlUsd;
+        hedgeFees = hedgeOpen.feesUsd;
+      } else {
+        hedgePnl = await this.hedgeManager.getOpenPnlUsd();
+      }
     }
     const hasPool = poolPnlNet != null && Number.isFinite(poolPnlNet);
     const hasHedge = hedgePnl != null && Number.isFinite(hedgePnl);
@@ -561,7 +568,7 @@ export class BotRunner {
     this.pendingCloseMode = "target";
     this.pendingCloseRequestedAt = new Date().toISOString();
     logger.info(
-      { totalPnl, targetUsd, targetPct, entryUsd, positionMint: mint, poolFees },
+      { totalPnl, targetUsd, targetPct, entryUsd, positionMint: mint, poolFees, hedgeFees },
       "pnl target reached; closing position"
     );
     return true;
