@@ -129,6 +129,28 @@ export class HedgeManager {
     return this.state;
   }
 
+  async getOpenPnlUsd(): Promise<number | null> {
+    const state = this.state;
+    if (!state?.active) {
+      return null;
+    }
+    if (!this.client) {
+      return null;
+    }
+    try {
+      const ticker = await this.client.getTicker(state.symbol);
+      const entryPrice = Number(state.entryPrice ?? NaN);
+      if (!Number.isFinite(entryPrice) || entryPrice <= 0) {
+        return null;
+      }
+      const pnlUsd = (entryPrice - ticker.lastPrice) * state.qty;
+      return Number.isFinite(pnlUsd) ? pnlUsd : null;
+    } catch (err) {
+      logger.warn({ err }, "failed to fetch hedge open pnl");
+      return null;
+    }
+  }
+
   getLastError(): string | null {
     return this.lastError;
   }

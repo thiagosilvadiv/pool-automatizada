@@ -156,6 +156,7 @@ export class BotRunner {
   private lastHedgeClose: HedgeCloseResult | null = null;
   private hedgeDecisionByMint = new Map<string, { status: "opened" | "skipped" | "failed"; reason: string | null }>();
   private pendingClose = false;
+  private pendingCloseMode: "manual" | "target" = "manual";
   private pendingCloseRequestedAt: string | null = null;
   private autoAddRequestedByMint = new Set<string>();
   private onAutoAddRequest?: (poolId: string) => void;
@@ -202,6 +203,7 @@ export class BotRunner {
   async closePositionNow(): Promise<RunnerStatus> {
     if (this.inFlight) {
       this.pendingClose = true;
+      this.pendingCloseMode = "manual";
       this.pendingCloseRequestedAt = new Date().toISOString();
       logger.info({ pendingCloseRequestedAt: this.pendingCloseRequestedAt }, "close requested during tick; pending");
       return this.getStatus();
@@ -457,6 +459,56 @@ export class BotRunner {
     return this.hedgeDecisionByMint.get(mint) ?? null;
   }
 
+  private async checkPnlTarget(status: BotStatus): Promise<boolean> {
+    const targetUsd = Number.isFinite(this.config.pnlTargetUsd ?? NaN) ? Number(this.config.pnlTargetUsd) : null;
+    const targetPct = Number.isFinite(this.config.pnlTargetPct ?? NaN) ? Number(this.config.pnlTargetPct) : null;
+    if (targetUsd == null && targetPct == null) {
+      return false;
+    }
+    const mint = status.positionMint ?? null;
+    if (!mint) {
+      return false;
+    }
+    const poolPnl = typeof status.positionPnlUsd === "number" && Number.isFinite(status.positionPnlUsd)
+      ? status.positionPnlUsd
+      : null;
+    let hedgePnl: number | null = null;
+    if (this.hedgeManager.getState()?.active) {
+      hedgePnl = await this.hedgeManager.getOpenPnlUsd();
+    }
+    const hasPool = poolPnl != null && Number.isFinite(poolPnl);
+    const hasHedge = hedgePnl != null && Number.isFinite(hedgePnl);
+    if (!hasPool && !hasHedge) {
+      return false;
+    }
+    const totalPnl = (hasPool ? poolPnl! : 0) + (hasHedge ? hedgePnl! : 0);
+
+    let entryUsd: number | null = status.positionEntryUsd ?? null;
+    if (entryUsd == null) {
+      entryUsd = this.entryByMint.get(mint) ?? null;
+    }
+    if (entryUsd != null && !isEntryUsdSane(entryUsd, status.budgetUsd ?? null, status.portfolioUsd ?? null, {
+      minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
+    })) {
+      entryUsd = null;
+    }
+
+    const hitUsd = targetUsd != null && totalPnl >= targetUsd;
+    const hitPct = targetPct != null && entryUsd != null && totalPnl >= entryUsd * (targetPct / 100);
+    if (!hitUsd && !hitPct) {
+      return false;
+    }
+
+    this.pendingClose = true;
+    this.pendingCloseMode = "target";
+    this.pendingCloseRequestedAt = new Date().toISOString();
+    logger.info(
+      { totalPnl, targetUsd, targetPct, entryUsd, positionMint: mint },
+      "pnl target reached; closing position"
+    );
+    return true;
+  }
+
   private schedule(): void {
     if (!this.running) {
       return;
@@ -472,7 +524,7 @@ export class BotRunner {
       return;
     }
     if (this.pendingClose) {
-      await this.performClose("pending");
+      await this.performClose(this.pendingCloseMode);
       return;
     }
     this.inFlight = true;
@@ -567,6 +619,11 @@ export class BotRunner {
           return;
         }
       }
+      const targetTriggered = await this.checkPnlTarget(status);
+      if (targetTriggered) {
+        this.recordEvent(status);
+        return;
+      }
       this.recordEvent(status, { hedgeClose: hedgeCloseForRebalance });
       this.maybeRequestAutoAdd(status);
     } catch (err) {
@@ -575,12 +632,12 @@ export class BotRunner {
     } finally {
       this.inFlight = false;
       if (this.pendingClose) {
-        await this.performClose("pending");
+        await this.performClose(this.pendingCloseMode);
       }
     }
   }
 
-  private async performClose(mode: "manual" | "pending"): Promise<RunnerStatus> {
+  private async performClose(mode: "manual" | "target"): Promise<RunnerStatus> {
     if (this.inFlight) {
       return this.getStatus();
     }
@@ -614,11 +671,12 @@ export class BotRunner {
     if (closed) {
       this.pendingClose = false;
       this.pendingCloseRequestedAt = null;
-      if (this.running) {
+      if (this.running && mode === "manual") {
         this.stop();
       }
     } else if (wasRunning) {
       this.pendingClose = true;
+      this.pendingCloseMode = mode;
       if (!this.pendingCloseRequestedAt) {
         this.pendingCloseRequestedAt = new Date().toISOString();
       }

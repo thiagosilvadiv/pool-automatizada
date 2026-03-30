@@ -104,4 +104,28 @@ describe("config", () => {
     expect(() => loadWith({ hedgeMarginPct: -1 })).toThrow();
     expect(() => loadWith({ hedgeMarginPct: 101 })).toThrow();
   });
+
+  it("accepts valid pnlTargetUsd", () => {
+    expect(() => loadWith({ pnlTargetUsd: 0.5 })).not.toThrow();
+    expect(() => loadWith({ pnlTargetUsd: 10 })).not.toThrow();
+    expect(() => loadWith({ pnlTargetUsd: null })).not.toThrow();
+  });
+
+  it("rejects invalid pnlTargetUsd", () => {
+    expect(() => loadWith({ pnlTargetUsd: 0 })).toThrow();
+    expect(() => loadWith({ pnlTargetUsd: -1 })).toThrow();
+  });
+
+  it("accepts valid pnlTargetPct", () => {
+    expect(() => loadWith({ pnlTargetPct: 0.1 })).not.toThrow();
+    expect(() => loadWith({ pnlTargetPct: 50 })).not.toThrow();
+    expect(() => loadWith({ pnlTargetPct: 100 })).not.toThrow();
+    expect(() => loadWith({ pnlTargetPct: null })).not.toThrow();
+  });
+
+  it("rejects invalid pnlTargetPct", () => {
+    expect(() => loadWith({ pnlTargetPct: 0 })).toThrow();
+    expect(() => loadWith({ pnlTargetPct: -5 })).toThrow();
+    expect(() => loadWith({ pnlTargetPct: 101 })).toThrow();
+  });
 });
