@@ -632,9 +632,45 @@ export class BotRunner {
           if (hedgeCloseForRebalance) {
             this.logHedgeClose(hedgeCloseForRebalance, "Hedge fechado para re-range");
           } else {
-            const errMessage = this.hedgeManager.getLastError();
-            if (errMessage) {
-              this.logHedgeError("close-failed", `Falha ao fechar hedge: ${errMessage}`, this.config.hedgeSymbol);
+            const symbol = (this.config.hedgeSymbol ?? "").trim().toUpperCase();
+            if (symbol) {
+              const openedAt = expectedMint ? this.openedAtByMint.get(expectedMint) ?? null : null;
+              const openedAfterMs = openedAt ? Date.parse(openedAt) : undefined;
+              const fallback = await this.hedgeManager.fetchClosedPnlFallback(symbol, {
+                openedAfterMs,
+                closeAtMs: Date.now()
+              });
+              if (fallback) {
+                const baseUsd = status.eventPositionEntryUsd
+                  ?? status.positionEntryUsd
+                  ?? status.positionValueUsd
+                  ?? status.budgetUsd
+                  ?? null;
+                const pct = Number(this.config.hedgePct ?? NaN);
+                const notionalUsd = Number.isFinite(baseUsd ?? NaN) && baseUsd != null && Number.isFinite(pct) && pct > 0
+                  ? Number(baseUsd) * (pct / 100)
+                  : 0;
+                const leverage = Number.isFinite(Number(this.config.hedgeLeverage ?? NaN))
+                  ? Number(this.config.hedgeLeverage ?? 1)
+                  : 1;
+                const qtyEst = await this.hedgeManager.estimateQtyFromNotional(symbol, notionalUsd);
+                hedgeCloseForRebalance = {
+                  symbol,
+                  qty: Number.isFinite(qtyEst ?? NaN) ? Number(qtyEst) : 0,
+                  notionalUsd,
+                  leverage,
+                  feesUsd: fallback.feesUsd ?? null,
+                  pnlUsd: fallback.pnlUsd ?? null,
+                  closedAt: new Date().toISOString()
+                };
+                this.logHedgeClose(hedgeCloseForRebalance, "Hedge fechado para re-range");
+              }
+            }
+            if (!hedgeCloseForRebalance) {
+              const errMessage = this.hedgeManager.getLastError();
+              if (errMessage) {
+                this.logHedgeError("close-failed", `Falha ao fechar hedge: ${errMessage}`, this.config.hedgeSymbol);
+              }
             }
           }
         }
