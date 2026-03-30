@@ -1,2 +1,0 @@
-Arquivo de teste simples para validar criação/remoção no Git.
-Pode apagar sem impacto no projeto.
