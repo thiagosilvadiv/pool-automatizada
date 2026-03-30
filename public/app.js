@@ -179,7 +179,7 @@ const hedgeEntryModeLabels = {
   "force-up": "Sempre alta (ignora tendência)"
 };
 
-const MAX_HEDGE_LOG_ROWS = 80;
+const MAX_HEDGE_LOG_ROWS = 20;
 
 const hedgeLogActionLabels = {
   "open": "Abertura",

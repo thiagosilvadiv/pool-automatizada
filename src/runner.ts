@@ -285,9 +285,17 @@ export class BotRunner {
 
   updateConfig(config: Config): void {
     const prevInterval = this.config.pollIntervalMs;
+    const prevEntryMode = this.config.hedgeEntryMode;
     this.config = config;
     this.bot.updateConfig(config);
     this.hedgeManager.updateConfig(config);
+    if (prevEntryMode !== config.hedgeEntryMode) {
+      const mint = this.bot.getStatus().positionMint ?? null;
+      const decision = this.getHedgeDecision(mint);
+      if (mint && this.isHedgeDecisionLocked(decision)) {
+        this.hedgeDecisionByMint.delete(mint);
+      }
+    }
     if (this.running && prevInterval !== config.pollIntervalMs) {
       if (this.timer) {
         clearTimeout(this.timer);
@@ -440,6 +448,19 @@ export class BotRunner {
     return { status: result.status, reason: reason ?? null };
   }
 
+  private isHedgeDecisionLocked(
+    decision: { status: "opened" | "skipped" | "failed"; reason: string | null } | null
+  ): boolean {
+    if (!decision || decision.status !== "skipped") {
+      return false;
+    }
+    const reason = (decision.reason ?? "").trim().toLowerCase();
+    if (!reason) {
+      return false;
+    }
+    return reason.startsWith("ignorado");
+  }
+
   private rememberHedgeDecision(
     mint: string | null,
     decision: { status: "opened" | "skipped" | "failed"; reason: string | null } | null
@@ -542,7 +563,11 @@ export class BotRunner {
         const hedgeState = this.hedgeManager.getState();
         if (hedgeState?.active) {
           const hedgeMint = hedgeState.positionMint ?? null;
-          if (!hedgeMint || hedgeMint !== currentMint) {
+          const closeMint = status.lastAction === "close-position"
+            ? (status.eventPositionMint ?? status.positionMint ?? null)
+            : null;
+          const skipExternalClose = Boolean(closeMint && hedgeMint && hedgeMint === closeMint);
+          if (!skipExternalClose && (!hedgeMint || hedgeMint !== currentMint)) {
             const externalClose = await this.hedgeManager.closeIfOpen({ allowUnowned: true });
             if (externalClose) {
               this.logHedgeClose(externalClose, "Hedge externo fechado");
@@ -577,10 +602,25 @@ export class BotRunner {
         }
       }
 
+      if (!isRebalanced && status.lastAction === "close-position" && this.config.hedgeEnabled) {
+        const expectedMint = status.eventPositionMint ?? status.positionMint ?? null;
+        this.lastHedgeClose = await this.hedgeManager.closeIfOpen({ expectedPositionMint: expectedMint });
+        if (this.lastHedgeClose) {
+          this.logHedgeClose(this.lastHedgeClose, "Hedge fechado junto da pool");
+        } else {
+          const errMessage = this.hedgeManager.getLastError();
+          if (errMessage) {
+            this.logHedgeError("close-failed", `Falha ao fechar hedge: ${errMessage}`, this.config.hedgeSymbol);
+          }
+        }
+      }
+
       let hedgeResult: { status: "opened" | "skipped" | "failed"; error?: string; reason?: string } = { status: "skipped" };
       let hedgeDecision: { status: "opened" | "skipped" | "failed"; reason: string | null } | null = null;
+      const existingDecision = this.getHedgeDecision(currentMint);
+      const lockedDecision = this.isHedgeDecisionLocked(existingDecision);
       const allowHedgeOpen = !isRebalanced || !hadHedge || hedgeCloseForRebalance != null;
-      if (this.config.hedgeEnabled && allowHedgeOpen) {
+      if (this.config.hedgeEnabled && allowHedgeOpen && !lockedDecision) {
         hedgeResult = await this.hedgeManager.ensureOpen(status);
         hedgeDecision = this.normalizeHedgeDecision(hedgeResult);
         this.rememberHedgeDecision(status.positionMint ?? null, hedgeDecision);
@@ -593,6 +633,8 @@ export class BotRunner {
           const reason = hedgeResult.error ?? this.hedgeManager.getLastError() ?? "Falha ao abrir hedge";
           this.logHedgeError("open-failed", `Falha ao abrir hedge: ${reason}`, this.config.hedgeSymbol);
         }
+      } else if (lockedDecision) {
+        hedgeDecision = existingDecision;
       }
 
       if (this.config.hedgeEnabled && status.positionMint && !this.hedgeManager.getState()?.active) {
