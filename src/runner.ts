@@ -566,7 +566,8 @@ export class BotRunner {
           const closeMint = status.lastAction === "close-position"
             ? (status.eventPositionMint ?? status.positionMint ?? null)
             : null;
-          const skipExternalClose = Boolean(closeMint && hedgeMint && hedgeMint === closeMint);
+          const legacyAttached = !hedgeMint && Boolean(currentMint || closeMint);
+          const skipExternalClose = legacyAttached || Boolean(closeMint && hedgeMint && hedgeMint === closeMint);
           if (!skipExternalClose && (!hedgeMint || hedgeMint !== currentMint)) {
             const externalClose = await this.hedgeManager.closeIfOpen({ allowUnowned: true });
             if (externalClose) {
@@ -590,7 +591,11 @@ export class BotRunner {
         }
         if (hadHedge) {
           const expectedMint = status.eventPositionMint ?? status.positionMint ?? null;
-          hedgeCloseForRebalance = await this.hedgeManager.closeIfOpen({ expectedPositionMint: expectedMint });
+          const allowUnowned = this.hedgeManager.getState()?.positionMint == null;
+          hedgeCloseForRebalance = await this.hedgeManager.closeIfOpen({
+            expectedPositionMint: expectedMint,
+            allowUnowned
+          });
           if (hedgeCloseForRebalance) {
             this.logHedgeClose(hedgeCloseForRebalance, "Hedge fechado para re-range");
           } else {
@@ -604,7 +609,11 @@ export class BotRunner {
 
       if (!isRebalanced && status.lastAction === "close-position" && this.config.hedgeEnabled) {
         const expectedMint = status.eventPositionMint ?? status.positionMint ?? null;
-        this.lastHedgeClose = await this.hedgeManager.closeIfOpen({ expectedPositionMint: expectedMint });
+        const allowUnowned = this.hedgeManager.getState()?.positionMint == null;
+        this.lastHedgeClose = await this.hedgeManager.closeIfOpen({
+          expectedPositionMint: expectedMint,
+          allowUnowned
+        });
         if (this.lastHedgeClose) {
           this.logHedgeClose(this.lastHedgeClose, "Hedge fechado junto da pool");
         } else {
