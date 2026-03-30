@@ -12,6 +12,7 @@ export type HedgeState = {
   leverage: number;
   openedAt: string;
   entryPrice: number;
+  positionMint: string | null;
   openOrderId?: string | null;
 };
 
@@ -67,7 +68,10 @@ export class HedgeManager {
 
   hydrate(state: HedgeState | null | undefined): void {
     if (state && state.active && state.symbol && Number.isFinite(state.qty)) {
-      this.state = state;
+      this.state = {
+        ...state,
+        positionMint: state.positionMint ?? null
+      };
     }
   }
 
@@ -109,6 +113,7 @@ export class HedgeManager {
         leverage,
         openedAt: new Date().toISOString(),
         entryPrice: Number.isFinite(avgPrice) ? avgPrice : 0,
+        positionMint: null,
         openOrderId: null
       };
       this.setError(null);
@@ -293,6 +298,7 @@ export class HedgeManager {
         leverage,
         openedAt,
         entryPrice: ticker.lastPrice,
+        positionMint: status.positionMint ?? null,
         openOrderId: openOrder.orderId ?? null
       };
       this.setError(null);
@@ -462,9 +468,19 @@ export class HedgeManager {
     }
   }
 
-  async closeIfOpen(): Promise<HedgeCloseResult | null> {
+  async closeIfOpen(options?: { expectedPositionMint?: string | null; allowUnowned?: boolean }): Promise<HedgeCloseResult | null> {
+    const expectedPositionMint = options?.expectedPositionMint ?? null;
+    const allowUnowned = options?.allowUnowned ?? false;
     if (this.state?.active) {
+      if (!allowUnowned && expectedPositionMint) {
+        if (!this.state.positionMint || this.state.positionMint !== expectedPositionMint) {
+          return null;
+        }
+      }
       return this.closeIfActive();
+    }
+    if (!allowUnowned && expectedPositionMint) {
+      return null;
     }
     const symbol = (this.config.hedgeSymbol ?? "").trim().toUpperCase();
     if (!symbol) {
