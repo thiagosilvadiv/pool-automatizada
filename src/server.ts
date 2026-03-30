@@ -9,6 +9,7 @@ import { PoolManager } from "./pool-manager.js";
 import { getTrendSeries } from "./trend.js";
 import { listLinearSymbols } from "./bybit.js";
 import type { HistoryEvent } from "./runner.js";
+import { AiStrategyService, StrategyModelError, type StrategyAnalysisRequest } from "./ai-strategy.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -80,6 +81,8 @@ export async function startServer(config: Config): Promise<void> {
   const poolManager = new PoolManager(config, connection, wallet);
   await poolManager.init();
   poolManager.startAutoCloseEmptyAccounts();
+  const aiStrategy = new AiStrategyService(poolManager, config);
+  await aiStrategy.init();
 
   app.get("/api/status", (_req: Request, res: Response) => {
     const status = poolManager.getSelectedStatus();
@@ -243,6 +246,43 @@ export async function startServer(config: Config): Promise<void> {
       selectedPoolId: poolManager.getSelectedPoolId(),
       pools
     });
+  });
+
+  app.get("/api/ai/models", (_req: Request, res: Response) => {
+    res.json(aiStrategy.getModelSettings());
+  });
+
+  app.get("/api/ai/analysis/history", (_req: Request, res: Response) => {
+    res.json({ analyses: aiStrategy.listHistory() });
+  });
+
+  app.get("/api/ai/analysis/history/:id", (req: Request, res: Response) => {
+    const item = aiStrategy.getHistoryById(String(req.params.id ?? ""));
+    if (!item) {
+      res.status(404).json({ ok: false, error: "Analysis not found" });
+      return;
+    }
+    res.json(item);
+  });
+
+  app.post("/api/ai/analysis", async (req: Request, res: Response) => {
+    try {
+      const raw = (req.body ?? {}) as StrategyAnalysisRequest;
+      const result = await aiStrategy.runAnalysis(raw);
+      res.json({ ok: true, result });
+    } catch (err) {
+      if (err instanceof StrategyModelError) {
+        res.status(400).json({
+          ok: false,
+          code: err.code,
+          error: err.message,
+          suggestedModel: err.suggestedModel,
+          canUseDefault: err.canUseDefault
+        });
+        return;
+      }
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   app.get("/api/trend-series/:id", async (req: Request, res: Response) => {

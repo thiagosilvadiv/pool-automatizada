@@ -54,6 +54,11 @@ export type Config = {
   trendStaleSec: number;
   trendCacheSec: number | null;
   trendNetworkId: string;
+  openaiApiKey: string | null;
+  openaiDefaultModel: string;
+  openaiRecommendedModels: string[];
+  openaiAllowCustomModel: boolean;
+  openaiTimeoutMs: number;
   bybitApiKey: string | null;
   bybitApiSecret: string | null;
   bybitBaseUrl: string;
@@ -90,6 +95,25 @@ function parseEnvBool(value: string | undefined): boolean | undefined {
 function parseEnvList(value: string | undefined): string[] | undefined {
   if (value == null || value.trim() === "") return undefined;
   return value.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
+}
+
+function normalizeModelList(input: unknown): string[] {
+  if (Array.isArray(input)) {
+    return Array.from(new Set(
+      input
+        .map((item) => String(item ?? "").trim())
+        .filter((item) => item.length > 0)
+    ));
+  }
+  if (typeof input === "string") {
+    return Array.from(new Set(
+      input
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+    ));
+  }
+  return [];
 }
 
 function parseTrendTimeframe(value: unknown): TrendTimeframe | undefined {
@@ -274,6 +298,18 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const envPnlTargetPct = parseEnvNumber(process.env.PNL_TARGET_PCT);
   const dataPnlTargetUsd = (data as any).pnlTargetUsd;
   const dataPnlTargetPct = (data as any).pnlTargetPct;
+  const dataOpenAiModels = normalizeModelList((data as any).openaiRecommendedModels);
+  const envOpenAiModels = normalizeModelList(process.env.OPENAI_RECOMMENDED_MODELS);
+  const defaultOpenAiModels = ["gpt-5.4-mini", "gpt-5.4", "gpt-4.1-mini"];
+  const openAiRecommendedModels = envOpenAiModels.length
+    ? envOpenAiModels
+    : (dataOpenAiModels.length ? dataOpenAiModels : defaultOpenAiModels);
+  const openAiDefaultRaw = (process.env.OPENAI_DEFAULT_MODEL ?? (data as any).openaiDefaultModel ?? "").trim();
+  const openAiDefaultModel = openAiDefaultRaw || openAiRecommendedModels[0] || "gpt-5.4-mini";
+  const openAiAllowCustomModel = parseEnvBool(process.env.OPENAI_ALLOW_CUSTOM_MODEL)
+    ?? Boolean((data as any).openaiAllowCustomModel ?? true);
+  const openAiTimeoutMs = parseEnvNumber(process.env.OPENAI_TIMEOUT_MS)
+    ?? Number((data as any).openaiTimeoutMs ?? 30000);
 
   const config: Config = {
     network: process.env.NETWORK ?? data.network ?? "mainnet-beta",
@@ -363,6 +399,11 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     trendStaleSec: Number(trendStaleSec),
     trendCacheSec: Number.isFinite(Number(trendCacheSec)) ? Number(trendCacheSec) : null,
     trendNetworkId,
+    openaiApiKey: (process.env.OPENAI_API_KEY ?? (data as any).openaiApiKey ?? "").trim() || null,
+    openaiDefaultModel: openAiDefaultModel,
+    openaiRecommendedModels: openAiRecommendedModels,
+    openaiAllowCustomModel: openAiAllowCustomModel,
+    openaiTimeoutMs: Number(openAiTimeoutMs),
     bybitApiKey: (process.env.BYBIT_API_KEY ?? (data as any).bybitApiKey ?? "").trim() || null,
     bybitApiSecret: (process.env.BYBIT_API_SECRET ?? (data as any).bybitApiSecret ?? "").trim() || null,
     bybitBaseUrl: process.env.BYBIT_BASE_URL ?? (data as any).bybitBaseUrl ?? "https://api.bybit.com",
@@ -479,6 +520,25 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (config.trendEnabled && (!config.trendNetworkId || !config.trendNetworkId.trim())) {
     throw new Error("trendNetworkId is required when trendEnabled is true");
+  }
+  if (!config.openaiDefaultModel || !config.openaiDefaultModel.trim()) {
+    throw new Error("openaiDefaultModel must be a non-empty string");
+  }
+  if (!Array.isArray(config.openaiRecommendedModels) || config.openaiRecommendedModels.length === 0) {
+    throw new Error("openaiRecommendedModels must include at least one model");
+  }
+  config.openaiRecommendedModels = Array.from(
+    new Set(
+      config.openaiRecommendedModels
+        .map((item) => String(item ?? "").trim())
+        .filter((item) => item.length > 0)
+    )
+  );
+  if (!config.openaiRecommendedModels.includes(config.openaiDefaultModel)) {
+    config.openaiRecommendedModels.unshift(config.openaiDefaultModel);
+  }
+  if (!Number.isFinite(config.openaiTimeoutMs) || config.openaiTimeoutMs < 1_000) {
+    throw new Error("openaiTimeoutMs must be >= 1000");
   }
 
   if (!Number.isFinite(config.bybitRecvWindow) || config.bybitRecvWindow <= 0) {

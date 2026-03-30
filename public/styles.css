@@ -872,6 +872,22 @@ button.danger:not(.ghost):hover {
   letter-spacing: 0.04em;
 }
 
+.ai-grid .card {
+  min-height: 180px;
+}
+
+.ai-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.ai-list li {
+  margin-bottom: 8px;
+}
+
 .kv {
   display: flex;
   justify-content: space-between;

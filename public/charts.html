@@ -3,18 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Orca Liquidity Bot - Gráficos</title>
+    <title>Orca Liquidity Bot - Graficos</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main class="container">
       <header>
-        <h1>Gráficos</h1>
-        <p class="subtitle">Visualize o gráfico de cada pool e a tendência calculada.</p>
+        <h1>Graficos</h1>
+        <p class="subtitle">Visualize o grafico de cada pool e a tendencia calculada.</p>
         <nav class="nav">
           <a href="/">Painel</a>
-          <a href="/analytics.html">Análises</a>
+          <a href="/analytics.html">Analises</a>
           <a href="/allowlist.html">Tokens Permitidos</a>
+          <a href="/ai-strategy.html">IA Estrategia</a>
         </nav>
       </header>
 
@@ -25,7 +26,7 @@
             <select id="chartPoolSelect"></select>
           </div>
           <div class="field">
-            <label>Tendência</label>
+            <label>Tendencia</label>
             <span id="chartTrendBadge" class="trend-badge">-</span>
           </div>
           <a id="chartExternalLink" class="link-btn" href="#" target="_blank" rel="noopener">Abrir no GeckoTerminal</a>
@@ -34,11 +35,11 @@
           <iframe
             id="chartFrame"
             class="chart-frame"
-            title="Gráfico GeckoTerminal"
+            title="Grafico GeckoTerminal"
             loading="lazy"
             referrerpolicy="no-referrer"
           ></iframe>
-          <div id="chartEmpty" class="chart-empty">Selecione uma pool para ver o gráfico.</div>
+          <div id="chartEmpty" class="chart-empty">Selecione uma pool para ver o grafico.</div>
         </div>
         <div class="indicator-panel">
           <div class="row wrap row-between indicator-header">

@@ -128,4 +128,12 @@ describe("config", () => {
     expect(() => loadWith({ pnlTargetPct: -5 })).toThrow();
     expect(() => loadWith({ pnlTargetPct: 101 })).toThrow();
   });
+
+  it("accepts openai model defaults", () => {
+    expect(() => loadWith({})).not.toThrow();
+  });
+
+  it("rejects invalid openaiTimeoutMs", () => {
+    expect(() => loadWith({ openaiTimeoutMs: 500 })).toThrow();
+  });
 });
