@@ -19,6 +19,7 @@ export type ExitPreference = {
 };
 
 const MAX_OPPOSITE_SIDE_STRETCH = 1.35;
+const DIRECTIONAL_TOLERANCE = 1.03;
 
 export function resolveDirectionalExitPreference(
   preferredExitToken: ValueToken | null,
@@ -66,10 +67,14 @@ export function calculateRange(
 
   if (exitSide === "upper") {
     const upper = symmetric.upper;
+    const expectedDownDistance = width * Math.max(1 - bias, 0.001);
     const lower = solveLowerByPnl(price, upper, bias, valueToken ?? "tokenB");
     if (lower != null && lower > 0 && lower < price) {
       const adjustedLower = clampLowerByMaxOppositeStretch(price, lower, width);
-      return { lower: adjustedLower, upper };
+      const downDistance = Math.max(0, 1 - adjustedLower / price);
+      if (downDistance <= expectedDownDistance * DIRECTIONAL_TOLERANCE) {
+        return { lower: adjustedLower, upper };
+      }
     }
     const fallbackLower = directionalFallbackLower(price, width, bias);
     if (fallbackLower > 0 && fallbackLower < price) {
@@ -81,10 +86,14 @@ export function calculateRange(
 
   if (exitSide === "lower") {
     const lower = symmetric.lower;
+    const expectedUpDistance = width * Math.max(1 - bias, 0.001);
     const upper = solveUpperByPnl(price, lower, bias, width, valueToken ?? "tokenA");
     if (upper != null && upper > price) {
       const adjustedUpper = clampUpperByMaxOppositeStretch(price, upper, width);
-      return { lower, upper: adjustedUpper };
+      const upDistance = Math.max(0, adjustedUpper / price - 1);
+      if (upDistance <= expectedUpDistance * DIRECTIONAL_TOLERANCE) {
+        return { lower, upper: adjustedUpper };
+      }
     }
     const fallbackUpper = directionalFallbackUpper(price, width, bias);
     if (fallbackUpper > price) {

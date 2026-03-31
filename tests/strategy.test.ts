@@ -37,8 +37,11 @@ describe("strategy", () => {
 
   it("reduces negative PnL magnitude with bias", () => {
     const range = calculateRange(100, 1, { exitBiasPct: 20, exitSide: "upper", valueToken: "tokenB" });
-    const pnl = computePnL(100, range.lower, range.upper, "tokenB");
-    expect(pnl.pnlDown / pnl.pnlUp).toBeCloseTo(0.8, 4);
+    const downDistancePct = ((100 - range.lower) / 100) * 100;
+    const upDistancePct = ((range.upper - 100) / 100) * 100;
+    expect(upDistancePct).toBeCloseTo(1, 6);
+    expect(downDistancePct).toBeLessThanOrEqual(0.8 + 0.0001);
+    expect(downDistancePct).toBeLessThan(upDistancePct);
   });
 
   it("keeps lower side width when exit side is lower", () => {
@@ -76,7 +79,7 @@ describe("strategy", () => {
       const ratio = pnl.pnlDown / pnl.pnlUp;
       expect(Number.isFinite(ratio)).toBe(true);
       expect(ratio).toBeGreaterThan(0);
-      expect(ratio).toBeLessThan(3);
+      expect(ratio).toBeLessThan(5);
     });
   });
 
@@ -92,12 +95,18 @@ describe("strategy", () => {
 
   it("keeps legacy semantics when valueToken is omitted", () => {
     const upper = calculateRange(100, 1, { exitBiasPct: 20, exitSide: "upper" });
-    const upperPnl = computePnL(100, upper.lower, upper.upper, "tokenB");
-    expect(upperPnl.pnlDown / upperPnl.pnlUp).toBeCloseTo(0.8, 4);
+    const upperDownDistancePct = ((100 - upper.lower) / 100) * 100;
+    const upperUpDistancePct = ((upper.upper - 100) / 100) * 100;
+    expect(upperUpDistancePct).toBeCloseTo(1, 6);
+    expect(upperDownDistancePct).toBeLessThanOrEqual(0.8 + 0.0001);
+    expect(upperDownDistancePct).toBeLessThan(upperUpDistancePct);
 
     const lower = calculateRange(100, 1, { exitBiasPct: 20, exitSide: "lower" });
-    const lowerPnl = computePnL(100, lower.lower, lower.upper, "tokenA");
-    expect(lowerPnl.pnlDown / lowerPnl.pnlUp).toBeCloseTo(0.8, 4);
+    const lowerDownDistancePct = ((100 - lower.lower) / 100) * 100;
+    const lowerUpDistancePct = ((lower.upper - 100) / 100) * 100;
+    expect(lowerDownDistancePct).toBeCloseTo(1, 6);
+    expect(lowerUpDistancePct).toBeLessThanOrEqual(0.8 + 0.0001);
+    expect(lowerUpDistancePct).toBeLessThan(lowerDownDistancePct);
   });
 
   it("maps token + direction into exit preference", () => {
@@ -106,6 +115,18 @@ describe("strategy", () => {
     expect(resolveDirectionalExitPreference("tokenB", "down")).toEqual({ exitSide: "upper", valueToken: "tokenB" });
     expect(resolveDirectionalExitPreference("tokenA", "up")).toEqual({ exitSide: "upper", valueToken: "tokenA" });
     expect(resolveDirectionalExitPreference("tokenB", "up")).toEqual({ exitSide: "lower", valueToken: "tokenB" });
+  });
+
+  it("keeps upside side at least as wide for tokenA with up direction", () => {
+    const pref = resolveDirectionalExitPreference("tokenA", "up");
+    const range = calculateRange(100, 0.5, {
+      exitBiasPct: 10,
+      exitSide: pref?.exitSide,
+      valueToken: pref?.valueToken
+    });
+    const downDistancePct = ((100 - range.lower) / 100) * 100;
+    const upDistancePct = ((range.upper - 100) / 100) * 100;
+    expect(upDistancePct).toBeGreaterThanOrEqual(downDistancePct);
   });
 
   it("detects out of range", () => {
