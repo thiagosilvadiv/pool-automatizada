@@ -133,6 +133,18 @@ describe("config", () => {
     expect(() => loadWith({})).not.toThrow();
   });
 
+  it("enables autoResume by default with expected defaults", () => {
+    const config = loadWith({});
+    expect(config.autoResumeEnabled).toBe(true);
+    expect(config.autoResumeMaxAttempts).toBe(5);
+    expect(config.autoResumeBaseDelayMs).toBe(5000);
+  });
+
+  it("rejects invalid autoResume settings", () => {
+    expect(() => loadWith({ autoResumeMaxAttempts: 0 })).toThrow();
+    expect(() => loadWith({ autoResumeBaseDelayMs: 50 })).toThrow();
+  });
+
   it("rejects invalid openaiTimeoutMs", () => {
     expect(() => loadWith({ openaiTimeoutMs: 500 })).toThrow();
   });

@@ -96,6 +96,7 @@ export async function createHistoryStore(name: string): Promise<HistoryStore> {
 
 export type PoolsState<T> = {
   selectedPoolId: string | null;
+  activePoolIds?: string[];
   pools: T[];
 };
 

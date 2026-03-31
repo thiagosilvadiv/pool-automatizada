@@ -46,6 +46,19 @@ type AiStrategyRouteService = Pick<
   | "sendChatMessage"
 >;
 
+type PoolSummaryRouteService = Pick<PoolManager, "listSummaries" | "getSelectedPoolId" | "getAutoResumeStatus">;
+
+export function registerPoolsSummaryRoute(app: Express, poolManager: PoolSummaryRouteService): void {
+  app.get("/api/pools", async (_req: Request, res: Response) => {
+    const pools = await poolManager.listSummaries();
+    res.json({
+      selectedPoolId: poolManager.getSelectedPoolId(),
+      autoResume: poolManager.getAutoResumeStatus(),
+      pools
+    });
+  });
+}
+
 export function registerAiStrategyRoutes(app: Express, aiStrategy: AiStrategyRouteService): void {
   app.get("/api/ai/models", (_req: Request, res: Response) => {
     res.json(aiStrategy.getModelSettings());
@@ -197,9 +210,9 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
-  app.post("/api/stop", (_req: Request, res: Response) => {
+  app.post("/api/stop", async (_req: Request, res: Response) => {
     try {
-      poolManager.stopSelected();
+      await poolManager.stopSelected();
       res.json({ ok: true, status: poolManager.getSelectedStatus() });
     } catch (err) {
       res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -324,13 +337,7 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
-  app.get("/api/pools", async (_req: Request, res: Response) => {
-    const pools = await poolManager.listSummaries();
-    res.json({
-      selectedPoolId: poolManager.getSelectedPoolId(),
-      pools
-    });
-  });
+  registerPoolsSummaryRoute(app, poolManager);
 
   registerAiStrategyRoutes(app, aiStrategy);
 
@@ -396,9 +403,9 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
-  app.post("/api/pools/:id/stop", (req: Request, res: Response) => {
+  app.post("/api/pools/:id/stop", async (req: Request, res: Response) => {
     try {
-      poolManager.stopPool(req.params.id);
+      await poolManager.stopPool(req.params.id);
       res.json({ ok: true });
     } catch (err) {
       res.status(404).json({ ok: false, error: err instanceof Error ? err.message : String(err) });

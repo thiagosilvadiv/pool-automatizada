@@ -81,6 +81,17 @@ export type CloseEmptyAccountsResult = {
   signatures: string[];
 };
 
+export type AutoResumeStatus = {
+  enabled: boolean;
+  maxAttempts: number;
+  baseDelayMs: number;
+  activePoolIds: string[];
+  pendingPoolIds: string[];
+  inFlightPoolIds: string[];
+  attempts: Record<string, number>;
+  lastErrors: Record<string, string>;
+};
+
 type PoolRecord = {
   entry: PoolEntry;
   runner: BotRunner;
@@ -104,6 +115,11 @@ export class PoolManager {
   private pendingAutoAddPools = new Set<string>();
   private autoAddInProgress = false;
   private autoAddTimer: NodeJS.Timeout | null = null;
+  private activePoolIds = new Set<string>();
+  private resumeTimers = new Map<string, NodeJS.Timeout>();
+  private resumeAttempts = new Map<string, number>();
+  private resumeInFlight = new Set<string>();
+  private resumeLastError = new Map<string, string>();
 
   constructor(baseConfig: Config, connection: any, wallet: any) {
     this.baseConfig = baseConfig;
@@ -116,6 +132,9 @@ export class PoolManager {
     this.swapAllowlistStore = await createSwapAllowlistStore();
     await this.loadSwapAllowlist();
     await this.loadPools();
+    if (this.baseConfig.autoResumeEnabled) {
+      await this.resumeActivePools();
+    }
   }
 
   getSwapAllowlist(): { mints: string[]; updatedAt: string | null } {
@@ -136,6 +155,19 @@ export class PoolManager {
 
   getSelectedPoolId(): string | null {
     return this.selectedPoolId;
+  }
+
+  getAutoResumeStatus(): AutoResumeStatus {
+    return {
+      enabled: Boolean(this.baseConfig.autoResumeEnabled),
+      maxAttempts: this.baseConfig.autoResumeMaxAttempts,
+      baseDelayMs: this.baseConfig.autoResumeBaseDelayMs,
+      activePoolIds: [...this.activePoolIds],
+      pendingPoolIds: [...this.resumeTimers.keys()],
+      inFlightPoolIds: [...this.resumeInFlight],
+      attempts: Object.fromEntries(this.resumeAttempts),
+      lastErrors: Object.fromEntries(this.resumeLastError)
+    };
   }
 
   getPoolConfig(id: string): Config | null {
@@ -284,6 +316,8 @@ export class PoolManager {
       record.runner.stop();
       this.pools.delete(id);
     }
+    this.clearResumeTracking(id);
+    this.activePoolIds.delete(id);
     this.entries = this.entries.filter((entry) => entry.id !== id);
     if (this.selectedPoolId === id) {
       this.selectedPoolId = this.entries[0]?.id ?? null;
@@ -316,18 +350,25 @@ export class PoolManager {
   }
 
   async startPool(id: string): Promise<void> {
-    const record = this.getRecord(id);
-    await record.runner.start();
+    await this.startPoolInternal(id, { persistState: true, source: "manual" });
   }
 
-  stopPool(id: string): void {
+  async stopPool(id: string): Promise<void> {
     const record = this.getRecord(id);
     record.runner.stop();
+    this.clearResumeTracking(id);
+    if (this.activePoolIds.delete(id)) {
+      await this.savePools();
+    }
   }
 
   async closePool(id: string): Promise<void> {
     const record = this.getRecord(id);
     await record.runner.closePositionNow();
+    this.clearResumeTracking(id);
+    if (this.activePoolIds.delete(id)) {
+      await this.savePools();
+    }
   }
 
   getStatus(id: string): ReturnType<BotRunner["getStatus"]> | null {
@@ -376,11 +417,11 @@ export class PoolManager {
     await this.startPool(this.selectedPoolId);
   }
 
-  stopSelected(): void {
+  async stopSelected(): Promise<void> {
     if (!this.selectedPoolId) {
       return;
     }
-    this.stopPool(this.selectedPoolId);
+    await this.stopPool(this.selectedPoolId);
   }
 
   async closeSelected(): Promise<void> {
@@ -595,6 +636,109 @@ export class PoolManager {
     await this.updateHistoryEvent(this.selectedPoolId, eventId, field, value);
   }
 
+  private async resumeActivePools(): Promise<void> {
+    const validIds = [...this.activePoolIds].filter((id) => this.entries.some((entry) => entry.id === id));
+    if (validIds.length !== this.activePoolIds.size) {
+      this.activePoolIds = new Set(validIds);
+      await this.savePools();
+    }
+    for (const id of validIds) {
+      await this.tryResumePool(id);
+    }
+  }
+
+  private async startPoolInternal(
+    id: string,
+    options: { persistState: boolean; source: "manual" | "resume" }
+  ): Promise<void> {
+    const record = this.getRecord(id);
+    const status = record.runner.getStatus();
+    if (status.running) {
+      if (!this.activePoolIds.has(id)) {
+        this.activePoolIds.add(id);
+        if (options.persistState) {
+          await this.savePools();
+        }
+      }
+      this.clearResumeTracking(id);
+      return;
+    }
+    await record.runner.start();
+    const shouldPersist = options.persistState && !this.activePoolIds.has(id);
+    this.activePoolIds.add(id);
+    this.clearResumeTracking(id);
+    if (shouldPersist) {
+      await this.savePools();
+    }
+    logger.info({ poolId: id, source: options.source }, "pool started");
+  }
+
+  private async tryResumePool(id: string): Promise<void> {
+    if (!this.baseConfig.autoResumeEnabled) {
+      return;
+    }
+    if (!this.activePoolIds.has(id)) {
+      this.clearResumeTracking(id);
+      return;
+    }
+    if (this.resumeInFlight.has(id)) {
+      return;
+    }
+    const existingTimer = this.resumeTimers.get(id);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.resumeTimers.delete(id);
+    }
+    this.resumeInFlight.add(id);
+    const attempt = (this.resumeAttempts.get(id) ?? 0) + 1;
+    this.resumeAttempts.set(id, attempt);
+    logger.info(
+      { poolId: id, attempt, maxAttempts: this.baseConfig.autoResumeMaxAttempts },
+      "attempting auto-resume pool start"
+    );
+    try {
+      await this.startPoolInternal(id, { persistState: false, source: "resume" });
+      logger.info({ poolId: id, attempt }, "pool auto-resume succeeded");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.resumeLastError.set(id, message);
+      if (attempt < this.baseConfig.autoResumeMaxAttempts) {
+        const delayMs = this.computeResumeBackoffDelay(attempt);
+        logger.warn({ poolId: id, attempt, delayMs, err }, "pool auto-resume failed; scheduling retry");
+        const timer = setTimeout(() => {
+          this.resumeTimers.delete(id);
+          void this.tryResumePool(id);
+        }, delayMs);
+        this.resumeTimers.set(id, timer);
+      } else {
+        logger.error(
+          { poolId: id, attempt, maxAttempts: this.baseConfig.autoResumeMaxAttempts, err },
+          "pool auto-resume reached max attempts; waiting manual action or next restart"
+        );
+      }
+    } finally {
+      this.resumeInFlight.delete(id);
+    }
+  }
+
+  private computeResumeBackoffDelay(attempt: number): number {
+    const base = Math.max(100, this.baseConfig.autoResumeBaseDelayMs);
+    const exponent = Math.max(0, attempt - 1);
+    const delay = base * (2 ** exponent);
+    return Math.min(delay, 10 * 60 * 1000);
+  }
+
+  private clearResumeTracking(id: string): void {
+    const timer = this.resumeTimers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      this.resumeTimers.delete(id);
+    }
+    this.resumeAttempts.delete(id);
+    this.resumeInFlight.delete(id);
+    this.resumeLastError.delete(id);
+  }
+
   private getRecord(id: string): PoolRecord {
     const record = this.pools.get(id);
     if (!record) {
@@ -614,6 +758,7 @@ export class PoolManager {
 
     let pools = data?.pools ?? [];
     let selectedPoolId = data?.selectedPoolId ?? null;
+    const persistedActivePoolIds = this.normalizePoolIdList((data as any)?.activePoolIds);
 
     const deduped = this.deduplicatePools(pools);
     if (deduped.length !== pools.length) {
@@ -639,6 +784,9 @@ export class PoolManager {
 
     this.entries = pools;
     this.selectedPoolId = pools.find((entry) => entry.id === selectedPoolId)?.id ?? (pools[0]?.id ?? null);
+    this.activePoolIds = new Set(
+      persistedActivePoolIds.filter((id) => pools.some((entry) => entry.id === id))
+    );
 
     for (const entry of pools) {
       try {
@@ -682,6 +830,9 @@ export class PoolManager {
   private async savePools(): Promise<void> {
     const payload: PoolsState<PoolEntry> = {
       selectedPoolId: this.selectedPoolId,
+      activePoolIds: this.entries
+        .map((entry) => entry.id)
+        .filter((id) => this.activePoolIds.has(id)),
       pools: this.entries
     };
     await this.poolsStore.save(payload);
@@ -811,6 +962,16 @@ export class PoolManager {
     const normalized = Array.isArray(mints)
       ? mints.map((mint) => String(mint).trim()).filter((mint) => mint.length > 0)
       : [];
+    return Array.from(new Set(normalized));
+  }
+
+  private normalizePoolIdList(ids: unknown): string[] {
+    if (!Array.isArray(ids)) {
+      return [];
+    }
+    const normalized = ids
+      .map((id) => String(id ?? "").trim())
+      .filter((id) => id.length > 0);
     return Array.from(new Set(normalized));
   }
 

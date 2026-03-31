@@ -34,6 +34,9 @@ export type Config = {
   autoSwapFeesToUsdcEnabled: boolean;
   autoSwapFeesToUsdcTargetMint: string;
   autoAddLiquidityEnabled: boolean;
+  autoResumeEnabled: boolean;
+  autoResumeMaxAttempts: number;
+  autoResumeBaseDelayMs: number;
   jupiterApiKey: string | null;
   jupiterApiUrl: string;
   jupiterExcludeDexes: string[];
@@ -310,6 +313,12 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     ?? Boolean((data as any).openaiAllowCustomModel ?? true);
   const openAiTimeoutMs = parseEnvNumber(process.env.OPENAI_TIMEOUT_MS)
     ?? Number((data as any).openaiTimeoutMs ?? 30000);
+  const autoResumeEnabled = parseEnvBool(process.env.AUTO_RESUME_ENABLED)
+    ?? Boolean((data as any).autoResumeEnabled ?? true);
+  const autoResumeMaxAttempts = parseEnvNumber(process.env.AUTO_RESUME_MAX_ATTEMPTS)
+    ?? Number((data as any).autoResumeMaxAttempts ?? 5);
+  const autoResumeBaseDelayMs = parseEnvNumber(process.env.AUTO_RESUME_BASE_DELAY_MS)
+    ?? Number((data as any).autoResumeBaseDelayMs ?? 5000);
 
   const config: Config = {
     network: process.env.NETWORK ?? data.network ?? "mainnet-beta",
@@ -367,6 +376,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? "",
     autoAddLiquidityEnabled: parseEnvBool(process.env.AUTO_ADD_LIQUIDITY_ENABLED)
       ?? Boolean((data as any).autoAddLiquidityEnabled ?? false),
+    autoResumeEnabled,
+    autoResumeMaxAttempts: Number(autoResumeMaxAttempts),
+    autoResumeBaseDelayMs: Number(autoResumeBaseDelayMs),
     jupiterApiKey: process.env.JUPITER_API_KEY ?? data.jupiterApiKey ?? null,
     jupiterApiUrl: process.env.JUPITER_API_URL ?? data.jupiterApiUrl ?? "https://api.jup.ag",
     jupiterExcludeDexes: parseEnvList(process.env.JUPITER_EXCLUDE_DEXES)
@@ -481,6 +493,14 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.autoSwapToSolMinOutSol) || config.autoSwapToSolMinOutSol < 0) {
     throw new Error("autoSwapToSolMinOutSol must be >= 0");
+  }
+  if (!Number.isFinite(config.autoResumeMaxAttempts)
+    || !Number.isInteger(config.autoResumeMaxAttempts)
+    || config.autoResumeMaxAttempts < 1) {
+    throw new Error("autoResumeMaxAttempts must be an integer >= 1");
+  }
+  if (!Number.isFinite(config.autoResumeBaseDelayMs) || config.autoResumeBaseDelayMs < 100) {
+    throw new Error("autoResumeBaseDelayMs must be >= 100");
   }
   if (!config.autoSwapFeesToUsdcTargetMint || !config.autoSwapFeesToUsdcTargetMint.trim()) {
     config.autoSwapFeesToUsdcTargetMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
