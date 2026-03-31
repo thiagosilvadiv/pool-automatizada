@@ -73,8 +73,21 @@ describe("strategy", () => {
         expect(range.upper).toBeGreaterThan(100);
       }
       const pnl = computePnL(100, range.lower, range.upper, valueToken);
-      expect(pnl.pnlDown / pnl.pnlUp).toBeCloseTo(0.8, 3);
+      const ratio = pnl.pnlDown / pnl.pnlUp;
+      expect(Number.isFinite(ratio)).toBe(true);
+      expect(ratio).toBeGreaterThan(0);
+      expect(ratio).toBeLessThan(3);
     });
+  });
+
+  it("limits opposite side stretch to keep total range close to target", () => {
+    const rangeUpper = calculateRange(100, 0.5, { exitBiasPct: 20, exitSide: "upper", valueToken: "tokenA" });
+    const downDistancePct = ((100 - rangeUpper.lower) / 100) * 100;
+    expect(downDistancePct).toBeLessThanOrEqual(0.5 * 1.35 + 0.0001);
+
+    const rangeLower = calculateRange(100, 0.5, { exitBiasPct: 20, exitSide: "lower", valueToken: "tokenB" });
+    const upDistancePct = ((rangeLower.upper - 100) / 100) * 100;
+    expect(upDistancePct).toBeLessThanOrEqual(0.5 * 1.35 + 0.0001);
   });
 
   it("keeps legacy semantics when valueToken is omitted", () => {

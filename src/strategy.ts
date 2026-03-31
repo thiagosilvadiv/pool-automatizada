@@ -18,6 +18,8 @@ export type ExitPreference = {
   valueToken: ValueToken;
 };
 
+const MAX_OPPOSITE_SIDE_STRETCH = 1.35;
+
 export function resolveDirectionalExitPreference(
   preferredExitToken: ValueToken | null,
   preferredExitDirection: PreferredExitDirection = "down"
@@ -66,11 +68,13 @@ export function calculateRange(
     const upper = symmetric.upper;
     const lower = solveLowerByPnl(price, upper, bias, valueToken ?? "tokenB");
     if (lower != null && lower > 0 && lower < price) {
-      return { lower, upper };
+      const adjustedLower = clampLowerByMaxOppositeStretch(price, lower, width);
+      return { lower: adjustedLower, upper };
     }
     const fallbackLower = directionalFallbackLower(price, width, bias);
     if (fallbackLower > 0 && fallbackLower < price) {
-      return { lower: fallbackLower, upper };
+      const adjustedLower = clampLowerByMaxOppositeStretch(price, fallbackLower, width);
+      return { lower: adjustedLower, upper };
     }
     return symmetric;
   }
@@ -79,11 +83,13 @@ export function calculateRange(
     const lower = symmetric.lower;
     const upper = solveUpperByPnl(price, lower, bias, width, valueToken ?? "tokenA");
     if (upper != null && upper > price) {
-      return { lower, upper };
+      const adjustedUpper = clampUpperByMaxOppositeStretch(price, upper, width);
+      return { lower, upper: adjustedUpper };
     }
     const fallbackUpper = directionalFallbackUpper(price, width, bias);
     if (fallbackUpper > price) {
-      return { lower, upper: fallbackUpper };
+      const adjustedUpper = clampUpperByMaxOppositeStretch(price, fallbackUpper, width);
+      return { lower, upper: adjustedUpper };
     }
     return symmetric;
   }
@@ -99,6 +105,18 @@ function directionalFallbackLower(price: number, width: number, bias: number): n
 function directionalFallbackUpper(price: number, width: number, bias: number): number {
   const sideWidth = width * Math.max(1 - bias, 0.001);
   return price * (1 + sideWidth);
+}
+
+function clampLowerByMaxOppositeStretch(price: number, lower: number, width: number): number {
+  const maxDownDistance = width * MAX_OPPOSITE_SIDE_STRETCH;
+  const minLower = price * (1 - maxDownDistance);
+  return Math.max(lower, minLower);
+}
+
+function clampUpperByMaxOppositeStretch(price: number, upper: number, width: number): number {
+  const maxUpDistance = width * MAX_OPPOSITE_SIDE_STRETCH;
+  const maxUpper = price * (1 + maxUpDistance);
+  return Math.min(upper, maxUpper);
 }
 
 export function isPriceOutOfRange(price: number, range: Range): boolean {
