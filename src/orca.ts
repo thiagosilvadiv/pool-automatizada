@@ -325,9 +325,10 @@ export class OrcaBot {
             exitSide,
             valueToken
           });
+          const executionRange = this.getExecutionRange(range, price);
           const solUsdPrice = await this.tryGetSolUsdPrice();
           this.lastStatus.lastPrice = price;
-          this.lastStatus.targetRange = range;
+          this.lastStatus.targetRange = executionRange;
           this.lastStatus.solUsdPrice = solUsdPrice;
           this.lastStatus.budgetUsd = this.config.budgetUsd;
           this.lastStatus.budgetSol = solUsdPrice && this.config.budgetUsd
@@ -351,8 +352,9 @@ export class OrcaBot {
       exitSide,
       valueToken
     });
+    const executionRange = this.getExecutionRange(range, price);
     this.lastStatus.lastPrice = price;
-    this.lastStatus.targetRange = range;
+    this.lastStatus.targetRange = executionRange;
     const solUsdPrice = await this.tryGetSolUsdPrice();
     this.lastStatus.solUsdPrice = solUsdPrice;
     this.lastStatus.budgetUsd = this.config.budgetUsd;
@@ -383,8 +385,8 @@ export class OrcaBot {
         this.missingPositionSince = null;
       }
 
-      logger.info({ price, range }, "no active position found; opening new position");
-      const result = await this.openPosition(range, price, solUsdPrice);
+      logger.info({ price, range: executionRange }, "no active position found; opening new position");
+      const result = await this.openPosition(executionRange, price, solUsdPrice);
       this.lastStatus.lastAction = result;
       if (result === "open-position") {
         if (this.config.autoSwapToSolEnabled) {
@@ -471,7 +473,7 @@ export class OrcaBot {
       this.lastStatus.positionMint = this.currentPositionMint;
       return this.getStatus();
     }
-    const result = await this.openPosition(range, price, solUsdPrice);
+    const result = await this.openPosition(executionRange, price, solUsdPrice);
     this.lastStatus.lastAction = result === "open-position" ? "rebalanced" : result;
     if (result === "open-position") {
       this.lastRebalanceAt = Date.now();
@@ -859,6 +861,24 @@ export class OrcaBot {
       this.poolState.decimalsB
     );
 
+    return { lower: toNumber(lowerPrice), upper: toNumber(upperPrice) };
+  }
+
+  private getExecutionRange(range: Range, referencePrice: number): Range {
+    if (!this.poolState) {
+      return range;
+    }
+    const { lowerTick, upperTick } = this.getTicksForRange(range, referencePrice);
+    const lowerPrice = whirlpools.PriceMath.tickIndexToPrice(
+      lowerTick,
+      this.poolState.decimalsA,
+      this.poolState.decimalsB
+    );
+    const upperPrice = whirlpools.PriceMath.tickIndexToPrice(
+      upperTick,
+      this.poolState.decimalsA,
+      this.poolState.decimalsB
+    );
     return { lower: toNumber(lowerPrice), upper: toNumber(upperPrice) };
   }
 
