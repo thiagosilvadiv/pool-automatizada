@@ -950,7 +950,7 @@ export class OrcaBot {
       throw new Error("poolState not initialized");
     }
 
-    const { lowerTick, upperTick } = this.getTicksForRange(range);
+    const { lowerTick, upperTick } = this.getTicksForRange(range, price);
     const slippage = common.Percentage.fromFraction(this.config.slippageBps, 10_000);
     let balances = await this.getTokenBalances();
     let tokenExtensionCtx = await whirlpools.TokenExtensionUtil.buildTokenExtensionContext(
@@ -2397,7 +2397,7 @@ export class OrcaBot {
     }
   }
 
-  private getTicksForRange(range: Range): { lowerTick: number; upperTick: number } {
+  private getTicksForRange(range: Range, referencePrice: number): { lowerTick: number; upperTick: number } {
     if (!this.poolState) {
       throw new Error("poolState not initialized");
     }
@@ -2413,7 +2413,16 @@ export class OrcaBot {
       this.poolState.decimalsB
     );
 
-    return alignTickRangeToSpacing(lowerIndex, upperIndex, this.poolState.tickSpacing);
+    const referenceTickIndex = whirlpools.PriceMath.priceToTickIndex(
+      new Decimal(referencePrice),
+      this.poolState.decimalsA,
+      this.poolState.decimalsB
+    );
+
+    return alignTickRangeToSpacing(lowerIndex, upperIndex, this.poolState.tickSpacing, {
+      preferredSide: this.lastStatus.effectiveExitSide,
+      referenceTickIndex
+    });
   }
 
   private async executeTx(

@@ -20,5 +20,22 @@ describe("alignTickRangeToSpacing", () => {
     expect(result.lowerTick).toBe(960);
     expect(result.upperTick).toBe(1024);
   });
-});
 
+  it("nudges lower tick inward for upper preference when rounding would invert direction", () => {
+    const result = alignTickRangeToSpacing(953, 1033, 16, {
+      preferredSide: "upper",
+      referenceTickIndex: 1000
+    });
+    expect(result.lowerTick).toBe(960);
+    expect(result.upperTick).toBe(1040);
+  });
+
+  it("nudges upper tick inward for lower preference when rounding would invert direction", () => {
+    const result = alignTickRangeToSpacing(975, 1047, 16, {
+      preferredSide: "lower",
+      referenceTickIndex: 1000
+    });
+    expect(result.lowerTick).toBe(960);
+    expect(result.upperTick).toBe(1040);
+  });
+});
