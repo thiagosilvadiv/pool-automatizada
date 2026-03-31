@@ -6,7 +6,7 @@ import * as commonSdk from "@orca-so/common-sdk";
 
 import { Config } from "./config.js";
 import { logger } from "./logger.js";
-import { calculateRange, isPriceOutOfRange, Range } from "./strategy.js";
+import { calculateRange, isPriceOutOfRange, resolveDirectionalExitPreference, Range } from "./strategy.js";
 import { WalletLike } from "./solana.js";
 import { getSolUsdPrice } from "./pyth.js";
 import { getTrendSnapshot } from "./trend.js";
@@ -80,6 +80,10 @@ export type BotStatus = {
   trendTimeframe: TrendTimeframe | null;
   trendUpdatedAt: string | null;
   trendPreferredExitToken: "tokenA" | "tokenB" | null;
+  effectiveExitToken: "tokenA" | "tokenB" | null;
+  effectiveExitDirection: "down" | "up";
+  effectiveExitSide: "lower" | "upper" | null;
+  effectiveValueToken: "tokenA" | "tokenB" | null;
   trendStale: boolean | null;
 };
 
@@ -175,18 +179,12 @@ export class OrcaBot {
     trendTimeframe: null,
     trendUpdatedAt: null,
     trendPreferredExitToken: null,
+    effectiveExitToken: null,
+    effectiveExitDirection: "down",
+    effectiveExitSide: null,
+    effectiveValueToken: null,
     trendStale: null
   };
-
-  private getExitSide(preferredExitToken: "tokenA" | "tokenB" | null): "lower" | "upper" | undefined {
-    if (preferredExitToken === "tokenA") {
-      return "lower";
-    }
-    if (preferredExitToken === "tokenB") {
-      return "upper";
-    }
-    return undefined;
-  }
 
   private constructor(ctx: any, client: any, botCtx: BotContext) {
     this.ctx = ctx;
@@ -286,7 +284,14 @@ export class OrcaBot {
     const trendSnapshot = await this.updateTrendStatus();
     const preferredExitToken = this.resolvePreferredExitToken(trendSnapshot.direction, trendSnapshot.stale);
     this.lastStatus.trendPreferredExitToken = preferredExitToken;
-    const exitSide = this.getExitSide(preferredExitToken);
+    const preferredExitDirection = this.config.preferredExitDirection === "up" ? "up" : "down";
+    const exitPreference = resolveDirectionalExitPreference(preferredExitToken, preferredExitDirection);
+    const exitSide = exitPreference?.exitSide;
+    const valueToken = exitPreference?.valueToken;
+    this.lastStatus.effectiveExitToken = preferredExitToken;
+    this.lastStatus.effectiveExitDirection = preferredExitDirection;
+    this.lastStatus.effectiveExitSide = exitSide ?? null;
+    this.lastStatus.effectiveValueToken = valueToken ?? null;
 
     const solBalance = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
     this.lastStatus.solBalance = solBalance;
@@ -316,7 +321,8 @@ export class OrcaBot {
           const price = await this.getCurrentPrice();
           const range = calculateRange(price, this.config.rangeWidthPct, {
             exitBiasPct: this.config.rangeExitBiasPct,
-            exitSide
+            exitSide,
+            valueToken
           });
           const solUsdPrice = await this.tryGetSolUsdPrice();
           this.lastStatus.lastPrice = price;
@@ -341,7 +347,8 @@ export class OrcaBot {
     const price = await this.getCurrentPrice();
     const range = calculateRange(price, this.config.rangeWidthPct, {
       exitBiasPct: this.config.rangeExitBiasPct,
-      exitSide
+      exitSide,
+      valueToken
     });
     this.lastStatus.lastPrice = price;
     this.lastStatus.targetRange = range;

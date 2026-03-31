@@ -5,6 +5,9 @@ const lastActionEl = document.getElementById("lastAction");
 const lastErrorEl = document.getElementById("lastError");
 const hedgeStatusEl = document.getElementById("hedgeStatus");
 const hedgeErrorEl = document.getElementById("hedgeError");
+const effectiveExitTokenEl = document.getElementById("effectiveExitToken");
+const effectiveExitDirectionEl = document.getElementById("effectiveExitDirection");
+const effectiveExitSideEl = document.getElementById("effectiveExitSide");
 const priceEl = document.getElementById("price");
 const targetRangeEl = document.getElementById("targetRange");
 const positionRangeEl = document.getElementById("positionRange");
@@ -38,6 +41,7 @@ const poolNameInput = document.getElementById("poolName");
 const poolAddressInput = document.getElementById("poolAddress");
 const poolRangeInput = document.getElementById("poolRange");
 const poolExitTokenInput = document.getElementById("poolExitToken");
+const poolExitDirectionInput = document.getElementById("poolExitDirection");
 const poolExitBiasInput = document.getElementById("poolExitBias");
 const poolTrendEnabledInput = document.getElementById("poolTrendEnabled");
 const poolTrendTimeframeInput = document.getElementById("poolTrendTimeframe");
@@ -63,6 +67,7 @@ const editPoolForm = document.getElementById("editPoolForm");
 const editPoolIdInput = document.getElementById("editPoolId");
 const editPoolRangeInput = document.getElementById("editPoolRange");
 const editPoolExitTokenInput = document.getElementById("editPoolExitToken");
+const editPoolExitDirectionInput = document.getElementById("editPoolExitDirection");
 const editPoolExitBiasInput = document.getElementById("editPoolExitBias");
 const editPoolTrendEnabledInput = document.getElementById("editPoolTrendEnabled");
 const editPoolTrendTimeframeInput = document.getElementById("editPoolTrendTimeframe");
@@ -287,6 +292,18 @@ function formatTrendTargetLabel(value, info) {
 function formatExitToken(value, info) {
   if (value === "tokenA") return describeToken("tokenA", info);
   if (value === "tokenB") return describeToken("tokenB", info);
+  return "-";
+}
+
+function formatExitDirection(value) {
+  if (value === "up") return "Alta";
+  if (value === "down") return "Baixa";
+  return "-";
+}
+
+function formatExitSide(value) {
+  if (value === "upper") return "Alta (upper)";
+  if (value === "lower") return "Baixa (lower)";
   return "-";
 }
 
@@ -548,6 +565,15 @@ function parseExitTokenInput(value) {
   return null;
 }
 
+function parseExitDirectionInput(value) {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "down") return "down";
+  if (trimmed === "up") return "up";
+  return null;
+}
+
 function parseTrendEnabledInput(value) {
   if (value == null) return undefined;
   const trimmed = String(value).trim().toLowerCase();
@@ -781,6 +807,7 @@ function openEditPoolModal(pool) {
   const defaultRange = cachedConfig?.rangeWidthPct ?? "-";
   const defaultBudget = cachedConfig?.budgetUsd ?? "-";
   const defaultExitToken = cachedConfig?.preferredExitToken ?? null;
+  const defaultExitDirection = cachedConfig?.preferredExitDirection ?? "down";
   const defaultExitBias = cachedConfig?.rangeExitBiasPct ?? "-";
   const defaultTrendEnabled = cachedConfig?.trendEnabled ?? false;
   const defaultTrendTimeframe = cachedConfig?.trendTimeframe ?? "1m";
@@ -847,6 +874,10 @@ function openEditPoolModal(pool) {
     editPoolExitTokenInput.value = overrides.preferredExitToken ?? "";
     const exitLabel = formatExitToken(defaultExitToken, tokenInfo);
     setSelectPlaceholder(editPoolExitTokenInput, `Padrão (${exitLabel === "-" ? "Sem" : exitLabel})`);
+  }
+  if (editPoolExitDirectionInput) {
+    editPoolExitDirectionInput.value = overrides.preferredExitDirection ?? "";
+    setSelectPlaceholder(editPoolExitDirectionInput, `Padrão (${formatExitDirection(defaultExitDirection)})`);
   }
   if (editPoolExitBiasInput) {
     editPoolExitBiasInput.value = overrides.rangeExitBiasPct ?? "";
@@ -1107,7 +1138,7 @@ function renderPools(data, config) {
   cachedPools = pools;
   cachedConfig = config;
   if (!pools.length) {
-    poolsBody.innerHTML = "<tr><td colspan=\"17\">Sem pools cadastradas</td></tr>";
+    poolsBody.innerHTML = "<tr><td colspan=\"18\">Sem pools cadastradas</td></tr>";
     return;
   }
   const rows = pools.map((pool) => {
@@ -1120,6 +1151,7 @@ function renderPools(data, config) {
     const rangeDisplay = pool.overrides?.rangeWidthPct ?? null;
     const budgetDisplay = pool.overrides?.budgetUsd ?? null;
     const exitTokenDisplay = pool.overrides?.preferredExitToken ?? null;
+    const exitDirectionDisplay = pool.overrides?.preferredExitDirection ?? null;
     const exitBiasDisplay = pool.overrides?.rangeExitBiasPct ?? null;
     const hedgeEnabledDisplay = pool.overrides?.hedgeEnabled ?? null;
     const hedgePctDisplay = pool.overrides?.hedgePct ?? null;
@@ -1129,6 +1161,7 @@ function renderPools(data, config) {
     const defaultRange = config?.rangeWidthPct ?? "-";
     const defaultBudget = config?.budgetUsd ?? "-";
     const defaultExitToken = config?.preferredExitToken ?? null;
+    const defaultExitDirection = config?.preferredExitDirection ?? "down";
     const defaultExitBias = config?.rangeExitBiasPct ?? "-";
     const defaultHedgeEnabled = config?.hedgeEnabled ?? false;
     const defaultHedgePct = config?.hedgePct ?? "-";
@@ -1151,6 +1184,9 @@ function renderPools(data, config) {
     const exitTokenLabel = exitTokenDisplay == null
       ? `Padrão (${formatExitToken(defaultExitToken, poolTokenInfo)})`
       : formatExitToken(exitTokenDisplay, poolTokenInfo);
+    const exitDirectionLabel = exitDirectionDisplay == null
+      ? `Padrão (${formatExitDirection(defaultExitDirection)})`
+      : formatExitDirection(exitDirectionDisplay);
     const exitBiasLabel = exitBiasDisplay == null
       ? `Padrão (${formatNumber(defaultExitBias, 2)})`
       : formatNumber(exitBiasDisplay, 2);
@@ -1175,6 +1211,7 @@ function renderPools(data, config) {
         <td>${pool.whirlpoolAddress}</td>
         <td>${rangeLabel}</td>
         <td>${exitTokenLabel}</td>
+        <td>${exitDirectionLabel}</td>
         <td>${exitBiasLabel}</td>
         <td>${formatTrendBadge(pool, trendUsageLabel)}</td>
         <td>${budgetLabel}</td>
@@ -1285,7 +1322,19 @@ async function updateUI() {
     statusBadge.classList.toggle("stopped", !status.running);
 
     const tokenInfo = getTokenInfo(config);
+    if (effectiveExitTokenEl) {
+      effectiveExitTokenEl.textContent = formatExitToken(status.effectiveExitToken, tokenInfo);
+    }
+    if (effectiveExitDirectionEl) {
+      effectiveExitDirectionEl.textContent = formatExitDirection(status.effectiveExitDirection ?? config.preferredExitDirection ?? "down");
+    }
+    if (effectiveExitSideEl) {
+      effectiveExitSideEl.textContent = formatExitSide(status.effectiveExitSide);
+    }
     updateExitTokenSelectHints(poolExitTokenInput, tokenInfo);
+    if (poolExitDirectionInput) {
+      setSelectPlaceholder(poolExitDirectionInput, `Padrão (${formatExitDirection(config.preferredExitDirection ?? "down")})`);
+    }
     if (poolTrendUpInput) {
       updateTrendTargetSelectHints(poolTrendUpInput, tokenInfo);
       setSelectPlaceholder(poolTrendUpInput, `Padrão (${formatTrendTargetLabel(config.trendTargetUp, tokenInfo)})`);
@@ -1416,6 +1465,7 @@ addPoolBtn.addEventListener("click", async () => {
   const rangeWidthPct = parseOptionalNumber(poolRangeInput.value);
   const rangeExitBiasPct = parseOptionalNumber(poolExitBiasInput?.value);
   const preferredExitToken = poolExitTokenInput?.value?.trim();
+  const preferredExitDirection = poolExitDirectionInput?.value?.trim();
   const trendEnabledRaw = poolTrendEnabledInput?.value ?? "";
   const trendTimeframeRaw = poolTrendTimeframeInput?.value ?? "";
   const trendTargetUpRaw = poolTrendUpInput?.value ?? "";
@@ -1441,6 +1491,13 @@ addPoolBtn.addEventListener("click", async () => {
     }
     if (preferredExitToken) {
       overrides.preferredExitToken = preferredExitToken;
+    }
+    if (preferredExitDirection) {
+      const parsed = parseExitDirectionInput(preferredExitDirection);
+      if (!parsed) {
+        throw new Error("Direção da saída preferida inválida. Use Alta ou Baixa.");
+      }
+      overrides.preferredExitDirection = parsed;
     }
     if (trendEnabledRaw) {
       const parsed = parseTrendEnabledInput(trendEnabledRaw);
@@ -1521,6 +1578,7 @@ addPoolBtn.addEventListener("click", async () => {
     poolAddressInput.value = "";
     poolRangeInput.value = "";
     if (poolExitTokenInput) poolExitTokenInput.value = "";
+    if (poolExitDirectionInput) poolExitDirectionInput.value = "";
     if (poolExitBiasInput) poolExitBiasInput.value = "";
     if (poolTrendEnabledInput) poolTrendEnabledInput.value = "";
     if (poolTrendTimeframeInput) poolTrendTimeframeInput.value = "";
@@ -1614,6 +1672,21 @@ if (editPoolForm) {
         return;
       }
       overrides.preferredExitToken = parsed;
+    }
+
+    const exitDirectionRaw = editPoolExitDirectionInput?.value?.trim() ?? "";
+    if (!exitDirectionRaw) {
+      overrides.preferredExitDirection = null;
+    } else {
+      const parsed = parseExitDirectionInput(exitDirectionRaw);
+      if (!parsed) {
+        if (editPoolError) {
+          editPoolError.textContent = "Direção da saída preferida inválida. Use Alta ou Baixa.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.preferredExitDirection = parsed;
     }
 
     const exitBiasRaw = editPoolExitBiasInput?.value?.trim() ?? "";

@@ -43,7 +43,15 @@
             </select>
           </div>
           <div class="field">
-            <label for="poolExitBias">Saída % a menos (PnL do token escolhido)</label>
+            <label for="poolExitDirection">Direção da saída preferida</label>
+            <select id="poolExitDirection">
+              <option value="">Padrão</option>
+              <option value="down">Baixa (padrão atual)</option>
+              <option value="up">Alta (novo)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolExitBias">Bias % (assimetria no token escolhido)</label>
             <input id="poolExitBias" type="number" min="0" max="99.9" step="0.1" placeholder="Padrão" />
           </div>
           <div class="field">
@@ -155,6 +163,7 @@
                 <th>Whirlpool</th>
                 <th>Range %</th>
                 <th>Saída pref.</th>
+                <th>Direção</th>
                 <th>Bias %</th>
                 <th>Tendência</th>
                 <th>Budget USD</th>
@@ -170,7 +179,7 @@
               </tr>
             </thead>
             <tbody id="poolsBody">
-              <tr><td colspan="16">Sem pools cadastradas</td></tr>
+              <tr><td colspan="18">Sem pools cadastradas</td></tr>
             </tbody>
             </table>
           </div>
@@ -196,6 +205,9 @@
             <div class="kv"><span>Erro</span><span id="lastError">-</span></div>
             <div class="kv"><span>Hedge</span><span id="hedgeStatus">-</span></div>
             <div class="kv"><span>Hedge erro</span><span id="hedgeError">-</span></div>
+            <div class="kv"><span>Saída efetiva (token)</span><span id="effectiveExitToken">-</span></div>
+            <div class="kv"><span>Saída efetiva (direção)</span><span id="effectiveExitDirection">-</span></div>
+            <div class="kv"><span>Saída efetiva (lado)</span><span id="effectiveExitSide">-</span></div>
           </div>
           <div class="card">
             <h3>Preço & Faixa</h3>
@@ -408,7 +420,15 @@
             </select>
           </div>
           <div class="field">
-            <label for="editPoolExitBias">Bias %</label>
+            <label for="editPoolExitDirection">Direção da saída preferida</label>
+            <select id="editPoolExitDirection">
+              <option value="">Padrão</option>
+              <option value="down">Baixa (padrão atual)</option>
+              <option value="up">Alta (novo)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolExitBias">Bias % (assimetria no token escolhido)</label>
             <input id="editPoolExitBias" type="number" min="0" max="99.9" step="0.1" placeholder="Padrão" />
           </div>
           <div class="field">

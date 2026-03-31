@@ -3,10 +3,37 @@ export type Range = {
   upper: number;
 };
 
+export type ExitSide = "lower" | "upper";
+export type ValueToken = "tokenA" | "tokenB";
+export type PreferredExitDirection = "down" | "up";
+
 export type RangeOptions = {
   exitBiasPct?: number;
-  exitSide?: "lower" | "upper";
+  exitSide?: ExitSide;
+  valueToken?: ValueToken;
 };
+
+export type ExitPreference = {
+  exitSide: ExitSide;
+  valueToken: ValueToken;
+};
+
+export function resolveDirectionalExitPreference(
+  preferredExitToken: ValueToken | null,
+  preferredExitDirection: PreferredExitDirection = "down"
+): ExitPreference | null {
+  if (!preferredExitToken) {
+    return null;
+  }
+  if (preferredExitDirection === "up") {
+    return preferredExitToken === "tokenA"
+      ? { exitSide: "upper", valueToken: "tokenA" }
+      : { exitSide: "lower", valueToken: "tokenB" };
+  }
+  return preferredExitToken === "tokenA"
+    ? { exitSide: "lower", valueToken: "tokenA" }
+    : { exitSide: "upper", valueToken: "tokenB" };
+}
 
 export function calculateRange(
   price: number,
@@ -19,6 +46,12 @@ export function calculateRange(
     ? Math.max(0, Math.min(0.999, biasPct / 100))
     : 0;
   const exitSide = options?.exitSide;
+  const legacyValueToken = exitSide === "upper"
+    ? "tokenB"
+    : exitSide === "lower"
+      ? "tokenA"
+      : undefined;
+  const valueToken = options?.valueToken ?? legacyValueToken;
 
   const symmetric = {
     lower: price * (1 - width),
@@ -31,7 +64,7 @@ export function calculateRange(
 
   if (exitSide === "upper") {
     const upper = symmetric.upper;
-    const lower = solveLowerByPnl(price, upper, bias, "tokenB");
+    const lower = solveLowerByPnl(price, upper, bias, valueToken ?? "tokenB");
     if (lower != null && lower > 0 && lower < price) {
       return { lower, upper };
     }
@@ -44,7 +77,7 @@ export function calculateRange(
 
   if (exitSide === "lower") {
     const lower = symmetric.lower;
-    const upper = solveUpperByPnl(price, lower, bias, width, "tokenA");
+    const upper = solveUpperByPnl(price, lower, bias, width, valueToken ?? "tokenA");
     if (upper != null && upper > price) {
       return { lower, upper };
     }

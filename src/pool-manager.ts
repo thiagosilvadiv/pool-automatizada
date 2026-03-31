@@ -33,6 +33,7 @@ export type PoolOverrides = {
   budgetUsd?: number | null;
   rangeExitBiasPct?: number;
   preferredExitToken?: "tokenA" | "tokenB" | null;
+  preferredExitDirection?: "down" | "up";
   trendEnabled?: boolean;
   trendTimeframe?: "1m" | "5m" | "15m" | "30m" | "1h";
   trendTargetUp?: "sol" | "other" | "tokenA" | "tokenB";
@@ -1012,6 +1013,13 @@ export class PoolManager {
       }
       normalized.preferredExitToken = value as "tokenA" | "tokenB";
     }
+    if (overrides.preferredExitDirection != null) {
+      const value = String(overrides.preferredExitDirection).trim().toLowerCase();
+      if (value !== "down" && value !== "up") {
+        throw new Error("preferredExitDirection override must be down or up");
+      }
+      normalized.preferredExitDirection = value as "down" | "up";
+    }
 
     if (overrides.trendEnabled != null) {
       const raw = overrides.trendEnabled as unknown;
@@ -1225,6 +1233,17 @@ export class PoolManager {
           throw new Error("preferredExitToken override must be tokenA or tokenB");
         }
         next.preferredExitToken = value as "tokenA" | "tokenB";
+      }
+    }
+    if ("preferredExitDirection" in updates) {
+      if (updates.preferredExitDirection == null) {
+        delete next.preferredExitDirection;
+      } else {
+        const value = String(updates.preferredExitDirection).trim().toLowerCase();
+        if (value !== "down" && value !== "up") {
+          throw new Error("preferredExitDirection override must be down or up");
+        }
+        next.preferredExitDirection = value as "down" | "up";
       }
     }
 

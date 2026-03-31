@@ -123,6 +123,7 @@ REDIS_PREFIX=orca-bot
 - `rangeWidthPct`: largura da faixa (ex.: `1.0` = ±1%)
 - `rangeExitBiasPct`: reduz o PnL negativo em % no **token escolhido** (ex.: `10` = perda 10% menor)
 - `preferredExitToken`: token preferido para saída (`tokenA`, `tokenB` ou `null`)
+- `preferredExitDirection`: direção para priorizar a saída do token escolhido (`down` padrão legado, ou `up`)
 - `slippageBps`: slippage máximo em bps (ex.: `50` = 0,50%)
 - `pollIntervalMs`: intervalo de verificação
 - `outOfRangeConfirmSec`: tempo (segundos) que o preço deve ficar fora da faixa antes de re-range
@@ -154,7 +155,8 @@ REDIS_PREFIX=orca-bot
 Exemplo de faixa assimétrica por valor:
 
 - `RANGE_WIDTH_PCT=1` e `RANGE_EXIT_BIAS_PCT=10` ? o PnL negativo (no token escolhido) fica ~10% menor que o positivo.
-- `preferredExitToken=tokenA` fixa o lado inferior e usa tokenA como referência de PnL; `preferredExitToken=tokenB` fixa o lado superior e usa tokenB como referência.
+- `preferredExitDirection=down` (legado): `preferredExitToken=tokenA` usa lado inferior; `preferredExitToken=tokenB` usa lado superior.
+- `preferredExitDirection=up`: inverte o lado para acumular o token escolhido na alta.
 
 
 

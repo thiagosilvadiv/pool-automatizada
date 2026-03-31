@@ -12,6 +12,7 @@ export type Config = {
   rangeWidthPct: number;
   rangeExitBiasPct: number;
   preferredExitToken: "tokenA" | "tokenB" | null;
+  preferredExitDirection: "down" | "up";
   slippageBps: number;
   pollIntervalMs: number;
   historyMaxEvents: number;
@@ -166,6 +167,16 @@ function parseExitToken(value: unknown): "tokenA" | "tokenB" | null | undefined 
   return undefined;
 }
 
+function parseExitDirection(value: unknown): "down" | "up" | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "down") return "down";
+  if (trimmed === "up") return "up";
+  return undefined;
+}
+
 function parseHedgeEntryMode(value: unknown): HedgeEntryMode | undefined {
   if (value == null) return undefined;
   if (typeof value !== "string") return undefined;
@@ -236,6 +247,16 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const dataExitToken = parseExitToken(dataExitTokenRaw);
   if (dataExitTokenRaw != null && dataExitToken === undefined) {
     throw new Error("preferredExitToken must be tokenA or tokenB");
+  }
+  const envExitDirectionRaw = process.env.PREFERRED_EXIT_DIRECTION ?? "";
+  const envExitDirection = parseExitDirection(envExitDirectionRaw);
+  if (envExitDirectionRaw && !envExitDirection) {
+    throw new Error("PREFERRED_EXIT_DIRECTION must be down or up");
+  }
+  const dataExitDirectionRaw = (data as any).preferredExitDirection;
+  const dataExitDirection = parseExitDirection(dataExitDirectionRaw);
+  if (dataExitDirectionRaw != null && dataExitDirection === undefined) {
+    throw new Error("preferredExitDirection must be down or up");
   }
 
   const envTrendTimeframeRaw = process.env.TREND_TIMEFRAME ?? "";
@@ -331,6 +352,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     preferredExitToken: envExitToken
       ?? dataExitToken
       ?? null,
+    preferredExitDirection: envExitDirection
+      ?? dataExitDirection
+      ?? "down",
     slippageBps: parseEnvNumber(process.env.SLIPPAGE_BPS) ?? Number(data.slippageBps ?? 50),
     pollIntervalMs: parseEnvNumber(process.env.POLL_INTERVAL_MS) ?? Number(data.pollIntervalMs ?? 30000),
     historyMaxEvents: parseEnvNumber(process.env.HISTORY_MAX_EVENTS) ?? Number((data as any).historyMaxEvents ?? 200),
@@ -454,6 +478,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     && config.preferredExitToken !== "tokenA"
     && config.preferredExitToken !== "tokenB") {
     throw new Error("preferredExitToken must be tokenA, tokenB, or null");
+  }
+  if (config.preferredExitDirection !== "down" && config.preferredExitDirection !== "up") {
+    throw new Error("preferredExitDirection must be down or up");
   }
   if (!Number.isFinite(config.slippageBps) || config.slippageBps < 0 || config.slippageBps > MAX_SLIPPAGE_BPS) {
     throw new Error(`slippageBps must be between 0 and ${MAX_SLIPPAGE_BPS}`);

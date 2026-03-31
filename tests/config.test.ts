@@ -44,6 +44,26 @@ describe("config", () => {
     expect(() => loadWith({ preferredExitToken: "tokenC" })).toThrow();
   });
 
+  it("accepts valid preferredExitDirection", () => {
+    expect(() => loadWith({ preferredExitDirection: "down" })).not.toThrow();
+    expect(() => loadWith({ preferredExitDirection: "up" })).not.toThrow();
+  });
+
+  it("rejects invalid preferredExitDirection", () => {
+    expect(() => loadWith({ preferredExitDirection: "sideways" })).toThrow();
+  });
+
+  it("applies PREFERRED_EXIT_DIRECTION env override", () => {
+    process.env.PREFERRED_EXIT_DIRECTION = "up";
+    const config = loadWith({ preferredExitDirection: "down" });
+    expect(config.preferredExitDirection).toBe("up");
+  });
+
+  it("rejects invalid PREFERRED_EXIT_DIRECTION env value", () => {
+    process.env.PREFERRED_EXIT_DIRECTION = "invalid";
+    expect(() => loadWith({})).toThrow();
+  });
+
   it("accepts valid trendTimeframe", () => {
     expect(() => loadWith({ trendTimeframe: "1m" })).not.toThrow();
     expect(() => loadWith({ trendTimeframe: "1h" })).not.toThrow();
@@ -131,6 +151,11 @@ describe("config", () => {
 
   it("accepts openai model defaults", () => {
     expect(() => loadWith({})).not.toThrow();
+  });
+
+  it("uses down as default preferredExitDirection", () => {
+    const config = loadWith({});
+    expect(config.preferredExitDirection).toBe("down");
   });
 
   it("enables autoResume by default with expected defaults", () => {

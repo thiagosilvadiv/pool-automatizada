@@ -194,7 +194,11 @@ export async function startServer(config: Config): Promise<void> {
         hedgeNotionalUsd: null,
         hedgeLeverage: null,
         hedgeOpenedAt: null,
-        hedgeLastError: null
+        hedgeLastError: null,
+        effectiveExitToken: null,
+        effectiveExitDirection: config.preferredExitDirection,
+        effectiveExitSide: null,
+        effectiveValueToken: null
       });
       return;
     }
@@ -285,6 +289,7 @@ export async function startServer(config: Config): Promise<void> {
       rangeWidthPct: config.rangeWidthPct,
       rangeExitBiasPct: config.rangeExitBiasPct,
       preferredExitToken: config.preferredExitToken,
+      preferredExitDirection: config.preferredExitDirection,
       slippageBps: config.slippageBps,
       pollIntervalMs: config.pollIntervalMs,
       outOfRangeConfirmSec: config.outOfRangeConfirmSec,
