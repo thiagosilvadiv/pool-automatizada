@@ -7,6 +7,7 @@ import * as commonSdk from "@orca-so/common-sdk";
 import { Config } from "./config.js";
 import { logger } from "./logger.js";
 import { calculateRange, isPriceOutOfRange, resolveDirectionalExitPreference, Range } from "./strategy.js";
+import { alignTickRangeToSpacing } from "./tick-range.js";
 import { WalletLike } from "./solana.js";
 import { getSolUsdPrice } from "./pyth.js";
 import { getTrendSnapshot } from "./trend.js";
@@ -2412,19 +2413,7 @@ export class OrcaBot {
       this.poolState.decimalsB
     );
 
-    let lowerTick = whirlpools.TickUtil.getInitializableTickIndex(lowerIndex, this.poolState.tickSpacing);
-    let upperTick = whirlpools.TickUtil.getInitializableTickIndex(upperIndex, this.poolState.tickSpacing);
-
-    if (lowerTick === upperTick) {
-      upperTick = lowerTick + this.poolState.tickSpacing;
-    }
-    if (lowerTick > upperTick) {
-      const temp = lowerTick;
-      lowerTick = upperTick;
-      upperTick = temp + this.poolState.tickSpacing;
-    }
-
-    return { lowerTick, upperTick };
+    return alignTickRangeToSpacing(lowerIndex, upperIndex, this.poolState.tickSpacing);
   }
 
   private async executeTx(
