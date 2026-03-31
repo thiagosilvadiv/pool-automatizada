@@ -48,6 +48,13 @@ describe("strategy", () => {
     expect(pnl.pnlDown / pnl.pnlUp).toBeCloseTo(1, 6);
   });
 
+  it("uses directional fallback when lower-side target has no exact root", () => {
+    const range = calculateRange(100, 40, { exitBiasPct: 95, exitSide: "lower" });
+    expect(range.lower).toBeCloseTo(60);
+    expect(range.upper).toBeGreaterThan(100);
+    expect(range.upper).toBeLessThan(140);
+  });
+
   it("detects out of range", () => {
     const range = { lower: 99, upper: 101 };
     expect(isPriceOutOfRange(98.5, range)).toBe(true);

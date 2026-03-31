@@ -35,6 +35,10 @@ export function calculateRange(
     if (lower != null && lower > 0 && lower < price) {
       return { lower, upper };
     }
+    const fallbackLower = directionalFallbackLower(price, width, bias);
+    if (fallbackLower > 0 && fallbackLower < price) {
+      return { lower: fallbackLower, upper };
+    }
     return symmetric;
   }
 
@@ -44,10 +48,24 @@ export function calculateRange(
     if (upper != null && upper > price) {
       return { lower, upper };
     }
+    const fallbackUpper = directionalFallbackUpper(price, width, bias);
+    if (fallbackUpper > price) {
+      return { lower, upper: fallbackUpper };
+    }
     return symmetric;
   }
 
   return symmetric;
+}
+
+function directionalFallbackLower(price: number, width: number, bias: number): number {
+  const sideWidth = width * Math.max(1 - bias, 0.001);
+  return price * (1 - sideWidth);
+}
+
+function directionalFallbackUpper(price: number, width: number, bias: number): number {
+  const sideWidth = width * Math.max(1 - bias, 0.001);
+  return price * (1 + sideWidth);
 }
 
 export function isPriceOutOfRange(price: number, range: Range): boolean {
