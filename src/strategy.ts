@@ -18,17 +18,36 @@ export type ExitPreference = {
   valueToken: ValueToken;
 };
 
+export type ExitPreferenceOptions = {
+  invertPriceAxis?: boolean;
+};
+
 const MAX_OPPOSITE_SIDE_STRETCH = 1.35;
 const DIRECTIONAL_TOLERANCE = 1.03;
 
+export function normalizePreferredExitDirection(
+  preferredExitDirection: PreferredExitDirection = "down",
+  invertPriceAxis = false
+): PreferredExitDirection {
+  if (!invertPriceAxis) {
+    return preferredExitDirection;
+  }
+  return preferredExitDirection === "up" ? "down" : "up";
+}
+
 export function resolveDirectionalExitPreference(
   preferredExitToken: ValueToken | null,
-  preferredExitDirection: PreferredExitDirection = "down"
+  preferredExitDirection: PreferredExitDirection = "down",
+  options?: ExitPreferenceOptions
 ): ExitPreference | null {
   if (!preferredExitToken) {
     return null;
   }
-  if (preferredExitDirection === "up") {
+  const normalizedDirection = normalizePreferredExitDirection(
+    preferredExitDirection,
+    Boolean(options?.invertPriceAxis)
+  );
+  if (normalizedDirection === "up") {
     return preferredExitToken === "tokenA"
       ? { exitSide: "upper", valueToken: "tokenA" }
       : { exitSide: "lower", valueToken: "tokenB" };

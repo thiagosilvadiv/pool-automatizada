@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { calculateRange, isPriceOutOfRange, resolveDirectionalExitPreference } from "../src/strategy.js";
+import {
+  calculateRange,
+  isPriceOutOfRange,
+  normalizePreferredExitDirection,
+  resolveDirectionalExitPreference
+} from "../src/strategy.js";
 
 function computePnL(price: number, lower: number, upper: number, valueToken: "tokenA" | "tokenB") {
   const s = Math.sqrt(price);
@@ -115,6 +120,15 @@ describe("strategy", () => {
     expect(resolveDirectionalExitPreference("tokenB", "down")).toEqual({ exitSide: "upper", valueToken: "tokenB" });
     expect(resolveDirectionalExitPreference("tokenA", "up")).toEqual({ exitSide: "upper", valueToken: "tokenA" });
     expect(resolveDirectionalExitPreference("tokenB", "up")).toEqual({ exitSide: "lower", valueToken: "tokenB" });
+  });
+
+  it("can invert preferred direction for pools whose visual price axis is reversed", () => {
+    expect(normalizePreferredExitDirection("up", true)).toBe("down");
+    expect(normalizePreferredExitDirection("down", true)).toBe("up");
+    expect(resolveDirectionalExitPreference("tokenA", "up", { invertPriceAxis: true }))
+      .toEqual({ exitSide: "lower", valueToken: "tokenA" });
+    expect(resolveDirectionalExitPreference("tokenB", "down", { invertPriceAxis: true }))
+      .toEqual({ exitSide: "lower", valueToken: "tokenB" });
   });
 
   it("keeps upside side at least as wide for tokenA with up direction", () => {

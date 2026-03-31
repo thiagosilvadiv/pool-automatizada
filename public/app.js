@@ -215,9 +215,40 @@ const hedgeLogLevelLabels = {
   "error": "Erro"
 };
 
-function formatRange(range) {
-  if (!range) return "-";
-  return `${Number(range.lower).toFixed(6)} / ${Number(range.upper).toFixed(6)}`;
+function isVisualPriceAxisInverted(info) {
+  return Boolean(info?.isTokenASol && !info?.isTokenBSol);
+}
+
+function normalizeDisplayPrice(value, info) {
+  if (value === null || value === undefined) return null;
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  if (!isVisualPriceAxisInverted(info) || num === 0) {
+    return num;
+  }
+  return 1 / num;
+}
+
+function normalizeDisplayRange(range, info) {
+  if (!range) return null;
+  const lower = Number(range.lower);
+  const upper = Number(range.upper);
+  if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower <= 0 || upper <= 0) {
+    return null;
+  }
+  if (!isVisualPriceAxisInverted(info)) {
+    return { lower, upper };
+  }
+  return {
+    lower: 1 / upper,
+    upper: 1 / lower
+  };
+}
+
+function formatRange(range, info) {
+  const displayRange = normalizeDisplayRange(range, info);
+  if (!displayRange) return "-";
+  return `${Number(displayRange.lower).toFixed(6)} / ${Number(displayRange.upper).toFixed(6)}`;
 }
 
 const numberFormatters = {};
@@ -301,9 +332,13 @@ function formatExitDirection(value) {
   return "-";
 }
 
-function formatExitSide(value) {
-  if (value === "upper") return "Alta (upper)";
-  if (value === "lower") return "Baixa (lower)";
+function formatExitSide(value, info) {
+  if (value !== "upper" && value !== "lower") return "-";
+  const visualValue = isVisualPriceAxisInverted(info)
+    ? (value === "upper" ? "lower" : "upper")
+    : value;
+  if (visualValue === "upper") return `Alta (${value})`;
+  if (visualValue === "lower") return `Baixa (${value})`;
   return "-";
 }
 
@@ -452,8 +487,8 @@ function buildHistoryCsv(items) {
       typeLabel,
       actionLabel,
       formatTrendDirection(item.trendDirection),
-      formatNumber(item.price, 8),
-      formatRange(item.targetRange),
+      formatNumber(normalizeDisplayPrice(item.price, getTokenInfo(cachedConfig)), 8),
+      formatRange(item.targetRange, getTokenInfo(cachedConfig)),
       item.positionMint ?? "-",
       formatNumber(item.positionEntryUsd, 2),
       formatNumber(item.positionFeesUsd, 2),
@@ -924,12 +959,12 @@ function getFiniteNumber(value) {
   return null;
 }
 
-function renderEditableNumberCell(value, field, editId) {
+function renderEditableNumberCell(value, field, editId, displayValue = value) {
   const config = HISTORY_EDITABLE_FIELDS[field];
   if (!config) {
-    return formatNumber(value, 2);
+    return formatNumber(displayValue, 2);
   }
-  const num = getFiniteNumber(value);
+  const num = getFiniteNumber(displayValue);
   if (num != null) {
     return formatNumber(num, config.digits);
   }
@@ -1031,6 +1066,7 @@ function renderHistory(items) {
     historyEditPendingRender = false;
   }
   const filteredItems = applyHistoryTypeFilter(items);
+  const historyTokenInfo = getTokenInfo(cachedConfig);
   if (!filteredItems || filteredItems.length === 0) {
     selectedHistoryIds.clear();
     historyBody.innerHTML = "<tr><td colspan=\"24\">Sem eventos ainda</td></tr>";
@@ -1058,7 +1094,12 @@ function renderHistory(items) {
     const hedgePnl = Number.isFinite(hedgeRaw) ? hedgeRaw : 0;
     const pnlTotal = hasPnl || hasHedge ? poolPnl + hedgePnl : null;
     const pnlTotalNet = hasPnl || hasHedge ? (hasPnl ? poolPnl - fees : 0) + hedgePnl : null;
-    const priceCell = renderEditableNumberCell(item.price, "price", editId);
+    const priceCell = renderEditableNumberCell(
+      item.price,
+      "price",
+      editId,
+      normalizeDisplayPrice(item.price, historyTokenInfo)
+    );
     const entryCell = renderEditableNumberCell(item.positionEntryUsd, "positionEntryUsd", editId);
     const feesCell = renderEditableNumberCell(item.positionFeesUsd, "positionFeesUsd", editId);
     const txFeeCell = renderEditableNumberCell(item.txFeeUsd, "txFeeUsd", editId);
@@ -1078,7 +1119,7 @@ function renderHistory(items) {
         <td data-col="action">${actionLabel}</td>
         <td data-col="trend">${formatTrendDirection(item.trendDirection)}</td>
         <td data-col="price">${priceCell}</td>
-        <td data-col="targetRange">${formatRange(item.targetRange)}</td>
+        <td data-col="targetRange">${formatRange(item.targetRange, historyTokenInfo)}</td>
         <td data-col="mint">${item.positionMint ?? "-"}</td>
         <td data-col="entryUsd">${entryCell}</td>
         <td data-col="feesUsd">${feesCell}</td>
@@ -1288,9 +1329,11 @@ async function updateUI() {
     if (hedgeErrorEl) {
       hedgeErrorEl.textContent = status.hedgeLastError ?? "-";
     }
-    priceEl.textContent = formatNumber(status.lastPrice, 8);
-    targetRangeEl.textContent = formatRange(status.targetRange);
-    positionRangeEl.textContent = formatRange(status.positionRange);
+    const tokenInfo = getTokenInfo(config);
+
+    priceEl.textContent = formatNumber(normalizeDisplayPrice(status.lastPrice, tokenInfo), 8);
+    targetRangeEl.textContent = formatRange(status.targetRange, tokenInfo);
+    positionRangeEl.textContent = formatRange(status.positionRange, tokenInfo);
     positionMintEl.textContent = status.positionMint ?? "-";
     solBalanceEl.textContent = formatNumber(status.solBalance, 4);
 
@@ -1321,7 +1364,6 @@ async function updateUI() {
     statusBadge.classList.toggle("running", status.running);
     statusBadge.classList.toggle("stopped", !status.running);
 
-    const tokenInfo = getTokenInfo(config);
     if (effectiveExitTokenEl) {
       effectiveExitTokenEl.textContent = formatExitToken(status.effectiveExitToken, tokenInfo);
     }
@@ -1329,7 +1371,7 @@ async function updateUI() {
       effectiveExitDirectionEl.textContent = formatExitDirection(status.effectiveExitDirection ?? config.preferredExitDirection ?? "down");
     }
     if (effectiveExitSideEl) {
-      effectiveExitSideEl.textContent = formatExitSide(status.effectiveExitSide);
+      effectiveExitSideEl.textContent = formatExitSide(status.effectiveExitSide, tokenInfo);
     }
     updateExitTokenSelectHints(poolExitTokenInput, tokenInfo);
     if (poolExitDirectionInput) {

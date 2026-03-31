@@ -286,7 +286,9 @@ export class OrcaBot {
     const preferredExitToken = this.resolvePreferredExitToken(trendSnapshot.direction, trendSnapshot.stale);
     this.lastStatus.trendPreferredExitToken = preferredExitToken;
     const preferredExitDirection = this.config.preferredExitDirection === "up" ? "up" : "down";
-    const exitPreference = resolveDirectionalExitPreference(preferredExitToken, preferredExitDirection);
+    const exitPreference = resolveDirectionalExitPreference(preferredExitToken, preferredExitDirection, {
+      invertPriceAxis: this.shouldInvertUserPriceAxis()
+    });
     const exitSide = exitPreference?.exitSide;
     const valueToken = exitPreference?.valueToken;
     this.lastStatus.effectiveExitToken = preferredExitToken;
@@ -839,6 +841,10 @@ export class OrcaBot {
       this.poolState.decimalsB
     );
     return toNumber(price);
+  }
+
+  private shouldInvertUserPriceAxis(): boolean {
+    return Boolean(this.poolState?.isTokenASol && !this.poolState?.isTokenBSol);
   }
 
   private async getPositionRange(position: any): Promise<Range | null> {
