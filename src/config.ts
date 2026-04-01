@@ -101,6 +101,12 @@ function parseEnvList(value: string | undefined): string[] | undefined {
   return value.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
 }
 
+function parseEnvString(value: string | undefined): string | undefined {
+  if (value == null) return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function normalizeModelList(input: unknown): string[] {
   if (Array.isArray(input)) {
     return Array.from(new Set(
@@ -340,11 +346,21 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     ?? Number((data as any).autoResumeMaxAttempts ?? 5);
   const autoResumeBaseDelayMs = parseEnvNumber(process.env.AUTO_RESUME_BASE_DELAY_MS)
     ?? Number((data as any).autoResumeBaseDelayMs ?? 5000);
+  const envNetwork = parseEnvString(process.env.NETWORK);
+  const envRpcUrl = parseEnvString(process.env.RPC_URL);
+  const envWhirlpoolAddress = parseEnvString(process.env.WHIRLPOOL_ADDRESS);
+  const envAutoSwapFeesToUsdcTargetMint = parseEnvString(process.env.AUTO_SWAP_FEES_TO_USDC_TARGET_MINT);
+  const envJupiterApiKey = parseEnvString(process.env.JUPITER_API_KEY);
+  const envJupiterApiUrl = parseEnvString(process.env.JUPITER_API_URL);
+  const envBybitApiKey = parseEnvString(process.env.BYBIT_API_KEY);
+  const envBybitApiSecret = parseEnvString(process.env.BYBIT_API_SECRET);
+  const envBybitBaseUrl = parseEnvString(process.env.BYBIT_BASE_URL);
+  const envHedgeSymbol = parseEnvString(process.env.HEDGE_SYMBOL);
 
   const config: Config = {
-    network: process.env.NETWORK ?? data.network ?? "mainnet-beta",
-    rpcUrl: process.env.RPC_URL ?? data.rpcUrl ?? "",
-    whirlpoolAddress: process.env.WHIRLPOOL_ADDRESS ?? data.whirlpoolAddress ?? "",
+    network: envNetwork ?? data.network ?? "mainnet-beta",
+    rpcUrl: envRpcUrl ?? data.rpcUrl ?? "",
+    whirlpoolAddress: envWhirlpoolAddress ?? data.whirlpoolAddress ?? "",
     rangeWidthPct: parseEnvNumber(process.env.RANGE_WIDTH_PCT) ?? Number(data.rangeWidthPct ?? 1),
     rangeExitBiasPct: parseEnvNumber(process.env.RANGE_EXIT_BIAS_PCT)
       ?? (data.rangeExitBiasPct == null ? undefined : Number(data.rangeExitBiasPct))
@@ -395,7 +411,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? [],
     autoSwapFeesToUsdcEnabled: parseEnvBool(process.env.AUTO_SWAP_FEES_TO_USDC_ENABLED)
       ?? Boolean(data.autoSwapFeesToUsdcEnabled ?? false),
-    autoSwapFeesToUsdcTargetMint: process.env.AUTO_SWAP_FEES_TO_USDC_TARGET_MINT
+    autoSwapFeesToUsdcTargetMint: envAutoSwapFeesToUsdcTargetMint
       ?? (data as any).autoSwapFeesToUsdcTargetMint
       ?? "",
     autoAddLiquidityEnabled: parseEnvBool(process.env.AUTO_ADD_LIQUIDITY_ENABLED)
@@ -403,8 +419,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     autoResumeEnabled,
     autoResumeMaxAttempts: Number(autoResumeMaxAttempts),
     autoResumeBaseDelayMs: Number(autoResumeBaseDelayMs),
-    jupiterApiKey: process.env.JUPITER_API_KEY ?? data.jupiterApiKey ?? null,
-    jupiterApiUrl: process.env.JUPITER_API_URL ?? data.jupiterApiUrl ?? "https://api.jup.ag",
+    jupiterApiKey: envJupiterApiKey ?? data.jupiterApiKey ?? null,
+    jupiterApiUrl: envJupiterApiUrl ?? data.jupiterApiUrl ?? "https://api.jup.ag",
     jupiterExcludeDexes: parseEnvList(process.env.JUPITER_EXCLUDE_DEXES)
       ?? (Array.isArray((data as any).jupiterExcludeDexes)
         ? (data as any).jupiterExcludeDexes.map((item: any) => String(item).trim()).filter((item: string) => item)
@@ -440,15 +456,15 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     openaiRecommendedModels: openAiRecommendedModels,
     openaiAllowCustomModel: openAiAllowCustomModel,
     openaiTimeoutMs: Number(openAiTimeoutMs),
-    bybitApiKey: (process.env.BYBIT_API_KEY ?? (data as any).bybitApiKey ?? "").trim() || null,
-    bybitApiSecret: (process.env.BYBIT_API_SECRET ?? (data as any).bybitApiSecret ?? "").trim() || null,
-    bybitBaseUrl: process.env.BYBIT_BASE_URL ?? (data as any).bybitBaseUrl ?? "https://api.bybit.com",
+    bybitApiKey: envBybitApiKey ?? (data as any).bybitApiKey ?? null,
+    bybitApiSecret: envBybitApiSecret ?? (data as any).bybitApiSecret ?? null,
+    bybitBaseUrl: envBybitBaseUrl ?? (data as any).bybitBaseUrl ?? "https://api.bybit.com",
     bybitRecvWindow: parseEnvNumber(process.env.BYBIT_RECV_WINDOW)
       ?? (data as any).bybitRecvWindow
       ?? 5000,
     hedgeEnabled: parseEnvBool(process.env.HEDGE_ENABLED) ?? Boolean((data as any).hedgeEnabled ?? false),
     hedgePct: parseEnvNumber(process.env.HEDGE_PCT) ?? Number((data as any).hedgePct ?? 50),
-    hedgeSymbol: (process.env.HEDGE_SYMBOL ?? (data as any).hedgeSymbol ?? "").trim().toUpperCase(),
+    hedgeSymbol: (envHedgeSymbol ?? (data as any).hedgeSymbol ?? "").trim().toUpperCase(),
     hedgeLeverage: parseEnvNumber(process.env.HEDGE_LEVERAGE) ?? Number((data as any).hedgeLeverage ?? 1),
     hedgeMarginPct: parseEnvNumber(process.env.HEDGE_MARGIN_PCT) ?? Number((data as any).hedgeMarginPct ?? 0),
     hedgeEntryMode: envHedgeEntryMode ?? "off",
