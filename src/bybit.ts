@@ -74,6 +74,8 @@ class BybitError extends Error {
   }
 }
 
+const CLOSED_PNL_END_TIME_GRACE_MS = 15_000;
+
 function buildQuery(params: Record<string, string | number | boolean | undefined | null>): string {
   const entries = Object.entries(params)
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
@@ -297,7 +299,12 @@ export class BybitClient {
       params.startTime = Math.max(0, Math.floor(options.openedAfterMs));
     }
     if (options?.closeAtMs != null && Number.isFinite(options.closeAtMs)) {
-      params.endTime = Math.max(0, Math.floor(options.closeAtMs));
+      // Bybit can publish the closed-pnl row a few seconds after the close order.
+      // Keep the window slightly ahead of the close timestamp so retries can see it.
+      params.endTime = Math.max(
+        0,
+        Math.floor(Math.max(options.closeAtMs, Date.now()) + CLOSED_PNL_END_TIME_GRACE_MS)
+      );
     }
     const result = await this.request<{ list: BybitClosedPnl[] }>("GET", "/v5/position/closed-pnl", params);
     const list = Array.isArray(result.list) ? result.list : [];

@@ -683,9 +683,11 @@ export class BotRunner {
         }
       }
 
+      let hedgeCloseForClosePosition: HedgeCloseResult | null = null;
       if (!isRebalanced && status.lastAction === "close-position" && this.config.hedgeEnabled) {
         const expectedMint = status.eventPositionMint ?? status.positionMint ?? null;
-        this.lastHedgeClose = await this.closeHedgeForPosition(expectedMint, status, "Hedge fechado junto da pool");
+        hedgeCloseForClosePosition = await this.closeHedgeForPosition(expectedMint, status, "Hedge fechado junto da pool");
+        this.lastHedgeClose = hedgeCloseForClosePosition;
       }
 
       let hedgeResult: { status: "opened" | "skipped" | "failed"; error?: string; reason?: string } = { status: "skipped" };
@@ -715,12 +717,14 @@ export class BotRunner {
           const reason = hedgeResult.error ?? this.hedgeManager.getLastError() ?? "hedge failed";
           logger.error({ reason }, "hedge failed; closing position");
           this.bot.setError(new Error(`Hedge falhou: ${reason}`));
+          let hedgeCloseAfterFailure: HedgeCloseResult | null = null;
           try {
             const closeStatus = await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
             const expectedMint = closeStatus.eventPositionMint ?? closeStatus.positionMint ?? null;
-            this.lastHedgeClose = await this.hedgeManager.closeIfOpen({ expectedPositionMint: expectedMint });
-            if (this.lastHedgeClose) {
-              this.logHedgeClose(this.lastHedgeClose, "Hedge fechado apos falha");
+            hedgeCloseAfterFailure = await this.hedgeManager.closeIfOpen({ expectedPositionMint: expectedMint });
+            this.lastHedgeClose = hedgeCloseAfterFailure;
+            if (hedgeCloseAfterFailure) {
+              this.logHedgeClose(hedgeCloseAfterFailure, "Hedge fechado apos falha");
             } else {
               const errMessage = this.hedgeManager.getLastError();
               if (errMessage) {
@@ -732,7 +736,7 @@ export class BotRunner {
             this.bot.setError(err);
           } finally {
             this.lastTickAt = new Date().toISOString();
-            this.recordEvent(this.bot.getStatus());
+            this.recordEvent(this.bot.getStatus(), { hedgeClose: hedgeCloseAfterFailure });
             this.stop();
           }
           return;
@@ -740,10 +744,10 @@ export class BotRunner {
       }
       const targetTriggered = await this.checkPnlTarget(status);
       if (targetTriggered) {
-        this.recordEvent(status);
+        this.recordEvent(status, { hedgeClose: hedgeCloseForClosePosition });
         return;
       }
-      this.recordEvent(status, { hedgeClose: hedgeCloseForRebalance });
+      this.recordEvent(status, { hedgeClose: hedgeCloseForClosePosition ?? hedgeCloseForRebalance });
       this.maybeRequestAutoAdd(status);
     } catch (err) {
       logger.error({ err }, "tick failed");
@@ -846,6 +850,20 @@ export class BotRunner {
         return hedgeClose;
       }
     }
+    const stateAfterClose = this.hedgeManager.getState();
+    if (!hedgeClose && stateBeforeClose?.active && !stateAfterClose?.active) {
+      hedgeClose = {
+        symbol: stateBeforeClose.symbol,
+        qty: stateBeforeClose.qty,
+        notionalUsd: stateBeforeClose.notionalUsd,
+        leverage: stateBeforeClose.leverage,
+        feesUsd: null,
+        pnlUsd: null,
+        closedAt: new Date().toISOString()
+      };
+      this.logHedgeClose(hedgeClose, "Hedge fechado sem conciliacao completa");
+      return hedgeClose;
+    }
     if (hedgeClose) {
       this.logHedgeClose(hedgeClose, successMessage);
       return hedgeClose;
@@ -865,15 +883,17 @@ export class BotRunner {
     const wasRunning = this.running;
     let closed = false;
     let status: BotStatus | null = null;
+    let hedgeClose: HedgeCloseResult | null = null;
     try {
       status = await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
       closed = status.lastAction === "close-position";
       if (closed) {
         const expectedMint = status.eventPositionMint ?? status.positionMint ?? null;
-        this.lastHedgeClose = await this.closeHedgeForPosition(expectedMint, status, "Hedge fechado junto da pool");
+        hedgeClose = await this.closeHedgeForPosition(expectedMint, status, "Hedge fechado junto da pool");
+        this.lastHedgeClose = hedgeClose;
       }
       this.lastTickAt = new Date().toISOString();
-      this.recordEvent(status);
+      this.recordEvent(status, { hedgeClose });
     } catch (err) {
       logger.error({ err, mode }, "close-position failed");
       this.bot.setError(err);
@@ -953,7 +973,9 @@ export class BotRunner {
     }
 
     const trendNow = status.trendDirection ?? null;
-    const hedgeClose = action === "close-position" ? this.lastHedgeClose : null;
+    const hedgeClose = action === "close-position"
+      ? (options?.hedgeClose ?? this.lastHedgeClose ?? null)
+      : null;
 
     if (!status.lastAction || status.lastAction === "no-action") {
       if (status.positionMint) {

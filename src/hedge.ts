@@ -109,7 +109,13 @@ export class HedgeManager {
     let lastErr: unknown = null;
     for (let attempt = 0; attempt < CLOSED_PNL_RETRIES; attempt += 1) {
       try {
-        const closed = await this.client.getClosedPnl(symbol, options);
+        const retryOptions = options?.closeAtMs != null && Number.isFinite(options.closeAtMs)
+          ? {
+              ...options,
+              closeAtMs: Math.max(options.closeAtMs, Date.now())
+            }
+          : options;
+        const closed = await this.client.getClosedPnl(symbol, retryOptions);
         if (closed) {
           return closed;
         }
