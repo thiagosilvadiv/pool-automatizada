@@ -794,10 +794,19 @@ export class PoolManager {
     const needsSol = deposits.some((item) => item.mint === NATIVE_MINT.toBase58())
       || borrows.some((item) => item.mint === NATIVE_MINT.toBase58());
     if (needsSol) {
-      try {
-        solUsdPrice = await getSolUsdPrice();
-      } catch (err) {
-        logger.warn({ err }, "falha ao ler SOL/USD para Kamino loans");
+      const feedId = this.baseConfig.pythSolUsdFeedId;
+      if (feedId) {
+        try {
+          const price = await getSolUsdPrice(
+            this.connection,
+            feedId,
+            this.baseConfig.priceStaleMaxSec ?? null,
+            30000
+          );
+          solUsdPrice = price.price;
+        } catch (err) {
+          logger.warn({ err }, "falha ao ler SOL/USD para Kamino loans");
+        }
       }
     }
     let collateralUsd = 0;
