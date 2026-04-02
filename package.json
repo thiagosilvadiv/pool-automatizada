@@ -14,6 +14,7 @@
     "@orca-so/common-sdk": "^0.7.0",
     "@orca-so/whirlpools-sdk": "^0.20.0",
     "@pythnetwork/hermes-client": "^2.0.0",
+    "@solana-program/compute-budget": "^0.9.0",
     "@solana/kit": "^3.0.3",
     "@solana/spl-token": "^0.4.9",
     "@solana/web3.js": "^1.98.0",
