@@ -44,11 +44,11 @@ const actionLabels = {
   "add-liquidity": "adicionar liquidez",
   "add-liquidity-failed": "falha adicionar liquidez",
   "close-failed": "fechamento falhou",
-  "resume-position": "monitorando posição existente",
-  "reload-position": "recarregar posição",
-  "out-of-range-wait": "aguardando confirmação fora da faixa",
+  "resume-position": "monitorando posicao existente",
+  "reload-position": "recarregar posicao",
+  "out-of-range-wait": "aguardando confirmacao fora da faixa",
   "skip-low-sol": "SOL baixo",
-  "skip-low-sol-position": "posição existente (SOL baixo)",
+  "skip-low-sol-position": "posicao existente (SOL baixo)",
   "swap": "swap"
 };
 

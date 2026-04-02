@@ -82,7 +82,7 @@ async function loadSignerFromEnv(wallet: WalletLike): Promise<TransactionSigner>
   if (walletAddress && signer.address !== walletAddress) {
     logger.warn(
       { signer: signer.address, wallet: walletAddress },
-      "Kamino signer nÃ£o confere com a wallet atual"
+      "Kamino signer nao confere com a wallet atual"
     );
   }
   return signer;
@@ -128,7 +128,7 @@ class RealKaminoClient implements KaminoClient {
           true
         );
         if (!market) {
-          throw new Error("Kamino market nÃ£o encontrado");
+          throw new Error("Kamino market nao encontrado");
         }
         return market;
       })();
@@ -159,7 +159,7 @@ class RealKaminoClient implements KaminoClient {
     const decimals = await this.resolveDecimals(mint);
     const raw = toRawAmount(amountUi, decimals);
     if (!isValidU64(raw)) {
-      throw new Error("Quantidade invÃ¡lida para Kamino");
+      throw new Error("Quantidade invalida para Kamino");
     }
     return raw.toString();
   }
@@ -167,7 +167,7 @@ class RealKaminoClient implements KaminoClient {
   private async sendAction(action: KaminoAction): Promise<string> {
     const ixs = KaminoAction.actionToIxs(action);
     if (!ixs.length) {
-      throw new Error("Nenhuma instruÃ§Ã£o Kamino gerada");
+      throw new Error("Nenhuma instrucao Kamino gerada");
     }
     const { value: latestBlockhash } = await (this.rpc as any)
       .getLatestBlockhash({ commitment: "finalized" })
@@ -212,7 +212,7 @@ class RealKaminoClient implements KaminoClient {
     const market = await this.loadMarket();
     const reserve = market.getReserveByMint(address(mint));
     if (!reserve) {
-      return { ok: false, reason: "Reserve nÃ£o encontrada no market" };
+      return { ok: false, reason: "Reserve nao encontrada no market" };
     }
     const config = (reserve as any).state?.config ?? (reserve as any).config ?? (reserve as any).reserveConfig ?? null;
     if (config) {
@@ -256,7 +256,7 @@ class RealKaminoClient implements KaminoClient {
     const sig = await this.sendAction(action);
     logger.info(
       { sig, mint: input.mint, amount: input.amount },
-      "kamino deposit concluÃ­do"
+      "kamino deposit concluido"
     );
     return sig;
   }
@@ -293,7 +293,7 @@ class RealKaminoClient implements KaminoClient {
     const sig = await this.sendAction(action);
     logger.info(
       { sig, mint: input.mint, amount: input.amount },
-      "kamino borrow concluÃ­do"
+      "kamino borrow concluido"
     );
     return sig;
   }
@@ -335,7 +335,7 @@ class RealKaminoClient implements KaminoClient {
     const sig = await this.sendAction(action);
     logger.info(
       { sig, mint: input.mint, amount: input.amount },
-      "kamino repay concluÃ­do"
+      "kamino repay concluido"
     );
     return sig;
   }
@@ -372,7 +372,7 @@ class RealKaminoClient implements KaminoClient {
     const sig = await this.sendAction(action);
     logger.info(
       { sig, mint: input.mint, amount: input.amount },
-      "kamino withdraw concluÃ­do"
+      "kamino withdraw concluido"
     );
     return sig;
   }
@@ -427,7 +427,7 @@ class RealKaminoClient implements KaminoClient {
         borrows
       };
     } catch (err) {
-      logger.warn({ err }, "falha ao ler posiÃ§Ã£o Kamino");
+      logger.warn({ err }, "falha ao ler posicao Kamino");
       return null;
     }
   }
@@ -445,7 +445,7 @@ class NoopKaminoClient implements KaminoClient {
     if (this.allowNoop) {
       return;
     }
-    throw new Error(`Kamino SDK não configurado (${action})`);
+    throw new Error(`Kamino SDK nao configurado (${action})`);
   }
 
   async ensureObligation(): Promise<void> {
@@ -524,7 +524,7 @@ export async function createKaminoClient(
   }
   const rpcUrl = ctx.config.rpcUrl;
   if (!rpcUrl) {
-    throw new Error("RPC_URL nÃ£o configurado para Kamino");
+    throw new Error("RPC_URL nao configurado para Kamino");
   }
   const wsUrl =
     process.env.KAMINO_WS_URL ||
@@ -540,7 +540,7 @@ export async function createKaminoClient(
   try {
     marketAddress = address(marketRaw);
   } catch (err) {
-    throw new Error("KAMINO_MARKET invÃ¡lido");
+    throw new Error("KAMINO_MARKET invalido");
   }
   const signer = await loadSignerFromEnv(ctx.wallet);
   const rpc = createSolanaRpc(rpcUrl);

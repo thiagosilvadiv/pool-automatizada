@@ -1,4 +1,4 @@
-﻿const statusBadge = document.getElementById("statusBadge");
+?const statusBadge = document.getElementById("statusBadge");
 const runningEl = document.getElementById("running");
 const lastTickEl = document.getElementById("lastTick");
 const lastActionEl = document.getElementById("lastAction");
@@ -143,6 +143,7 @@ const closeEmptyAccountsBtn = document.getElementById("closeEmptyAccountsBtn");
 const swapToSolBtn = document.getElementById("swapToSolBtn");
 const kaminoCloseTopBtn = document.getElementById("kaminoCloseTopBtn");
 const kaminoCloseBtn = document.getElementById("kaminoCloseBtn");
+const kaminoResetBtn = document.getElementById("kaminoResetBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 const clearKaminoLogBtn = document.getElementById("clearKaminoLogBtn");
 const exportHistoryBtn = document.getElementById("exportHistoryBtn");
@@ -197,22 +198,23 @@ const actionLabels = {
   "manual-swap-to-sol": "converter tokens para SOL",
   "add-liquidity": "adicionar liquidez",
   "add-liquidity-failed": "falha ao adicionar liquidez",
-  "resume-position": "monitorando posição existente",
+  "resume-position": "monitorando posicao existente",
   "close-failed": "fechamento falhou",
-  "reload-position": "recarregar posição",
-  "out-of-range-wait": "aguardando confirmação fora da faixa",
+  "reload-position": "recarregar posicao",
+  "out-of-range-wait": "aguardando confirmacao fora da faixa",
   "cooldown-wait": "aguardando cooldown",
   "skip-low-sol": "SOL baixo",
-  "skip-low-sol-position": "posição existente (SOL baixo)",
+  "skip-low-sol-position": "posicao existente (SOL baixo)",
   "swap": "swap",
   "kamino-rebalanced": "re-range (Kamino)",
   "kamino-rebalance-failed": "falha Kamino",
   "kamino-deposit": "Kamino: depositar colateral",
-  "kamino-borrow": "Kamino: empréstimo",
+  "kamino-borrow": "Kamino: emprestimo",
   "kamino-reopen": "Kamino: reabrir pool",
-  "kamino-repay": "Kamino: pagar dívida",
+  "kamino-repay": "Kamino: pagar divida",
   "kamino-withdraw": "Kamino: retirar colateral",
-  "kamino-close": "Pago Emprestimo"
+  "kamino-close": "Pago Emprestimo",
+  "kamino-wait-funds": "Kamino: aguardando saldo"
 };
 
 const actionTypeLabels = {
@@ -224,12 +226,12 @@ const actionTypeLabels = {
 };
 
 const HISTORY_EDITABLE_FIELDS = {
-  price: { digits: 8, label: "Preço" },
+  price: { digits: 8, label: "Preco" },
   positionEntryUsd: { digits: 2, label: "Entrada (USD)" },
   positionFeesUsd: { digits: 2, label: "Taxas (USD)" },
   txFeeUsd: { digits: 6, label: "Taxa TX (USD)" },
-  positionExitUsd: { digits: 2, label: "Saída (USD)" },
-  positionPnlUsd: { digits: 2, label: "PnL líquido (USD)" },
+  positionExitUsd: { digits: 2, label: "Saida (USD)" },
+  positionPnlUsd: { digits: 2, label: "PnL liquido (USD)" },
   hedgeNotionalUsd: { digits: 2, label: "Hedge notional (USD)" },
   hedgeLeverage: { digits: 2, label: "Hedge lev" },
   hedgeFeesUsd: { digits: 2, label: "Hedge taxas (USD)" },
@@ -241,8 +243,8 @@ const hedgeEntryModeLabels = {
   "trend-down": "Somente baixa",
   "trend-up": "Somente alta",
   "trend-any": "Baixa ou alta",
-  "force-down": "Sempre baixa (ignora tendência)",
-  "force-up": "Sempre alta (ignora tendência)"
+  "force-down": "Sempre baixa (ignora tendencia)",
+  "force-up": "Sempre alta (ignora tendencia)"
 };
 
 const MAX_KAMINO_LOG_ROWS = 20;
@@ -290,11 +292,13 @@ function formatRange(range, info) {
 }
 
 const numberFormatters = {};
+const MAX_USD_SANITY = 1000000000;
 
 function formatNumber(value, digits = 6) {
   if (value === null || value === undefined) return "-";
   const num = Number(value);
   if (!Number.isFinite(num)) return "-";
+  if (Math.abs(num) > MAX_USD_SANITY) return "-";
   const key = String(digits);
   let formatter = numberFormatters[key];
   if (!formatter) {
@@ -479,11 +483,11 @@ function updateTrendHint(el, info) {
   }
   const otherLabel = getOtherTokenLabel(info);
   if (otherLabel) {
-    el.textContent = `Dica: para pools com SOL use Alta \u2192 Outro (${otherLabel}) e Baixa \u2192 SOL. Deixe em branco para usar o padrÃ£o global.`;
+    el.textContent = `Dica: para pools com SOL use Alta \u2192 Outro (${otherLabel}) e Baixa \u2192 SOL. Deixe em branco para usar o padrao global.`;
     el.classList.remove("hidden");
     return;
   }
-  el.textContent = "Dica: para pools com SOL use Alta \u2192 Outro e Baixa \u2192 SOL. Deixe em branco para usar o padrÃ£o global.";
+  el.textContent = "Dica: para pools com SOL use Alta \u2192 Outro e Baixa \u2192 SOL. Deixe em branco para usar o padrao global.";
   el.classList.remove("hidden");
 }
 
@@ -544,22 +548,22 @@ function buildHistoryCsv(items) {
     "Abertura",
     "Data fechamento",
     "Tipo",
-    "Ação",
-    "Tendência",
-    "Preço",
+    "Acao",
+    "Tendencia",
+    "Preco",
     "Faixa alvo",
-    "Mint posição",
+    "Mint posicao",
     "Entrada (USD)",
     "Taxas (USD)",
     "Taxa TX (USD)",
-    "Saída (USD)",
-    "PnL líquido (USD)",
-    "Hedge símbolo",
+    "Saida (USD)",
+    "PnL liquido (USD)",
+    "Hedge simbolo",
     "Hedge notional (USD)",
     "Hedge lev",
     "Hedge taxas (USD)",
     "Hedge PnL (USD)",
-    "Hedge decisão",
+    "Hedge decisao",
     "Hedge motivo",
     "PnL total (USD)",
     "PnL total sem taxas (USD)"
@@ -771,7 +775,7 @@ function parseTrendEnabledInput(value) {
   const trimmed = String(value).trim().toLowerCase();
   if (!trimmed) return undefined;
   if (["1", "true", "yes", "on", "sim"].includes(trimmed)) return true;
-  if (["0", "false", "no", "off", "nao", "não"].includes(trimmed)) return false;
+  if (["0", "false", "no", "off", "nao"].includes(trimmed)) return false;
   return null;
 }
 
@@ -854,7 +858,7 @@ function formatTrendBadge(pool, usageLabel) {
   if (pool?.trendDirection === "down") {
     return `<span class="trend-badge trend-down">Baixa${timeframe}${usage}</span>`;
   }
-  return `<span class="trend-badge trend-unknown">Indisponível${timeframe}${usage}</span>`;
+  return `<span class="trend-badge trend-unknown">Indisponivel${timeframe}${usage}</span>`;
 }
 
 function openModal(modal) {
@@ -885,17 +889,17 @@ function escapeHtml(value) {
 function formatSwapReason(reason) {
   switch (reason) {
     case "native-sol":
-      return "Já é SOL";
+      return "Ja  SOL";
     case "non-fungible":
       return "Token sem decimais (NFT)";
     case "excluded":
-      return "Excluído";
+      return "Excluido";
     case "invalid-amount":
-      return "Quantidade inválida";
+      return "Quantidade invalida";
     case "no-quote":
       return "Sem rota";
     case "below-min":
-      return "Abaixo do mínimo";
+      return "Abaixo do minimo";
     case "swap-failed":
       return "Falha na swap";
     case "api-error":
@@ -909,7 +913,7 @@ function formatSwapReason(reason) {
     case "no-tokens":
       return "Sem tokens";
     case "failed":
-      return "Falhas durante a conversão";
+      return "Falhas durante a conversao";
     default:
       return reason ? String(reason) : "-";
   }
@@ -925,7 +929,7 @@ function truncateText(value, max = 120) {
   if (!value) return "";
   const text = String(value);
   if (text.length <= max) return text;
-  return `${text.slice(0, max - 1)}…`;
+  return `${text.slice(0, max - 1)}...`;
 }
 
 function formatSwapDetailReasonShort(detail) {
@@ -1074,27 +1078,27 @@ function openEditPoolModal(pool) {
   if (editPoolIdInput) editPoolIdInput.value = pool.id ?? "";
   if (editPoolRangeInput) {
     editPoolRangeInput.value = overrides.rangeWidthPct ?? "";
-    editPoolRangeInput.placeholder = `Padrão (${defaultRange})`;
+    editPoolRangeInput.placeholder = `Padrao (${defaultRange})`;
   }
   if (editPoolBudgetInput) {
     editPoolBudgetInput.value = overrides.budgetUsd ?? "";
-    editPoolBudgetInput.placeholder = `Padrão (${defaultBudget})`;
+    editPoolBudgetInput.placeholder = `Padrao (${defaultBudget})`;
   }
   if (editPoolAutoAddEnabledInput) {
     editPoolAutoAddEnabledInput.value = overrides.autoAddLiquidityEnabled === undefined ? "" : String(overrides.autoAddLiquidityEnabled);
-    setSelectPlaceholder(editPoolAutoAddEnabledInput, `Padrão (${defaultAutoAddEnabled ? "Sim" : "Não"})`);
+    setSelectPlaceholder(editPoolAutoAddEnabledInput, `Padrao (${defaultAutoAddEnabled ? "Sim" : "Nao"})`);
   }
   if (editPoolKaminoEnabledInput) {
     editPoolKaminoEnabledInput.value = overrides.kaminoRebalanceEnabled === undefined ? "" : String(overrides.kaminoRebalanceEnabled);
-    setSelectPlaceholder(editPoolKaminoEnabledInput, `Padrão (${defaultKaminoEnabled ? "Sim" : "Não"})`);
+    setSelectPlaceholder(editPoolKaminoEnabledInput, `Padrao (${defaultKaminoEnabled ? "Sim" : "Nao"})`);
   }
   if (editPoolKaminoDepositPctInput) {
     editPoolKaminoDepositPctInput.value = overrides.kaminoDepositPct ?? "";
-    editPoolKaminoDepositPctInput.placeholder = `Padrão (${formatNumber(defaultKaminoDepositPct, 2)})`;
+    editPoolKaminoDepositPctInput.placeholder = `Padrao (${formatNumber(defaultKaminoDepositPct, 2)})`;
   }
   if (editPoolKaminoBorrowAssetInput) {
     editPoolKaminoBorrowAssetInput.value = overrides.kaminoBorrowAsset ?? "";
-    setSelectPlaceholder(editPoolKaminoBorrowAssetInput, `Padrão (${defaultKaminoBorrowAsset.toUpperCase?.() ?? defaultKaminoBorrowAsset})`);
+    setSelectPlaceholder(editPoolKaminoBorrowAssetInput, `Padrao (${defaultKaminoBorrowAsset.toUpperCase?.() ?? defaultKaminoBorrowAsset})`);
   }
   if (editPoolKaminoMarketInput) {
     editPoolKaminoMarketInput.value = overrides.kaminoMarketAddress ?? "";
@@ -1102,97 +1106,97 @@ function openEditPoolModal(pool) {
   }
   if (editPoolKaminoMaxLtvInput) {
     editPoolKaminoMaxLtvInput.value = overrides.kaminoMaxLtv ?? "";
-    editPoolKaminoMaxLtvInput.placeholder = `Padrão (${formatNumber(defaultKaminoMaxLtv, 2)})`;
+    editPoolKaminoMaxLtvInput.placeholder = `Padrao (${formatNumber(defaultKaminoMaxLtv, 2)})`;
   }
   if (editPoolKaminoCloseRuleInput) {
     editPoolKaminoCloseRuleInput.value = overrides.kaminoCloseRule ?? "";
-    setSelectPlaceholder(editPoolKaminoCloseRuleInput, `Padrão (${defaultKaminoCloseRule})`);
+    setSelectPlaceholder(editPoolKaminoCloseRuleInput, `Padrao (${defaultKaminoCloseRule})`);
   }
   if (editPoolKaminoPriceBufferInput) {
     editPoolKaminoPriceBufferInput.value = overrides.kaminoPriceBufferPct ?? "";
-    editPoolKaminoPriceBufferInput.placeholder = `Padrão (${formatNumber(defaultKaminoPriceBuffer, 2)})`;
+    editPoolKaminoPriceBufferInput.placeholder = `Padrao (${formatNumber(defaultKaminoPriceBuffer, 2)})`;
   }
   if (editPoolKaminoCollateralModeInput) {
     editPoolKaminoCollateralModeInput.value = overrides.kaminoCollateralMode ?? "";
-    setSelectPlaceholder(editPoolKaminoCollateralModeInput, `Padrão (${defaultKaminoCollateralMode})`);
+    setSelectPlaceholder(editPoolKaminoCollateralModeInput, `Padrao (${defaultKaminoCollateralMode})`);
   }
   if (editPoolKaminoConvertInput) {
     editPoolKaminoConvertInput.value = overrides.kaminoConvertToCollateral === undefined
       ? ""
       : String(overrides.kaminoConvertToCollateral);
-    setSelectPlaceholder(editPoolKaminoConvertInput, `Padrão (${defaultKaminoConvert ? "Sim" : "Não"})`);
+    setSelectPlaceholder(editPoolKaminoConvertInput, `Padrao (${defaultKaminoConvert ? "Sim" : "Nao"})`);
   }
   if (editPoolKaminoAvgBasisInput) {
     editPoolKaminoAvgBasisInput.value = overrides.kaminoAvgPriceBasis ?? "";
-    const basisLabel = defaultKaminoAvgBasis === "debt" ? "Dívida" : "Depósito";
-    setSelectPlaceholder(editPoolKaminoAvgBasisInput, `Padrão (${basisLabel})`);
+    const basisLabel = defaultKaminoAvgBasis === "debt" ? "Divida" : "Deposito";
+    setSelectPlaceholder(editPoolKaminoAvgBasisInput, `Padrao (${basisLabel})`);
   }
   if (editPoolKaminoAvgModeInput) {
     editPoolKaminoAvgModeInput.value = overrides.kaminoAvgMode ?? "";
-    const modeLabel = defaultKaminoAvgMode === "reset" ? "Último depósito" : "Cumulativa";
-    setSelectPlaceholder(editPoolKaminoAvgModeInput, `Padrão (${modeLabel})`);
+    const modeLabel = defaultKaminoAvgMode === "reset" ? "ultimo deposito" : "Cumulativa";
+    setSelectPlaceholder(editPoolKaminoAvgModeInput, `Padrao (${modeLabel})`);
   }
   if (editPoolKaminoAutoCloseInput) {
     editPoolKaminoAutoCloseInput.value = overrides.kaminoAutoCloseOnTokenChange === undefined
       ? ""
       : String(overrides.kaminoAutoCloseOnTokenChange);
-    setSelectPlaceholder(editPoolKaminoAutoCloseInput, `Padrão (${defaultKaminoAutoClose ? "Sim" : "Não"})`);
+    setSelectPlaceholder(editPoolKaminoAutoCloseInput, `Padrao (${defaultKaminoAutoClose ? "Sim" : "Nao"})`);
   }
   if (editPoolHedgeEnabledInput) {
     editPoolHedgeEnabledInput.value = overrides.hedgeEnabled === undefined ? "" : String(overrides.hedgeEnabled);
-    setSelectPlaceholder(editPoolHedgeEnabledInput, `Padrão (${defaultHedgeEnabled ? "Sim" : "Não"})`);
+    setSelectPlaceholder(editPoolHedgeEnabledInput, `Padrao (${defaultHedgeEnabled ? "Sim" : "Nao"})`);
   }
   if (editPoolHedgePctInput) {
     editPoolHedgePctInput.value = overrides.hedgePct ?? "";
-    editPoolHedgePctInput.placeholder = `Padrão (${formatNumber(defaultHedgePct, 2)})`;
+    editPoolHedgePctInput.placeholder = `Padrao (${formatNumber(defaultHedgePct, 2)})`;
   }
   if (editPoolHedgeMarginPctInput) {
     editPoolHedgeMarginPctInput.value = overrides.hedgeMarginPct ?? "";
-    editPoolHedgeMarginPctInput.placeholder = `Padrão (${formatNumber(defaultHedgeMarginPct, 2)})`;
+    editPoolHedgeMarginPctInput.placeholder = `Padrao (${formatNumber(defaultHedgeMarginPct, 2)})`;
   }
   if (editPoolHedgeSymbolInput) {
     editPoolHedgeSymbolInput.value = overrides.hedgeSymbol ?? "";
-    editPoolHedgeSymbolInput.placeholder = `Padrão (${defaultHedgeSymbol || "-"})`;
+    editPoolHedgeSymbolInput.placeholder = `Padrao (${defaultHedgeSymbol || "-"})`;
   }
   if (editPoolHedgeLeverageInput) {
     editPoolHedgeLeverageInput.value = overrides.hedgeLeverage ?? "";
-    editPoolHedgeLeverageInput.placeholder = `Padrão (${formatNumber(defaultHedgeLeverage, 2)})`;
+    editPoolHedgeLeverageInput.placeholder = `Padrao (${formatNumber(defaultHedgeLeverage, 2)})`;
   }
   if (editPoolHedgeEntryModeInput) {
     editPoolHedgeEntryModeInput.value = overrides.hedgeEntryMode ?? "";
-    setSelectPlaceholder(editPoolHedgeEntryModeInput, `Padrão (${formatHedgeEntryMode(defaultHedgeEntryMode)})`);
+    setSelectPlaceholder(editPoolHedgeEntryModeInput, `Padrao (${formatHedgeEntryMode(defaultHedgeEntryMode)})`);
   }
   if (editPoolExitTokenInput) {
     updateExitTokenSelectHints(editPoolExitTokenInput, tokenInfo);
     editPoolExitTokenInput.value = overrides.preferredExitToken ?? "";
     const exitLabel = formatExitToken(defaultExitToken, tokenInfo);
-    setSelectPlaceholder(editPoolExitTokenInput, `Padrão (${exitLabel === "-" ? "Sem" : exitLabel})`);
+    setSelectPlaceholder(editPoolExitTokenInput, `Padrao (${exitLabel === "-" ? "Sem" : exitLabel})`);
   }
   if (editPoolExitDirectionInput) {
     editPoolExitDirectionInput.value = overrides.preferredExitDirection ?? "";
-    setSelectPlaceholder(editPoolExitDirectionInput, `Padrão (${formatExitDirection(defaultExitDirection)})`);
+    setSelectPlaceholder(editPoolExitDirectionInput, `Padrao (${formatExitDirection(defaultExitDirection)})`);
   }
   if (editPoolExitBiasInput) {
     editPoolExitBiasInput.value = overrides.rangeExitBiasPct ?? "";
-    editPoolExitBiasInput.placeholder = `Padrão (${formatNumber(defaultExitBias, 2)})`;
+    editPoolExitBiasInput.placeholder = `Padrao (${formatNumber(defaultExitBias, 2)})`;
   }
   if (editPoolTrendEnabledInput) {
     editPoolTrendEnabledInput.value = overrides.trendEnabled === undefined ? "" : String(overrides.trendEnabled);
-    setSelectPlaceholder(editPoolTrendEnabledInput, `Padrão (${defaultTrendEnabled ? "Sim" : "Não"})`);
+    setSelectPlaceholder(editPoolTrendEnabledInput, `Padrao (${defaultTrendEnabled ? "Sim" : "Nao"})`);
   }
   if (editPoolTrendTimeframeInput) {
     editPoolTrendTimeframeInput.value = overrides.trendTimeframe ?? "";
-    setSelectPlaceholder(editPoolTrendTimeframeInput, `Padrão (${defaultTrendTimeframe})`);
+    setSelectPlaceholder(editPoolTrendTimeframeInput, `Padrao (${defaultTrendTimeframe})`);
   }
   if (editPoolTrendUpInput) {
     updateTrendTargetSelectHints(editPoolTrendUpInput, tokenInfo);
     editPoolTrendUpInput.value = overrides.trendTargetUp ?? "";
-    setSelectPlaceholder(editPoolTrendUpInput, `Padrão (${formatTrendTargetLabel(defaultTrendUp, tokenInfo)})`);
+    setSelectPlaceholder(editPoolTrendUpInput, `Padrao (${formatTrendTargetLabel(defaultTrendUp, tokenInfo)})`);
   }
   if (editPoolTrendDownInput) {
     updateTrendTargetSelectHints(editPoolTrendDownInput, tokenInfo);
     editPoolTrendDownInput.value = overrides.trendTargetDown ?? "";
-    setSelectPlaceholder(editPoolTrendDownInput, `Padrão (${formatTrendTargetLabel(defaultTrendDown, tokenInfo)})`);
+    setSelectPlaceholder(editPoolTrendDownInput, `Padrao (${formatTrendTargetLabel(defaultTrendDown, tokenInfo)})`);
   }
 
   updateTrendHint(editPoolTrendHint, tokenInfo);
@@ -1264,7 +1268,7 @@ async function commitHistoryEdit(id, field, inputEl) {
     });
     const data = await res.json().catch(() => null);
     if (!res.ok || !data?.ok) {
-      throw new Error(data?.error ?? "Erro ao atualizar histórico.");
+      throw new Error(data?.error ?? "Erro ao atualizar historico.");
     }
     const idx = cachedHistory.findIndex((item) => item?.id === id);
     if (idx >= 0) {
@@ -1437,7 +1441,7 @@ function renderPools(data, config) {
     return;
   }
   const rows = pools.map((pool) => {
-    const selected = pool.selected ? "Sim" : "Não";
+    const selected = pool.selected ? "Sim" : "Nao";
     const statusLabel = pool.running ? "Rodando" : "Parado";
     const lastActionLabel = actionLabels[pool.lastAction] ?? pool.lastAction ?? "-";
     const startStopAction = pool.running
@@ -1474,29 +1478,29 @@ function renderPools(data, config) {
         : hedgeUsesTrend
           ? "trade"
           : "";
-    const rangeLabel = rangeDisplay == null ? `Padrão (${defaultRange})` : Number(rangeDisplay).toFixed(2);
-    const budgetLabel = budgetDisplay == null ? `Padrão (${defaultBudget})` : Number(budgetDisplay).toFixed(2);
+    const rangeLabel = rangeDisplay == null ? `Padrao (${defaultRange})` : Number(rangeDisplay).toFixed(2);
+    const budgetLabel = budgetDisplay == null ? `Padrao (${defaultBudget})` : Number(budgetDisplay).toFixed(2);
     const exitTokenLabel = exitTokenDisplay == null
-      ? `Padrão (${formatExitToken(defaultExitToken, poolTokenInfo)})`
+      ? `Padrao (${formatExitToken(defaultExitToken, poolTokenInfo)})`
       : formatExitToken(exitTokenDisplay, poolTokenInfo);
     const exitDirectionLabel = exitDirectionDisplay == null
-      ? `Padrão (${formatExitDirection(defaultExitDirection)})`
+      ? `Padrao (${formatExitDirection(defaultExitDirection)})`
       : formatExitDirection(exitDirectionDisplay);
     const exitBiasLabel = exitBiasDisplay == null
-      ? `Padrão (${formatNumber(defaultExitBias, 2)})`
+      ? `Padrao (${formatNumber(defaultExitBias, 2)})`
       : formatNumber(exitBiasDisplay, 2);
     const hedgeEnabledValue = hedgeEnabledDisplay == null ? defaultHedgeEnabled : hedgeEnabledDisplay;
     const hedgePctLabel = hedgePctDisplay == null
-      ? `Padrão (${formatNumber(defaultHedgePct, 2)})`
+      ? `Padrao (${formatNumber(defaultHedgePct, 2)})`
       : formatNumber(hedgePctDisplay, 2);
     const hedgeSymbolLabel = hedgeSymbolDisplay == null
-      ? `Padrão (${defaultHedgeSymbol || "-"})`
+      ? `Padrao (${defaultHedgeSymbol || "-"})`
       : hedgeSymbolDisplay;
     const hedgeLeverageLabel = hedgeLeverageDisplay == null
-      ? `Padrão (${formatNumber(defaultHedgeLeverage, 2)})`
+      ? `Padrao (${formatNumber(defaultHedgeLeverage, 2)})`
       : formatNumber(hedgeLeverageDisplay, 2);
     const hedgeEntryModeLabel = hedgeEntryModeDisplay == null
-      ? `Padrão (${formatHedgeEntryMode(defaultHedgeEntryMode)})`
+      ? `Padrao (${formatHedgeEntryMode(defaultHedgeEntryMode)})`
       : formatHedgeEntryMode(hedgeEntryModeDisplay);
     const createdAt = formatTimestamp(pool.createdAt);
     return `
@@ -1520,7 +1524,7 @@ function renderPools(data, config) {
         <td>${selected}</td>
         <td>
           <details class="action-menu">
-            <summary>Ações</summary>
+            <summary>Acoes</summary>
             <div class="menu">
               <button class="ghost" data-action="select" data-id="${pool.id}">Selecionar</button>
               <button class="ghost" data-action="edit" data-id="${pool.id}">Editar</button>
@@ -1547,7 +1551,7 @@ async function updateUI() {
     ]);
     cachedHistory = Array.isArray(history) ? history : [];
 
-    runningEl.textContent = status.running ? "Sim" : "Não";
+    runningEl.textContent = status.running ? "Sim" : "Nao";
     lastTickEl.textContent = formatTimestamp(status.lastTickAt);
     lastActionEl.textContent = status.lastAction ?? "-";
     lastErrorEl.textContent = status.lastError ?? "-";
@@ -1597,17 +1601,17 @@ async function updateUI() {
     pollEl.textContent = config.pollIntervalMs ?? "-";
     confirmSecEl.textContent = config.outOfRangeConfirmSec ?? 0;
     cooldownSecEl.textContent = config.rebalanceCooldownSec ?? 0;
-    dryRunEl.textContent = config.dryRun ? "Sim" : "Não";
+    dryRunEl.textContent = config.dryRun ? "Sim" : "Nao";
 
     if (kaminoStatusEl) {
       kaminoStatusEl.textContent = status.kaminoActive ? "Ativo" : "Inativo";
     }
     if (kaminoEnabledEl) {
       const enabled = status.kaminoEnabled ?? config.kaminoRebalanceEnabled;
-      kaminoEnabledEl.textContent = enabled ? "Sim" : "Não";
+      kaminoEnabledEl.textContent = enabled ? "Sim" : "Nao";
     }
     if (kaminoSimulatedEl) {
-      kaminoSimulatedEl.textContent = status.kaminoSimulated ? "Sim" : "Não";
+      kaminoSimulatedEl.textContent = status.kaminoSimulated ? "Sim" : "Nao";
     }
     if (kaminoLtvEl) {
       kaminoLtvEl.textContent = status.kaminoLtv != null
@@ -1663,73 +1667,73 @@ async function updateUI() {
     }
     updateExitTokenSelectHints(poolExitTokenInput, tokenInfo);
     if (poolExitDirectionInput) {
-      setSelectPlaceholder(poolExitDirectionInput, `Padrão (${formatExitDirection(config.preferredExitDirection ?? "down")})`);
+      setSelectPlaceholder(poolExitDirectionInput, `Padrao (${formatExitDirection(config.preferredExitDirection ?? "down")})`);
     }
     if (poolTrendUpInput) {
       updateTrendTargetSelectHints(poolTrendUpInput, tokenInfo);
-      setSelectPlaceholder(poolTrendUpInput, `Padrão (${formatTrendTargetLabel(config.trendTargetUp, tokenInfo)})`);
+      setSelectPlaceholder(poolTrendUpInput, `Padrao (${formatTrendTargetLabel(config.trendTargetUp, tokenInfo)})`);
     }
     if (poolTrendDownInput) {
       updateTrendTargetSelectHints(poolTrendDownInput, tokenInfo);
-      setSelectPlaceholder(poolTrendDownInput, `Padrão (${formatTrendTargetLabel(config.trendTargetDown, tokenInfo)})`);
+      setSelectPlaceholder(poolTrendDownInput, `Padrao (${formatTrendTargetLabel(config.trendTargetDown, tokenInfo)})`);
     }
     if (poolTrendEnabledInput) {
-      setSelectPlaceholder(poolTrendEnabledInput, `Padrão (${config.trendEnabled ? "Sim" : "Não"})`);
+      setSelectPlaceholder(poolTrendEnabledInput, `Padrao (${config.trendEnabled ? "Sim" : "Nao"})`);
     }
     if (poolAutoAddEnabledInput) {
-      setSelectPlaceholder(poolAutoAddEnabledInput, `Padrão (${config.autoAddLiquidityEnabled ? "Sim" : "Não"})`);
+      setSelectPlaceholder(poolAutoAddEnabledInput, `Padrao (${config.autoAddLiquidityEnabled ? "Sim" : "Nao"})`);
     }
     if (poolKaminoEnabledInput) {
-      setSelectPlaceholder(poolKaminoEnabledInput, `Padrão (${config.kaminoRebalanceEnabled ? "Sim" : "Não"})`);
+      setSelectPlaceholder(poolKaminoEnabledInput, `Padrao (${config.kaminoRebalanceEnabled ? "Sim" : "Nao"})`);
     }
     if (poolKaminoBorrowAssetInput) {
       const label = (config.kaminoBorrowAsset ?? "usdc").toUpperCase?.() ?? config.kaminoBorrowAsset;
-      setSelectPlaceholder(poolKaminoBorrowAssetInput, `Padrão (${label})`);
+      setSelectPlaceholder(poolKaminoBorrowAssetInput, `Padrao (${label})`);
     }
     updateKaminoMarketPlaceholder(config);
     if (!kaminoMarketsLoaded) {
       void ensureKaminoMarketsLoaded();
     }
     if (poolKaminoCloseRuleInput) {
-      setSelectPlaceholder(poolKaminoCloseRuleInput, `Padrão (${config.kaminoCloseRule ?? "avg-price"})`);
+      setSelectPlaceholder(poolKaminoCloseRuleInput, `Padrao (${config.kaminoCloseRule ?? "avg-price"})`);
     }
     if (poolKaminoCollateralModeInput) {
-      setSelectPlaceholder(poolKaminoCollateralModeInput, `Padrão (${config.kaminoCollateralMode ?? "max-value"})`);
+      setSelectPlaceholder(poolKaminoCollateralModeInput, `Padrao (${config.kaminoCollateralMode ?? "max-value"})`);
     }
     if (poolKaminoConvertInput) {
       setSelectPlaceholder(
         poolKaminoConvertInput,
-        `Padrão (${config.kaminoConvertToCollateral ? "Sim" : "Não"})`
+        `Padrao (${config.kaminoConvertToCollateral ? "Sim" : "Nao"})`
       );
     }
     if (poolKaminoAvgBasisInput) {
-      const basisLabel = (config.kaminoAvgPriceBasis ?? "deposit") === "debt" ? "Dívida" : "Depósito";
-      setSelectPlaceholder(poolKaminoAvgBasisInput, `Padrão (${basisLabel})`);
+      const basisLabel = (config.kaminoAvgPriceBasis ?? "deposit") === "debt" ? "Divida" : "Deposito";
+      setSelectPlaceholder(poolKaminoAvgBasisInput, `Padrao (${basisLabel})`);
     }
     if (poolKaminoAvgModeInput) {
-      const modeLabel = (config.kaminoAvgMode ?? "cumulative") === "reset" ? "Último depósito" : "Cumulativa";
-      setSelectPlaceholder(poolKaminoAvgModeInput, `Padrão (${modeLabel})`);
+      const modeLabel = (config.kaminoAvgMode ?? "cumulative") === "reset" ? "ultimo deposito" : "Cumulativa";
+      setSelectPlaceholder(poolKaminoAvgModeInput, `Padrao (${modeLabel})`);
     }
     if (poolKaminoAutoCloseInput) {
       setSelectPlaceholder(
         poolKaminoAutoCloseInput,
-        `Padrão (${config.kaminoAutoCloseOnTokenChange ? "Sim" : "Não"})`
+        `Padrao (${config.kaminoAutoCloseOnTokenChange ? "Sim" : "Nao"})`
       );
     }
     if (poolKaminoDepositPctInput) {
-      poolKaminoDepositPctInput.placeholder = `Padrão (${formatNumber(config.kaminoDepositPct, 2)})`;
+      poolKaminoDepositPctInput.placeholder = `Padrao (${formatNumber(config.kaminoDepositPct, 2)})`;
     }
     if (poolKaminoMaxLtvInput) {
-      poolKaminoMaxLtvInput.placeholder = `Padrão (${formatNumber(config.kaminoMaxLtv, 2)})`;
+      poolKaminoMaxLtvInput.placeholder = `Padrao (${formatNumber(config.kaminoMaxLtv, 2)})`;
     }
     if (poolKaminoPriceBufferInput) {
-      poolKaminoPriceBufferInput.placeholder = `Padrão (${formatNumber(config.kaminoPriceBufferPct, 2)})`;
+      poolKaminoPriceBufferInput.placeholder = `Padrao (${formatNumber(config.kaminoPriceBufferPct, 2)})`;
     }
     if (poolHedgeEntryModeInput) {
-      setSelectPlaceholder(poolHedgeEntryModeInput, `Padrão (${formatHedgeEntryMode(config.hedgeEntryMode ?? "off")})`);
+      setSelectPlaceholder(poolHedgeEntryModeInput, `Padrao (${formatHedgeEntryMode(config.hedgeEntryMode ?? "off")})`);
     }
     if (poolTrendTimeframeInput) {
-      setSelectPlaceholder(poolTrendTimeframeInput, `Padrão (${config.trendTimeframe ?? "1m"})`);
+      setSelectPlaceholder(poolTrendTimeframeInput, `Padrao (${config.trendTimeframe ?? "1m"})`);
     }
     updateTrendHint(poolTrendHint, tokenInfo);
 
@@ -1758,7 +1762,7 @@ stopBtn.addEventListener("click", async () => {
 });
 
 closeBtn.addEventListener("click", async () => {
-  const ok = window.confirm("Fechar a posição agora? Isso remove toda a liquidez.");
+  const ok = window.confirm("Fechar a posicao agora? Isso remove toda a liquidez.");
   if (!ok) return;
   await fetch("/api/close-position", { method: "POST" });
   updateUI();
@@ -1766,7 +1770,7 @@ closeBtn.addEventListener("click", async () => {
 
 if (kaminoCloseBtn) {
   kaminoCloseBtn.addEventListener("click", async () => {
-    const ok = window.confirm("Fechar ciclo Kamino e liquidar o empréstimo?");
+    const ok = window.confirm("Fechar ciclo Kamino e liquidar o emprestimo?");
     if (!ok) return;
     const res = await fetch("/api/kamino/close", { method: "POST" });
     const data = await res.json().catch(() => null);
@@ -1780,7 +1784,7 @@ if (kaminoCloseBtn) {
 
 if (kaminoCloseTopBtn) {
   kaminoCloseTopBtn.addEventListener("click", async () => {
-    const ok = window.confirm("Fechar ciclo Kamino e liquidar o empréstimo?");
+    const ok = window.confirm("Fechar ciclo Kamino e liquidar o emprestimo?");
     if (!ok) return;
     const res = await fetch("/api/kamino/close", { method: "POST" });
     const data = await res.json().catch(() => null);
@@ -1822,11 +1826,11 @@ if (kaminoTestBtn) {
       return;
     }
     if (borrowUsd != null && (!Number.isFinite(borrowUsd) || borrowUsd < 0)) {
-      setKaminoTestResult("Borrow USD invÃ¡lido.", true);
+      setKaminoTestResult("Borrow USD invalido.", true);
       return;
     }
 
-    setKaminoTestResult("Enviando transaÃ§Ã£o para Kamino...", false);
+    setKaminoTestResult("Enviando transacao para Kamino...", false);
     if (kaminoTestBtn) kaminoTestBtn.disabled = true;
     try {
       const res = await fetch("/api/kamino/test", {
@@ -1840,9 +1844,9 @@ if (kaminoTestBtn) {
         setKaminoTestResult(msg, true);
       } else {
         const parts = [];
-        if (data.depositSig) parts.push(`DepÃ³sito OK: ${data.depositSig}`);
-        if (data.borrowSig) parts.push(`EmprÃ©stimo OK: ${data.borrowSig}`);
-        setKaminoTestResult(parts.length ? parts.join(" | ") : "DepÃ³sito enviado.", false);
+        if (data.depositSig) parts.push(`Deposito OK: ${data.depositSig}`);
+        if (data.borrowSig) parts.push(`Emprestimo OK: ${data.borrowSig}`);
+        setKaminoTestResult(parts.length ? parts.join(" | ") : "Deposito enviado.", false);
       }
     } catch (err) {
       setKaminoTestResult(err instanceof Error ? err.message : String(err), true);
@@ -1850,6 +1854,21 @@ if (kaminoTestBtn) {
       if (kaminoTestBtn) kaminoTestBtn.disabled = false;
       updateUI();
     }
+  });
+}
+
+if (kaminoResetBtn) {
+  kaminoResetBtn.addEventListener("click", async () => {
+    const ok = window.confirm("Resetar o ciclo Kamino local? Isso nao fecha o emprestimo on-chain.");
+    if (!ok) return;
+    const res = await fetch("/api/kamino/reset", { method: "POST" });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) {
+      const msg = data?.error ?? data?.reason ?? "Falha ao resetar ciclo Kamino.";
+      alert(msg);
+      return;
+    }
+    updateUI();
   });
 }
 
@@ -1963,35 +1982,35 @@ addPoolBtn.addEventListener("click", async () => {
     if (preferredExitDirection) {
       const parsed = parseExitDirectionInput(preferredExitDirection);
       if (!parsed) {
-        throw new Error("Direção da saída preferida inválida. Use Alta ou Baixa.");
+        throw new Error("Direcao da saida preferida invalida. Use Alta ou Baixa.");
       }
       overrides.preferredExitDirection = parsed;
     }
     if (trendEnabledRaw) {
       const parsed = parseTrendEnabledInput(trendEnabledRaw);
       if (parsed === null) {
-        throw new Error("Tendência inválida. Use Sim ou Não.");
+        throw new Error("Tendencia invalida. Use Sim ou Nao.");
       }
       overrides.trendEnabled = parsed;
     }
     if (trendTimeframeRaw) {
       const parsed = parseTrendTimeframeInput(trendTimeframeRaw);
       if (!parsed) {
-        throw new Error("Timeframe de tendência inválido.");
+        throw new Error("Timeframe de tendencia invalido.");
       }
       overrides.trendTimeframe = parsed;
     }
     if (trendTargetUpRaw) {
       const parsed = parseTrendTargetInput(trendTargetUpRaw);
       if (!parsed) {
-        throw new Error("Target de alta inválido.");
+        throw new Error("Target de alta invalido.");
       }
       overrides.trendTargetUp = parsed;
     }
     if (trendTargetDownRaw) {
       const parsed = parseTrendTargetInput(trendTargetDownRaw);
       if (!parsed) {
-        throw new Error("Target de baixa inválido.");
+        throw new Error("Target de baixa invalido.");
       }
       overrides.trendTargetDown = parsed;
     }
@@ -2001,14 +2020,14 @@ addPoolBtn.addEventListener("click", async () => {
     if (autoAddRaw) {
       const parsed = parseTrendEnabledInput(autoAddRaw);
       if (parsed === null) {
-        throw new Error("Auto adicionar liquidez inválido. Use Sim ou Não.");
+        throw new Error("Auto adicionar liquidez invalido. Use Sim ou Nao.");
       }
       overrides.autoAddLiquidityEnabled = parsed;
     }
     if (kaminoEnabledRaw) {
       const parsed = parseTrendEnabledInput(kaminoEnabledRaw);
       if (parsed === null) {
-        throw new Error("Kamino rebalance inválido. Use Sim ou Não.");
+        throw new Error("Kamino rebalance invalido. Use Sim ou Nao.");
       }
       overrides.kaminoRebalanceEnabled = parsed;
     }
@@ -2018,7 +2037,7 @@ addPoolBtn.addEventListener("click", async () => {
     if (kaminoBorrowAssetRaw) {
       const parsed = parseKaminoBorrowAssetInput(kaminoBorrowAssetRaw);
       if (!parsed) {
-        throw new Error("Kamino empréstimo inválido.");
+        throw new Error("Kamino emprestimo invalido.");
       }
       overrides.kaminoBorrowAsset = parsed;
     }
@@ -2031,7 +2050,7 @@ addPoolBtn.addEventListener("click", async () => {
     if (kaminoCloseRuleRaw) {
       const parsed = parseKaminoCloseRuleInput(kaminoCloseRuleRaw);
       if (!parsed) {
-        throw new Error("Kamino regra de fechamento inválida.");
+        throw new Error("Kamino regra de fechamento invalida.");
       }
       overrides.kaminoCloseRule = parsed;
     }
@@ -2041,42 +2060,42 @@ addPoolBtn.addEventListener("click", async () => {
     if (kaminoCollateralModeRaw) {
       const parsed = parseKaminoCollateralModeInput(kaminoCollateralModeRaw);
       if (!parsed) {
-        throw new Error("Kamino colateral inválido.");
+        throw new Error("Kamino colateral invalido.");
       }
       overrides.kaminoCollateralMode = parsed;
     }
     if (kaminoConvertRaw) {
       const parsed = parseTrendEnabledInput(kaminoConvertRaw);
       if (parsed === null) {
-        throw new Error("Converter para colateral fixo inválido. Use Sim ou Não.");
+        throw new Error("Converter para colateral fixo invalido. Use Sim ou Nao.");
       }
       overrides.kaminoConvertToCollateral = parsed;
     }
     if (kaminoAvgBasisRaw) {
       const parsed = parseKaminoAvgBasisInput(kaminoAvgBasisRaw);
       if (!parsed) {
-        throw new Error("Kamino base do preço médio inválida.");
+        throw new Error("Kamino base do preco medio invalida.");
       }
       overrides.kaminoAvgPriceBasis = parsed;
     }
     if (kaminoAvgModeRaw) {
       const parsed = parseKaminoAvgModeInput(kaminoAvgModeRaw);
       if (!parsed) {
-        throw new Error("Kamino modo da média inválido.");
+        throw new Error("Kamino modo da mdia invalido.");
       }
       overrides.kaminoAvgMode = parsed;
     }
     if (kaminoAutoCloseRaw) {
       const parsed = parseTrendEnabledInput(kaminoAutoCloseRaw);
       if (parsed === null) {
-        throw new Error("Auto-fechar Kamino inválido. Use Sim ou Não.");
+        throw new Error("Auto-fechar Kamino invalido. Use Sim ou Nao.");
       }
       overrides.kaminoAutoCloseOnTokenChange = parsed;
     }
     if (hedgeEnabledRaw) {
       const parsed = parseTrendEnabledInput(hedgeEnabledRaw);
       if (parsed === null) {
-        throw new Error("Proteção Bybit inválida. Use Sim ou Não.");
+        throw new Error("Protecao Bybit invalida. Use Sim ou Nao.");
       }
       overrides.hedgeEnabled = parsed;
     }
@@ -2161,7 +2180,7 @@ if (editPoolForm) {
       const parsed = parseOptionalNumber(rangeRaw);
       if (parsed === undefined) {
         if (editPoolError) {
-          editPoolError.textContent = "Range % inválido.";
+          editPoolError.textContent = "Range % invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2176,7 +2195,7 @@ if (editPoolForm) {
       const parsed = parseOptionalNumber(budgetRaw);
       if (parsed === undefined) {
         if (editPoolError) {
-          editPoolError.textContent = "Budget USD inválido.";
+          editPoolError.textContent = "Budget USD invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2191,7 +2210,7 @@ if (editPoolForm) {
       const parsed = parseTrendEnabledInput(autoAddRaw);
       if (parsed === null) {
         if (editPoolError) {
-          editPoolError.textContent = "Auto adicionar liquidez inválido. Use Sim ou Não.";
+          editPoolError.textContent = "Auto adicionar liquidez invalido. Use Sim ou Nao.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2206,7 +2225,7 @@ if (editPoolForm) {
       const parsed = parseTrendEnabledInput(kaminoEnabledRaw);
       if (parsed === null) {
         if (editPoolError) {
-          editPoolError.textContent = "Kamino rebalance inválido. Use Sim ou Não.";
+          editPoolError.textContent = "Kamino rebalance invalido. Use Sim ou Nao.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2221,7 +2240,7 @@ if (editPoolForm) {
       const parsed = parseOptionalNumber(kaminoDepositRaw);
       if (parsed === undefined) {
         if (editPoolError) {
-          editPoolError.textContent = "Kamino depósito % inválido.";
+          editPoolError.textContent = "Kamino depsito % invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2236,7 +2255,7 @@ if (editPoolForm) {
       const parsed = parseKaminoBorrowAssetInput(kaminoBorrowRaw);
       if (!parsed) {
         if (editPoolError) {
-          editPoolError.textContent = "Kamino empréstimo inválido.";
+          editPoolError.textContent = "Kamino emprestimo invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2258,7 +2277,7 @@ if (editPoolForm) {
       const parsed = parseOptionalNumber(kaminoMaxLtvRaw);
       if (parsed === undefined) {
         if (editPoolError) {
-          editPoolError.textContent = "Kamino LTV inválido.";
+          editPoolError.textContent = "Kamino LTV invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2273,7 +2292,7 @@ if (editPoolForm) {
       const parsed = parseKaminoCloseRuleInput(kaminoCloseRuleRaw);
       if (!parsed) {
         if (editPoolError) {
-          editPoolError.textContent = "Kamino regra de fechamento inválida.";
+          editPoolError.textContent = "Kamino regra de fechamento invalida.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2288,7 +2307,7 @@ if (editPoolForm) {
       const parsed = parseOptionalNumber(kaminoBufferRaw);
       if (parsed === undefined) {
         if (editPoolError) {
-          editPoolError.textContent = "Kamino buffer % inválido.";
+          editPoolError.textContent = "Kamino buffer % invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2303,7 +2322,7 @@ if (editPoolForm) {
       const parsed = parseKaminoCollateralModeInput(kaminoCollateralModeRaw);
       if (!parsed) {
         if (editPoolError) {
-          editPoolError.textContent = "Kamino colateral inválido.";
+          editPoolError.textContent = "Kamino colateral invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2318,7 +2337,7 @@ if (editPoolForm) {
       const parsed = parseTrendEnabledInput(kaminoConvertRaw);
       if (parsed === null) {
         if (editPoolError) {
-          editPoolError.textContent = "Converter para colateral fixo inválido. Use Sim ou Não.";
+          editPoolError.textContent = "Converter para colateral fixo invalido. Use Sim ou Nao.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2333,7 +2352,7 @@ if (editPoolForm) {
       const parsed = parseKaminoAvgBasisInput(kaminoAvgBasisRaw);
       if (!parsed) {
         if (editPoolError) {
-          editPoolError.textContent = "Kamino base do preço médio inválida.";
+          editPoolError.textContent = "Kamino base do preco medio invalida.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2348,7 +2367,7 @@ if (editPoolForm) {
       const parsed = parseKaminoAvgModeInput(kaminoAvgModeRaw);
       if (!parsed) {
         if (editPoolError) {
-          editPoolError.textContent = "Kamino modo da média inválido.";
+          editPoolError.textContent = "Kamino modo da mdia invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2363,7 +2382,7 @@ if (editPoolForm) {
       const parsed = parseTrendEnabledInput(kaminoAutoCloseRaw);
       if (parsed === null) {
         if (editPoolError) {
-          editPoolError.textContent = "Auto-fechar Kamino inválido. Use Sim ou Não.";
+          editPoolError.textContent = "Auto-fechar Kamino invalido. Use Sim ou Nao.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2378,7 +2397,7 @@ if (editPoolForm) {
       const parsed = parseExitTokenInput(exitTokenRaw);
       if (!parsed) {
         if (editPoolError) {
-          editPoolError.textContent = "Saída preferida inválida. Use tokenA ou tokenB.";
+          editPoolError.textContent = "Saida preferida invalida. Use tokenA ou tokenB.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2393,7 +2412,7 @@ if (editPoolForm) {
       const parsed = parseExitDirectionInput(exitDirectionRaw);
       if (!parsed) {
         if (editPoolError) {
-          editPoolError.textContent = "Direção da saída preferida inválida. Use Alta ou Baixa.";
+          editPoolError.textContent = "Direcao da saida preferida invalida. Use Alta ou Baixa.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2408,7 +2427,7 @@ if (editPoolForm) {
       const parsed = parseOptionalNumber(exitBiasRaw);
       if (parsed === undefined) {
         if (editPoolError) {
-          editPoolError.textContent = "Bias % inválido.";
+          editPoolError.textContent = "Bias % invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2423,7 +2442,7 @@ if (editPoolForm) {
       const parsed = parseTrendEnabledInput(trendEnabledRaw);
       if (parsed === null) {
         if (editPoolError) {
-          editPoolError.textContent = "Tendência inválida. Use Sim ou Não.";
+          editPoolError.textContent = "Tendencia invalida. Use Sim ou Nao.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2438,7 +2457,7 @@ if (editPoolForm) {
       const parsed = parseTrendTimeframeInput(trendTimeframeRaw);
       if (!parsed) {
         if (editPoolError) {
-          editPoolError.textContent = "Timeframe de tendência inválido.";
+          editPoolError.textContent = "Timeframe de tendencia invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2453,7 +2472,7 @@ if (editPoolForm) {
       const parsed = parseTrendTargetInput(trendUpRaw);
       if (!parsed) {
         if (editPoolError) {
-          editPoolError.textContent = "Target de alta inválido.";
+          editPoolError.textContent = "Target de alta invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2468,7 +2487,7 @@ if (editPoolForm) {
       const parsed = parseTrendTargetInput(trendDownRaw);
       if (!parsed) {
         if (editPoolError) {
-          editPoolError.textContent = "Target de baixa inválido.";
+          editPoolError.textContent = "Target de baixa invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2483,7 +2502,7 @@ if (editPoolForm) {
       const parsed = parseTrendEnabledInput(hedgeEnabledRaw);
       if (parsed === null) {
         if (editPoolError) {
-          editPoolError.textContent = "Proteção Bybit inválida. Use Sim ou Não.";
+          editPoolError.textContent = "Protecao Bybit invalida. Use Sim ou Nao.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2498,7 +2517,7 @@ if (editPoolForm) {
       const parsed = parseOptionalNumber(hedgePctRaw);
       if (parsed === undefined) {
         if (editPoolError) {
-          editPoolError.textContent = "Hedge % inválido.";
+          editPoolError.textContent = "Hedge % invalido.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2513,7 +2532,7 @@ if (editPoolForm) {
       const parsed = parseOptionalNumber(hedgeMarginRaw);
       if (parsed === undefined) {
         if (editPoolError) {
-          editPoolError.textContent = "Hedge margem % inválida.";
+          editPoolError.textContent = "Hedge margem % invalida.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2535,7 +2554,7 @@ if (editPoolForm) {
       const parsed = parseOptionalNumber(hedgeLeverageRaw);
       if (parsed === undefined) {
         if (editPoolError) {
-          editPoolError.textContent = "Alavancagem inválida.";
+          editPoolError.textContent = "Alavancagem invalida.";
           editPoolError.classList.remove("hidden");
         }
         return;
@@ -2595,7 +2614,7 @@ async function handlePoolAction(action, id) {
   }
 
   if (action === "close") {
-    const ok = window.confirm("Fechar a posição dessa pool? Isso remove toda a liquidez.");
+    const ok = window.confirm("Fechar a posicao dessa pool? Isso remove toda a liquidez.");
     if (!ok) return;
     await fetch(`/api/pools/${id}/close`, { method: "POST" });
     updateUI();
@@ -2949,7 +2968,7 @@ if (historyRowLimitSelect) {
 }
 
 clearHistoryBtn.addEventListener("click", async () => {
-  const ok = window.confirm("Limpar o histórico? Essa ação não pode ser desfeita.");
+  const ok = window.confirm("Limpar o historico? Essa acao nao pode ser desfeita.");
   if (!ok) return;
   await fetch("/api/history/clear", { method: "POST" });
   updateUI();
@@ -2957,7 +2976,7 @@ clearHistoryBtn.addEventListener("click", async () => {
 
 if (clearKaminoLogBtn) {
   clearKaminoLogBtn.addEventListener("click", async () => {
-    const ok = window.confirm("Limpar o log do Kamino? Essa ação não pode ser desfeita.");
+    const ok = window.confirm("Limpar o log do Kamino? Essa acao nao pode ser desfeita.");
     if (!ok) return;
     await fetch("/api/kamino-logs/clear", { method: "POST" });
     updateUI();

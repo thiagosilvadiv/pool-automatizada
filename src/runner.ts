@@ -8,6 +8,7 @@ import { HistoryStore, type KaminoLoanEntry } from "./storage.js";
 import { HedgeManager, HedgeCloseResult, HedgeState } from "./hedge.js";
 
 const MIN_ENTRY_BUDGET_FACTOR = 0.25;
+const MAX_USD_SANITY = 1_000_000_000;
 
 function isEntryUsdSane(
   entryUsd: number,
@@ -15,7 +16,7 @@ function isEntryUsdSane(
   portfolioUsd: number | null,
   options?: { minBudgetFactor?: number }
 ): boolean {
-  if (!Number.isFinite(entryUsd) || entryUsd < 0) {
+  if (!Number.isFinite(entryUsd) || entryUsd < 0 || Math.abs(entryUsd) > MAX_USD_SANITY) {
     return false;
   }
   const budget = Number.isFinite(budgetUsd ?? NaN) ? Number(budgetUsd) : null;
@@ -66,6 +67,7 @@ function resolveActionType(action: string | null): string | null {
     case "kamino-repay":
     case "kamino-withdraw":
     case "kamino-rebalance-failed":
+    case "kamino-wait-funds":
       return "operacional";
     default:
       return "operacional";
@@ -257,6 +259,11 @@ export class BotRunner {
     } finally {
       this.inFlight = false;
     }
+  }
+
+  resetKaminoCycle(): void {
+    this.bot.resetKaminoCycle();
+    this.flushKaminoLogs();
   }
 
   async testKaminoNow(input: {
@@ -1109,7 +1116,8 @@ export class BotRunner {
       "skip-low-sol",
       "close-no-position",
       "out-of-range-wait",
-      "cooldown-wait"
+      "cooldown-wait",
+      "kamino-wait-funds"
     ];
     if (skipped.includes(status.lastAction)) {
       return;

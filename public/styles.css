@@ -854,8 +854,8 @@ button.danger:not(.ghost):hover {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
 }
 
 .card {
@@ -891,15 +891,15 @@ button.danger:not(.ghost):hover {
 .kv {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: 8px;
+  margin-bottom: 6px;
   font-size: 14px;
 }
 
 .kv span:last-child {
   color: var(--text);
   font-weight: 600;
-  max-width: 160px;
+  max-width: 120px;
   text-align: right;
   word-break: break-all;
 }

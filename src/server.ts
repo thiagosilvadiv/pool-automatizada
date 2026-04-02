@@ -184,6 +184,15 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
+  app.post("/api/kamino/reset", async (_req: Request, res: Response) => {
+    try {
+      await poolManager.resetSelectedKaminoCycle();
+      res.json({ ok: true, status: poolManager.getSelectedStatus() });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   app.post("/api/kamino/test", async (req: Request, res: Response) => {
     try {
       const mint = String(req.body?.collateralMint ?? "").trim();

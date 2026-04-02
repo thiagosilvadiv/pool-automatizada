@@ -18,7 +18,7 @@ function formatTrendBadge(pool) {
   if (!chartTrendBadge) return;
   chartTrendBadge.className = "trend-badge";
   if (!pool) {
-    chartTrendBadge.textContent = "Indisponível";
+    chartTrendBadge.textContent = "Indisponivel";
     chartTrendBadge.classList.add("trend-unknown");
     return;
   }
@@ -43,7 +43,7 @@ function formatTrendBadge(pool) {
     chartTrendBadge.classList.add("trend-down");
     return;
   }
-  chartTrendBadge.textContent = `Indisponível${timeframe}`;
+  chartTrendBadge.textContent = `Indisponivel${timeframe}`;
   chartTrendBadge.classList.add("trend-unknown");
 }
 
@@ -57,7 +57,7 @@ function buildGeckoUrl(networkId, poolAddress, embed) {
 function formatIndicatorMeta(series) {
   if (!indicatorMeta) return;
   if (!series) {
-    indicatorMeta.textContent = "IndisponÃ­vel";
+    indicatorMeta.textContent = "Indisponivel";
     return;
   }
   const updatedAt = series.updatedAt ? new Date(series.updatedAt) : null;
@@ -71,8 +71,8 @@ function formatIndicatorMeta(series) {
       ? `Alta${timeframe}`
       : series.direction === "down"
         ? `Baixa${timeframe}`
-        : `IndisponÃ­vel${timeframe}`;
-  indicatorMeta.textContent = `${status} Â· Ãšltima vela fechada: ${updatedLabel}`;
+        : `Indisponivel${timeframe}`;
+  indicatorMeta.textContent = `${status} - Ultima vela fechada: ${updatedLabel}`;
 }
 
 async function fetchTrendSeries(poolId, force = false) {

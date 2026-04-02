@@ -21,6 +21,10 @@ export type KaminoCycleState = {
   ownerPoolName?: string | null;
   marketAddress?: string | null;
   lastSeenAt?: string | null;
+  baselineTokenA?: number | null;
+  baselineTokenB?: number | null;
+  reservedTokenA?: number | null;
+  reservedTokenB?: number | null;
   collateralMint: string | null;
   collateralAmount: number;
   collateralUsd: number | null;

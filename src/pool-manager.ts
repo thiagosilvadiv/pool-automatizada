@@ -9,6 +9,7 @@ import { OrcaBot } from "./orca.js";
 import { BotRunner } from "./runner.js";
 import type { HistoryEvent } from "./runner.js";
 import { logger } from "./logger.js";
+import { BalanceCoordinator } from "./balance-coordinator.js";
 import {
   createHistoryStore,
   createPoolsStore,
@@ -152,6 +153,7 @@ export class PoolManager {
   private kaminoMarkets: KaminoMarketEntry[] = [];
   private kaminoScanTimer: NodeJS.Timeout | null = null;
   private kaminoScanInFlight = false;
+  private balanceCoordinator = new BalanceCoordinator();
 
   constructor(baseConfig: Config, connection: any, wallet: any) {
     this.baseConfig = baseConfig;
@@ -362,6 +364,7 @@ export class PoolManager {
       record.runner.stop();
       this.pools.delete(id);
     }
+    this.balanceCoordinator.clearPool(id);
     this.clearResumeTracking(id);
     this.activePoolIds.delete(id);
     this.entries = this.entries.filter((entry) => entry.id !== id);
@@ -402,6 +405,7 @@ export class PoolManager {
   async stopPool(id: string): Promise<void> {
     const record = this.getRecord(id);
     record.runner.stop();
+    this.balanceCoordinator.clearPool(id);
     this.clearResumeTracking(id);
     if (this.activePoolIds.delete(id)) {
       await this.savePools();
@@ -475,6 +479,18 @@ export class PoolManager {
       throw new Error("No pool selected");
     }
     await this.closePool(this.selectedPoolId);
+  }
+
+  async resetSelectedKaminoCycle(): Promise<void> {
+    if (!this.selectedPoolId) {
+      return;
+    }
+    await this.resetKaminoCycle(this.selectedPoolId);
+  }
+
+  async resetKaminoCycle(id: string): Promise<void> {
+    const record = this.getRecord(id);
+    record.runner.resetKaminoCycle();
   }
 
   async closeKaminoCycleSelected(): Promise<{ ok: boolean; reason?: string }> {
@@ -881,7 +897,7 @@ export class PoolManager {
             if (existing) {
               nextByMarket.set(marketAddress, {
                 ...existing,
-                lastError: "Sem posição ativa no market",
+                lastError: "Sem posicao ativa no market",
                 lastSeenAt: existing.lastSeenAt ?? now
               });
             }
@@ -1105,6 +1121,8 @@ export class PoolManager {
       connection: this.connection,
       wallet: this.wallet,
       config: poolConfig,
+      poolId: entry.id,
+      balanceCoordinator: this.balanceCoordinator,
       onLowSol: async () => {
         await this.maybeCloseEmptyAccountsOnLowSol();
       }
@@ -1473,7 +1491,7 @@ export class PoolManager {
         const normalizedValue = raw.trim().toLowerCase();
         if (["true", "1", "yes", "sim", "on"].includes(normalizedValue)) {
           value = true;
-        } else if (["false", "0", "no", "nao", "não", "off"].includes(normalizedValue)) {
+        } else if (["false", "0", "no", "nao", "off"].includes(normalizedValue)) {
           value = false;
         }
       }
@@ -1492,7 +1510,7 @@ export class PoolManager {
         const normalizedValue = raw.trim().toLowerCase();
         if (["true", "1", "yes", "sim", "on"].includes(normalizedValue)) {
           value = true;
-        } else if (["false", "0", "no", "nao", "nÃ£o", "off"].includes(normalizedValue)) {
+        } else if (["false", "0", "no", "nao", "off"].includes(normalizedValue)) {
           value = false;
         }
       }
@@ -1880,7 +1898,7 @@ export class PoolManager {
           const normalizedValue = raw.trim().toLowerCase();
           if (["true", "1", "yes", "sim", "on"].includes(normalizedValue)) {
             value = true;
-          } else if (["false", "0", "no", "nao", "não", "off"].includes(normalizedValue)) {
+          } else if (["false", "0", "no", "nao", "off"].includes(normalizedValue)) {
             value = false;
           }
         }
@@ -1903,7 +1921,7 @@ export class PoolManager {
           const normalizedValue = raw.trim().toLowerCase();
           if (["true", "1", "yes", "sim", "on"].includes(normalizedValue)) {
             value = true;
-          } else if (["false", "0", "no", "nao", "nÃ£o", "off"].includes(normalizedValue)) {
+          } else if (["false", "0", "no", "nao", "off"].includes(normalizedValue)) {
             value = false;
           }
         }
