@@ -746,7 +746,10 @@ export class PoolManager {
 
   private collectKaminoMarketAddresses(): string[] {
     const markets = new Set<string>();
-    const baseMarket = this.baseConfig.kaminoMarketAddress ?? process.env.KAMINO_MARKET ?? null;
+    const baseMarket = this.baseConfig.kaminoMarketAddress
+      ?? process.env.KAMINO_MARKET
+      ?? process.env.KAMINO_MAIN_MARKET
+      ?? null;
     if (baseMarket) markets.add(baseMarket.trim());
     for (const entry of this.entries) {
       const overrideMarket = entry.overrides?.kaminoMarketAddress ?? null;
@@ -754,6 +757,10 @@ export class PoolManager {
     }
     for (const entry of this.kaminoMarkets) {
       if (entry.address) markets.add(String(entry.address).trim());
+    }
+    const mainMarket = process.env.KAMINO_MAIN_MARKET ? String(process.env.KAMINO_MAIN_MARKET).trim() : "";
+    if (mainMarket) {
+      markets.add(mainMarket);
     }
     for (const loan of this.kaminoLoansState.loans ?? []) {
       if (loan.marketAddress) markets.add(String(loan.marketAddress).trim());

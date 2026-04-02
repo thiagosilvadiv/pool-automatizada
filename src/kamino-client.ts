@@ -534,6 +534,7 @@ export async function createKaminoClient(
   const marketRaw = override
     || ctx.config.kaminoMarketAddress
     || process.env.KAMINO_MARKET
+    || process.env.KAMINO_MAIN_MARKET
     || DEFAULT_KAMINO_MARKET;
   let marketAddress: Address;
   try {

@@ -47,7 +47,6 @@ const kaminoTestBorrowInput = document.getElementById("kaminoTestBorrow");
 const kaminoTestBtn = document.getElementById("kaminoTestBtn");
 const kaminoTestResult = document.getElementById("kaminoTestResult");
 const historyBody = document.getElementById("historyBody");
-const hedgeLogBody = document.getElementById("hedgeLogBody");
 const kaminoLogBody = document.getElementById("kaminoLogBody");
 const poolNameLabel = document.getElementById("poolNameLabel");
 const hedgeSymbolsList = document.getElementById("hedgeSymbolsList");
@@ -145,7 +144,6 @@ const swapToSolBtn = document.getElementById("swapToSolBtn");
 const kaminoCloseTopBtn = document.getElementById("kaminoCloseTopBtn");
 const kaminoCloseBtn = document.getElementById("kaminoCloseBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
-const clearHedgeLogBtn = document.getElementById("clearHedgeLogBtn");
 const clearKaminoLogBtn = document.getElementById("clearKaminoLogBtn");
 const exportHistoryBtn = document.getElementById("exportHistoryBtn");
 const deleteHistoryBtn = document.getElementById("deleteHistoryBtn");
@@ -247,22 +245,7 @@ const hedgeEntryModeLabels = {
   "force-up": "Sempre alta (ignora tendência)"
 };
 
-const MAX_HEDGE_LOG_ROWS = 20;
 const MAX_KAMINO_LOG_ROWS = 20;
-
-const hedgeLogActionLabels = {
-  "open": "Abertura",
-  "close": "Fechamento",
-  "open-skip": "Ignorado",
-  "open-failed": "Falha abertura",
-  "close-failed": "Falha fechamento"
-};
-
-const hedgeLogLevelLabels = {
-  "info": "Info",
-  "warn": "Aviso",
-  "error": "Erro"
-};
 
 const kaminoLogLevelLabels = {
   "info": "Info",
@@ -648,11 +631,6 @@ async function fetchConfig() {
 
 async function fetchHistory() {
   const res = await fetch("/api/history");
-  return res.json();
-}
-
-async function fetchHedgeLogs() {
-  const res = await fetch("/api/hedge-logs");
   return res.json();
 }
 
@@ -1424,35 +1402,6 @@ function renderHistory(items) {
   updateHistorySelectionState();
 }
 
-function renderHedgeLogs(items) {
-  if (!hedgeLogBody) {
-    return;
-  }
-  if (!Array.isArray(items) || items.length === 0) {
-    hedgeLogBody.innerHTML = "<tr><td colspan=\"9\">Sem eventos ainda</td></tr>";
-    return;
-  }
-  const rows = items.slice(0, MAX_HEDGE_LOG_ROWS).map((item) => {
-    const levelLabel = hedgeLogLevelLabels[item.level] ?? item.level ?? "-";
-    const actionLabel = hedgeLogActionLabels[item.action] ?? item.action ?? "-";
-    const message = escapeHtml(item.message ?? "-");
-    return `
-      <tr class="hedge-log hedge-log-${item.level ?? "info"}">
-        <td>${formatTimestamp(item.timestamp)}</td>
-        <td>${levelLabel}</td>
-        <td>${actionLabel}</td>
-        <td>${escapeHtml(item.symbol ?? "-")}</td>
-        <td>${formatNumber(item.qty, 4)}</td>
-        <td>${formatNumber(item.notionalUsd, 2)}</td>
-        <td>${formatNumber(item.leverage, 2)}</td>
-        <td>${formatNumber(item.pnlUsd, 2)}</td>
-        <td>${message}</td>
-      </tr>
-    `;
-  });
-  hedgeLogBody.innerHTML = rows.join("");
-}
-
 function renderKaminoLogs(items) {
   if (!kaminoLogBody) {
     return;
@@ -1589,12 +1538,11 @@ function renderPools(data, config) {
 
 async function updateUI() {
   try {
-    const [status, config, history, pools, hedgeLogs, kaminoLogs] = await Promise.all([
+    const [status, config, history, pools, kaminoLogs] = await Promise.all([
       fetchStatus(),
       fetchConfig(),
       fetchHistory(),
       fetchPools(),
-      fetchHedgeLogs(),
       fetchKaminoLogs()
     ]);
     cachedHistory = Array.isArray(history) ? history : [];
@@ -1790,7 +1738,6 @@ async function updateUI() {
     } else {
       renderHistory(cachedHistory);
     }
-    renderHedgeLogs(hedgeLogs);
     renderKaminoLogs(kaminoLogs);
     renderPools(pools, config);
   } catch (err) {
@@ -3007,15 +2954,6 @@ clearHistoryBtn.addEventListener("click", async () => {
   await fetch("/api/history/clear", { method: "POST" });
   updateUI();
 });
-
-if (clearHedgeLogBtn) {
-  clearHedgeLogBtn.addEventListener("click", async () => {
-    const ok = window.confirm("Limpar o log do hedge? Essa ação não pode ser desfeita.");
-    if (!ok) return;
-    await fetch("/api/hedge-logs/clear", { method: "POST" });
-    updateUI();
-  });
-}
 
 if (clearKaminoLogBtn) {
   clearKaminoLogBtn.addEventListener("click", async () => {

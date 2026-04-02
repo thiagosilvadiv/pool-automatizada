@@ -2048,6 +2048,7 @@ export class OrcaBot {
   private getKaminoMarketAddress(): string | null {
     return this.config.kaminoMarketAddress
       ?? process.env.KAMINO_MARKET
+      ?? process.env.KAMINO_MAIN_MARKET
       ?? null;
   }
 
