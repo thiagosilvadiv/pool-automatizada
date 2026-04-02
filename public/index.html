@@ -161,6 +161,30 @@
             </select>
           </div>
           <div class="field">
+            <label for="poolKaminoConvert">Converter para colateral fixo</label>
+            <select id="poolKaminoConvert">
+              <option value="">Padrão</option>
+              <option value="true">Sim</option>
+              <option value="false">Não</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolKaminoAvgBasis">Kamino base do preço médio</label>
+            <select id="poolKaminoAvgBasis">
+              <option value="">Padrão</option>
+              <option value="deposit">Depósito</option>
+              <option value="debt">Dívida</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolKaminoAvgMode">Kamino modo da média</label>
+            <select id="poolKaminoAvgMode">
+              <option value="">Padrão</option>
+              <option value="cumulative">Cumulativa</option>
+              <option value="reset">Último depósito</option>
+            </select>
+          </div>
+          <div class="field">
             <label for="poolKaminoAutoClose">Auto-fechar ao mudar token</label>
             <select id="poolKaminoAutoClose">
               <option value="">Padrão</option>
@@ -298,6 +322,7 @@
           </div>
           <div class="card">
             <h3>Kamino Rebalance</h3>
+            <div class="kv"><span>Pool</span><span id="kaminoPoolName">-</span></div>
             <div class="kv"><span>Status</span><span id="kaminoStatus">-</span></div>
             <div class="kv"><span>Habilitado</span><span id="kaminoEnabled">-</span></div>
             <div class="kv"><span>Simulado</span><span id="kaminoSimulated">-</span></div>
@@ -306,6 +331,7 @@
             <div class="kv"><span>Dívida (USD)</span><span id="kaminoDebtUsd">-</span></div>
             <div class="kv"><span>Preço médio</span><span id="kaminoAvgPrice">-</span></div>
             <div class="kv"><span>Preço alvo</span><span id="kaminoTargetPrice">-</span></div>
+            <div id="kaminoAvgModeHint" class="hint">Preço médio (cumulativo desde o início do ciclo)</div>
             <div class="kv"><span>Ciclos</span><span id="kaminoCycleCount">-</span></div>
             <div class="kv"><span>Erro Kamino</span><span id="kaminoLastError">-</span></div>
             <div class="kamino-collaterals" id="kaminoCollaterals"></div>
@@ -597,6 +623,30 @@
               <option value="both">Ambos (dual)</option>
               <option value="tokenA">Token A</option>
               <option value="tokenB">Token B</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolKaminoConvert">Converter para colateral fixo</label>
+            <select id="editPoolKaminoConvert">
+              <option value="">Padrão</option>
+              <option value="true">Sim</option>
+              <option value="false">Não</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolKaminoAvgBasis">Kamino base do preço médio</label>
+            <select id="editPoolKaminoAvgBasis">
+              <option value="">Padrão</option>
+              <option value="deposit">Depósito</option>
+              <option value="debt">Dívida</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolKaminoAvgMode">Kamino modo da média</label>
+            <select id="editPoolKaminoAvgMode">
+              <option value="">Padrão</option>
+              <option value="cumulative">Cumulativa</option>
+              <option value="reset">Último depósito</option>
             </select>
           </div>
           <div class="field">

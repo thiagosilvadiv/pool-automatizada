@@ -313,6 +313,7 @@ export class OrcaBot {
     this.resetActionFee();
     await this.reconcileKaminoState();
     this.syncKaminoStatus();
+    await this.refreshKaminoCollateralMetrics();
     await this.refreshPoolState();
     const trendSnapshot = await this.updateTrendStatus();
     const preferredExitToken = this.resolvePreferredExitToken(trendSnapshot.direction, trendSnapshot.stale);
@@ -1708,7 +1709,11 @@ export class OrcaBot {
         usd: item.usd == null ? null : Number(item.usd),
         debtUsd: item.debtUsd == null ? null : Number(item.debtUsd),
         avgPriceUsdc: item.avgPriceUsdc == null ? null : Number(item.avgPriceUsdc),
-        targetPriceUsdc: item.targetPriceUsdc == null ? null : Number(item.targetPriceUsdc)
+        targetPriceUsdc: item.targetPriceUsdc == null ? null : Number(item.targetPriceUsdc),
+        currentPriceUsdc: item.currentPriceUsdc == null ? null : Number(item.currentPriceUsdc),
+        gapToTargetPct: item.gapToTargetPct == null ? null : Number(item.gapToTargetPct),
+        currentUsd: item.currentUsd == null ? null : Number(item.currentUsd),
+        pnlUsd: item.pnlUsd == null ? null : Number(item.pnlUsd)
       })).filter((item) => item.mint && Number.isFinite(item.amount))
       : [];
     if (collaterals.length === 0 && state.collateralMint) {
@@ -1816,6 +1821,67 @@ export class OrcaBot {
       : null;
     this.lastStatus.kaminoLastError = stateError ?? fallbackError;
     this.lastStatus.kaminoSimulated = this.isKaminoSimulated();
+  }
+
+  private async refreshKaminoCollateralMetrics(): Promise<void> {
+    const state = this.kaminoState;
+    if (!state?.active) {
+      return;
+    }
+    const collaterals = Array.isArray(state.collaterals) ? state.collaterals : [];
+    if (!collaterals.length) {
+      return;
+    }
+    let stable: { mint: string; decimals: number; label: string } | null = null;
+    try {
+      const debtMint = state.debtMint ?? null;
+      if (debtMint) {
+        stable = await this.getStableMintInfoByMint(debtMint, this.getStableLabelForMint(debtMint));
+      } else {
+        stable = await this.getStableMintInfo();
+      }
+    } catch (err) {
+      logger.warn({ err }, "falha ao resolver stable para Kamino");
+    }
+    const nextCollaterals: KaminoCollateralEntry[] = [];
+    for (const entry of collaterals) {
+      let currentPriceUsdc: number | null = null;
+      let gapToTargetPct: number | null = null;
+      let currentUsd: number | null = null;
+      let pnlUsd: number | null = null;
+      if (stable && this.config.jupiterApiKey) {
+        try {
+          const decimals = await this.getTokenDecimals(entry.mint);
+          currentPriceUsdc = await this.getTokenUsdPrice({
+            mint: entry.mint,
+            decimals,
+            stableMint: stable.mint,
+            stableDecimals: stable.decimals
+          });
+          const target = entry.targetPriceUsdc ?? null;
+          if (currentPriceUsdc != null && target != null && target > 0) {
+            const rawGap = (target - currentPriceUsdc) / target;
+            gapToTargetPct = rawGap > 0 ? rawGap : 0;
+          }
+          if (currentPriceUsdc != null && Number.isFinite(entry.amount)) {
+            currentUsd = currentPriceUsdc * entry.amount;
+            if (entry.usd != null && Number.isFinite(entry.usd)) {
+              pnlUsd = currentUsd - entry.usd;
+            }
+          }
+        } catch (err) {
+          logger.warn({ err, mint: entry.mint }, "falha ao calcular preco atual Kamino");
+        }
+      }
+      nextCollaterals.push({
+        ...entry,
+        currentPriceUsdc,
+        gapToTargetPct,
+        currentUsd,
+        pnlUsd
+      });
+    }
+    this.lastStatus.kaminoCollaterals = nextCollaterals;
   }
 
   private async reconcileKaminoState(): Promise<void> {
@@ -2515,7 +2581,43 @@ export class OrcaBot {
       });
     };
 
-    const balances = await this.getTokenBalances();
+    let balances = await this.getTokenBalances();
+    const collateralMode = this.config.kaminoCollateralMode ?? "max-value";
+    if (this.config.kaminoConvertToCollateral && (collateralMode === "tokenA" || collateralMode === "tokenB")) {
+      const tokenAMint = this.poolState.tokenMintA.toBase58();
+      const tokenBMint = this.poolState.tokenMintB.toBase58();
+      const targetMint = collateralMode === "tokenA" ? tokenAMint : tokenBMint;
+      const sourceMint = collateralMode === "tokenA" ? tokenBMint : tokenAMint;
+      const sourceDecimals = collateralMode === "tokenA" ? this.poolState.decimalsB : this.poolState.decimalsA;
+      const sourceAmount = collateralMode === "tokenA" ? balances.tokenB : balances.tokenA;
+      if (sourceAmount > 0) {
+        if (this.isSwapAllowlistActive() && !this.isSwapAllowed(sourceMint)) {
+          this.setError("Token de origem nao permitido para swap em colateral fixo");
+          return "kamino-rebalance-failed";
+        }
+        const amountRaw = toRawAmount(sourceAmount, sourceDecimals);
+        if (!isValidU64(amountRaw)) {
+          this.setError("Quantidade de swap fora do range para colateral fixo");
+          return "kamino-rebalance-failed";
+        }
+        const quote = await this.fetchJupiterQuoteExactInDetailed(
+          sourceMint,
+          targetMint,
+          amountRaw.toString(),
+          this.config.slippageBps ?? 50
+        );
+        if (!quote.quote) {
+          this.setError(`Sem rota Jupiter para converter colateral${quote.error ? ": " + quote.error : ""}`);
+          return "kamino-rebalance-failed";
+        }
+        const swapResult = await this.executeJupiterSwapDetailed(quote.quote);
+        if (!swapResult.sig) {
+          this.setError(swapResult.error ?? "Falha na swap Jupiter");
+          return "kamino-rebalance-failed";
+        }
+        balances = await this.getTokenBalances();
+      }
+    }
     let exitTokens: Awaited<ReturnType<typeof resolveTokens>>;
     try {
       exitTokens = await resolveTokens(balances);
@@ -2747,6 +2849,8 @@ export class OrcaBot {
         nextMap.set(entry.mint, { ...entry });
       }
     }
+    const avgBasis = this.config.kaminoAvgPriceBasis ?? "deposit";
+    const avgMode = this.config.kaminoAvgMode ?? "cumulative";
     for (const entry of deposits) {
       const share = totalDepositUsd > 0 ? (entry.depositUsd ?? 0) / totalDepositUsd : 0;
       const debtUsd = borrowUsd * share;
@@ -2758,10 +2862,14 @@ export class OrcaBot {
         avgPriceUsdc: null,
         targetPriceUsdc: null
       };
-      const nextAmount = (prev.amount ?? 0) + entry.depositAmount;
-      const nextUsd = (prev.usd ?? 0) + (entry.depositUsd ?? 0);
-      const nextDebtUsd = (prev.debtUsd ?? 0) + debtUsd;
-      const avgPriceUsdc = nextAmount > 0 ? nextDebtUsd / nextAmount : null;
+      const baseAmount = avgMode === "reset" ? 0 : (prev.amount ?? 0);
+      const baseUsd = avgMode === "reset" ? 0 : (prev.usd ?? 0);
+      const baseDebtUsd = avgMode === "reset" ? 0 : (prev.debtUsd ?? 0);
+      const nextAmount = baseAmount + entry.depositAmount;
+      const nextUsd = baseUsd + (entry.depositUsd ?? 0);
+      const nextDebtUsd = baseDebtUsd + debtUsd;
+      const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
+      const avgPriceUsdc = nextAmount > 0 ? avgNumerator / nextAmount : null;
       const targetPriceUsdc = avgPriceUsdc != null
         ? avgPriceUsdc * (1 + (this.config.kaminoPriceBufferPct ?? 0) / 100)
         : null;

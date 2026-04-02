@@ -37,6 +37,8 @@ const kaminoCycleCountEl = document.getElementById("kaminoCycleCount");
 const kaminoSimulatedEl = document.getElementById("kaminoSimulated");
 const kaminoLastErrorEl = document.getElementById("kaminoLastError");
 const kaminoCollateralsEl = document.getElementById("kaminoCollaterals");
+const kaminoPoolNameEl = document.getElementById("kaminoPoolName");
+const kaminoAvgModeHintEl = document.getElementById("kaminoAvgModeHint");
 const kaminoTestTokenSelect = document.getElementById("kaminoTestToken");
 const kaminoTestMintInput = document.getElementById("kaminoTestMint");
 const kaminoTestAmountInput = document.getElementById("kaminoTestAmount");
@@ -68,6 +70,9 @@ const poolKaminoMaxLtvInput = document.getElementById("poolKaminoMaxLtv");
 const poolKaminoCloseRuleInput = document.getElementById("poolKaminoCloseRule");
 const poolKaminoPriceBufferInput = document.getElementById("poolKaminoPriceBuffer");
 const poolKaminoCollateralModeInput = document.getElementById("poolKaminoCollateralMode");
+const poolKaminoConvertInput = document.getElementById("poolKaminoConvert");
+const poolKaminoAvgBasisInput = document.getElementById("poolKaminoAvgBasis");
+const poolKaminoAvgModeInput = document.getElementById("poolKaminoAvgMode");
 const poolKaminoAutoCloseInput = document.getElementById("poolKaminoAutoClose");
 const poolHedgeEnabledInput = document.getElementById("poolHedgeEnabled");
 const poolHedgePctInput = document.getElementById("poolHedgePct");
@@ -100,6 +105,9 @@ const editPoolKaminoMaxLtvInput = document.getElementById("editPoolKaminoMaxLtv"
 const editPoolKaminoCloseRuleInput = document.getElementById("editPoolKaminoCloseRule");
 const editPoolKaminoPriceBufferInput = document.getElementById("editPoolKaminoPriceBuffer");
 const editPoolKaminoCollateralModeInput = document.getElementById("editPoolKaminoCollateralMode");
+const editPoolKaminoConvertInput = document.getElementById("editPoolKaminoConvert");
+const editPoolKaminoAvgBasisInput = document.getElementById("editPoolKaminoAvgBasis");
+const editPoolKaminoAvgModeInput = document.getElementById("editPoolKaminoAvgMode");
 const editPoolKaminoAutoCloseInput = document.getElementById("editPoolKaminoAutoClose");
 const editPoolHedgeEnabledInput = document.getElementById("editPoolHedgeEnabled");
 const editPoolHedgePctInput = document.getElementById("editPoolHedgePct");
@@ -323,20 +331,27 @@ function formatMintLabel(mint) {
   return KNOWN_MINT_LABELS[mint] ?? shortMint(mint);
 }
 
-function renderKaminoCollaterals(items) {
+function renderKaminoCollaterals(items, active) {
   if (!kaminoCollateralsEl) return;
   const list = Array.isArray(items) ? items : [];
+  if (!active) {
+    kaminoCollateralsEl.innerHTML = "<div class=\"kv\"><span>Kamino</span><span>Sem ciclo Kamino ativo nesta pool.</span></div>";
+    return;
+  }
   if (list.length === 0) {
     kaminoCollateralsEl.innerHTML = "<div class=\"kv\"><span>Tokens</span><span>-</span></div>";
     return;
   }
   const rows = list.map((entry) => {
     const label = formatMintLabel(entry?.mint) || shortMint(entry?.mint ?? "");
-    const colUsd = formatNumber(entry?.usd, 2);
-    const debtUsd = formatNumber(entry?.debtUsd, 2);
+    const depositUsd = formatNumber(entry?.usd, 2);
+    const currentUsd = formatNumber(entry?.currentUsd, 2);
+    const pnlUsd = formatNumber(entry?.pnlUsd, 2);
     const avg = formatNumber(entry?.avgPriceUsdc, 6);
     const target = formatNumber(entry?.targetPriceUsdc, 6);
-    const text = `Col ${colUsd} / Dívida ${debtUsd} / Média ${avg} / Alvo ${target}`;
+    const current = formatNumber(entry?.currentPriceUsdc, 6);
+    const gapPct = entry?.gapToTargetPct != null ? `${formatNumber(entry.gapToTargetPct * 100, 2)}%` : "-";
+    const text = `Deposito ${depositUsd} / Atual ${currentUsd} / PnL ${pnlUsd} / Media ${avg} / Alvo ${target} / Preco ${current} / Falta ${gapPct}`;
     return `<div class="kv"><span>${escapeHtml(label)}</span><span>${escapeHtml(text)}</span></div>`;
   });
   kaminoCollateralsEl.innerHTML = rows.join("");
@@ -813,6 +828,24 @@ function parseKaminoCollateralModeInput(value) {
   return null;
 }
 
+function parseKaminoAvgBasisInput(value) {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "deposit") return "deposit";
+  if (trimmed === "debt") return "debt";
+  return null;
+}
+
+function parseKaminoAvgModeInput(value) {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "cumulative") return "cumulative";
+  if (trimmed === "reset") return "reset";
+  return null;
+}
+
 function formatTrendBadge(pool, usageLabel) {
   if (!usageLabel) {
     return "<span class=\"trend-badge trend-off\">Desativado</span>";
@@ -1035,6 +1068,9 @@ function openEditPoolModal(pool) {
   const defaultKaminoPriceBuffer = cachedConfig?.kaminoPriceBufferPct ?? "-";
   const defaultKaminoCollateralMode = cachedConfig?.kaminoCollateralMode ?? "max-value";
   const defaultKaminoAutoClose = cachedConfig?.kaminoAutoCloseOnTokenChange ?? true;
+  const defaultKaminoConvert = cachedConfig?.kaminoConvertToCollateral ?? false;
+  const defaultKaminoAvgBasis = cachedConfig?.kaminoAvgPriceBasis ?? "deposit";
+  const defaultKaminoAvgMode = cachedConfig?.kaminoAvgMode ?? "cumulative";
   const defaultHedgePct = cachedConfig?.hedgePct ?? "-";
   const defaultHedgeMarginPct = cachedConfig?.hedgeMarginPct ?? "-";
   const defaultHedgeSymbol = cachedConfig?.hedgeSymbol ?? "-";
@@ -1086,6 +1122,22 @@ function openEditPoolModal(pool) {
   if (editPoolKaminoCollateralModeInput) {
     editPoolKaminoCollateralModeInput.value = overrides.kaminoCollateralMode ?? "";
     setSelectPlaceholder(editPoolKaminoCollateralModeInput, `Padrão (${defaultKaminoCollateralMode})`);
+  }
+  if (editPoolKaminoConvertInput) {
+    editPoolKaminoConvertInput.value = overrides.kaminoConvertToCollateral === undefined
+      ? ""
+      : String(overrides.kaminoConvertToCollateral);
+    setSelectPlaceholder(editPoolKaminoConvertInput, `Padrão (${defaultKaminoConvert ? "Sim" : "Não"})`);
+  }
+  if (editPoolKaminoAvgBasisInput) {
+    editPoolKaminoAvgBasisInput.value = overrides.kaminoAvgPriceBasis ?? "";
+    const basisLabel = defaultKaminoAvgBasis === "debt" ? "Dívida" : "Depósito";
+    setSelectPlaceholder(editPoolKaminoAvgBasisInput, `Padrão (${basisLabel})`);
+  }
+  if (editPoolKaminoAvgModeInput) {
+    editPoolKaminoAvgModeInput.value = overrides.kaminoAvgMode ?? "";
+    const modeLabel = defaultKaminoAvgMode === "reset" ? "Último depósito" : "Cumulativa";
+    setSelectPlaceholder(editPoolKaminoAvgModeInput, `Padrão (${modeLabel})`);
   }
   if (editPoolKaminoAutoCloseInput) {
     editPoolKaminoAutoCloseInput.value = overrides.kaminoAutoCloseOnTokenChange === undefined
@@ -1520,6 +1572,10 @@ async function updateUI() {
       hedgeErrorEl.textContent = status.hedgeLastError ?? "-";
     }
     const tokenInfo = getTokenInfo(config);
+    const selectedPool = Array.isArray(pools)
+      ? pools.find((item) => item.id === config.selectedPoolId)
+      : null;
+    const selectedOverrides = selectedPool?.overrides ?? {};
 
     priceEl.textContent = formatNumber(normalizeDisplayPrice(status.lastPrice, tokenInfo), 8);
     targetRangeEl.textContent = formatRange(status.targetRange, tokenInfo);
@@ -1536,6 +1592,9 @@ async function updateUI() {
     networkEl.textContent = config.network ?? "-";
     whirlpoolEl.textContent = config.whirlpoolAddress ?? "-";
     poolNameLabel.textContent = config.poolName ?? "-";
+    if (kaminoPoolNameEl) {
+      kaminoPoolNameEl.textContent = config.poolName ?? "-";
+    }
     rangePctEl.textContent = config.rangeWidthPct ?? "-";
     slippageEl.textContent = config.slippageBps ?? "-";
     pollEl.textContent = config.pollIntervalMs ?? "-";
@@ -1570,13 +1629,19 @@ async function updateUI() {
     if (kaminoTargetPriceEl) {
       kaminoTargetPriceEl.textContent = formatNumber(status.kaminoTargetPriceUsdc, 6);
     }
+    if (kaminoAvgModeHintEl) {
+      const mode = selectedOverrides.kaminoAvgMode ?? config.kaminoAvgMode ?? "cumulative";
+      kaminoAvgModeHintEl.textContent = mode === "reset"
+        ? "Preco medio (ultimo deposito)"
+        : "Preco medio (cumulativo desde o inicio do ciclo)";
+    }
     if (kaminoCycleCountEl) {
       kaminoCycleCountEl.textContent = status.kaminoCycleCount ?? "-";
     }
     if (kaminoLastErrorEl) {
       kaminoLastErrorEl.textContent = status.kaminoLastError ? String(status.kaminoLastError) : "-";
     }
-    renderKaminoCollaterals(status.kaminoCollaterals);
+    renderKaminoCollaterals(status.kaminoCollaterals, status.kaminoActive);
     if (kaminoCloseBtn) {
       kaminoCloseBtn.disabled = !status.kaminoActive;
     }
@@ -1633,6 +1698,20 @@ async function updateUI() {
     }
     if (poolKaminoCollateralModeInput) {
       setSelectPlaceholder(poolKaminoCollateralModeInput, `Padrão (${config.kaminoCollateralMode ?? "max-value"})`);
+    }
+    if (poolKaminoConvertInput) {
+      setSelectPlaceholder(
+        poolKaminoConvertInput,
+        `Padrão (${config.kaminoConvertToCollateral ? "Sim" : "Não"})`
+      );
+    }
+    if (poolKaminoAvgBasisInput) {
+      const basisLabel = (config.kaminoAvgPriceBasis ?? "deposit") === "debt" ? "Dívida" : "Depósito";
+      setSelectPlaceholder(poolKaminoAvgBasisInput, `Padrão (${basisLabel})`);
+    }
+    if (poolKaminoAvgModeInput) {
+      const modeLabel = (config.kaminoAvgMode ?? "cumulative") === "reset" ? "Último depósito" : "Cumulativa";
+      setSelectPlaceholder(poolKaminoAvgModeInput, `Padrão (${modeLabel})`);
     }
     if (poolKaminoAutoCloseInput) {
       setSelectPlaceholder(
@@ -1862,6 +1941,9 @@ addPoolBtn.addEventListener("click", async () => {
   const kaminoCloseRuleRaw = poolKaminoCloseRuleInput?.value ?? "";
   const kaminoPriceBuffer = parseOptionalNumber(poolKaminoPriceBufferInput?.value);
   const kaminoCollateralModeRaw = poolKaminoCollateralModeInput?.value ?? "";
+  const kaminoConvertRaw = poolKaminoConvertInput?.value ?? "";
+  const kaminoAvgBasisRaw = poolKaminoAvgBasisInput?.value ?? "";
+  const kaminoAvgModeRaw = poolKaminoAvgModeInput?.value ?? "";
   const kaminoAutoCloseRaw = poolKaminoAutoCloseInput?.value ?? "";
   const hedgeEnabledRaw = poolHedgeEnabledInput?.value ?? "";
   const hedgePct = parseOptionalNumber(poolHedgePctInput?.value);
@@ -1966,6 +2048,27 @@ addPoolBtn.addEventListener("click", async () => {
       }
       overrides.kaminoCollateralMode = parsed;
     }
+    if (kaminoConvertRaw) {
+      const parsed = parseTrendEnabledInput(kaminoConvertRaw);
+      if (parsed === null) {
+        throw new Error("Converter para colateral fixo inválido. Use Sim ou Não.");
+      }
+      overrides.kaminoConvertToCollateral = parsed;
+    }
+    if (kaminoAvgBasisRaw) {
+      const parsed = parseKaminoAvgBasisInput(kaminoAvgBasisRaw);
+      if (!parsed) {
+        throw new Error("Kamino base do preço médio inválida.");
+      }
+      overrides.kaminoAvgPriceBasis = parsed;
+    }
+    if (kaminoAvgModeRaw) {
+      const parsed = parseKaminoAvgModeInput(kaminoAvgModeRaw);
+      if (!parsed) {
+        throw new Error("Kamino modo da média inválido.");
+      }
+      overrides.kaminoAvgMode = parsed;
+    }
     if (kaminoAutoCloseRaw) {
       const parsed = parseTrendEnabledInput(kaminoAutoCloseRaw);
       if (parsed === null) {
@@ -2024,6 +2127,9 @@ addPoolBtn.addEventListener("click", async () => {
     if (poolKaminoCloseRuleInput) poolKaminoCloseRuleInput.value = "";
     if (poolKaminoPriceBufferInput) poolKaminoPriceBufferInput.value = "";
     if (poolKaminoCollateralModeInput) poolKaminoCollateralModeInput.value = "";
+    if (poolKaminoConvertInput) poolKaminoConvertInput.value = "";
+    if (poolKaminoAvgBasisInput) poolKaminoAvgBasisInput.value = "";
+    if (poolKaminoAvgModeInput) poolKaminoAvgModeInput.value = "";
     if (poolKaminoAutoCloseInput) poolKaminoAutoCloseInput.value = "";
     if (poolHedgeEnabledInput) poolHedgeEnabledInput.value = "";
     if (poolHedgePctInput) poolHedgePctInput.value = "";
@@ -2206,6 +2312,51 @@ if (editPoolForm) {
         return;
       }
       overrides.kaminoCollateralMode = parsed;
+    }
+
+    const kaminoConvertRaw = editPoolKaminoConvertInput?.value ?? "";
+    if (!kaminoConvertRaw) {
+      overrides.kaminoConvertToCollateral = null;
+    } else {
+      const parsed = parseTrendEnabledInput(kaminoConvertRaw);
+      if (parsed === null) {
+        if (editPoolError) {
+          editPoolError.textContent = "Converter para colateral fixo inválido. Use Sim ou Não.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.kaminoConvertToCollateral = parsed;
+    }
+
+    const kaminoAvgBasisRaw = editPoolKaminoAvgBasisInput?.value ?? "";
+    if (!kaminoAvgBasisRaw) {
+      overrides.kaminoAvgPriceBasis = null;
+    } else {
+      const parsed = parseKaminoAvgBasisInput(kaminoAvgBasisRaw);
+      if (!parsed) {
+        if (editPoolError) {
+          editPoolError.textContent = "Kamino base do preço médio inválida.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.kaminoAvgPriceBasis = parsed;
+    }
+
+    const kaminoAvgModeRaw = editPoolKaminoAvgModeInput?.value ?? "";
+    if (!kaminoAvgModeRaw) {
+      overrides.kaminoAvgMode = null;
+    } else {
+      const parsed = parseKaminoAvgModeInput(kaminoAvgModeRaw);
+      if (!parsed) {
+        if (editPoolError) {
+          editPoolError.textContent = "Kamino modo da média inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.kaminoAvgMode = parsed;
     }
 
     const kaminoAutoCloseRaw = editPoolKaminoAutoCloseInput?.value ?? "";

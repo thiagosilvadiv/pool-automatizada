@@ -44,6 +44,9 @@ export type Config = {
   kaminoPriceBufferPct: number;
   kaminoCollateralMode: "exit" | "max-value" | "tokenA" | "tokenB" | "both";
   kaminoAutoCloseOnTokenChange: boolean;
+  kaminoConvertToCollateral: boolean;
+  kaminoAvgPriceBasis: "deposit" | "debt";
+  kaminoAvgMode: "cumulative" | "reset";
   autoResumeEnabled: boolean;
   autoResumeMaxAttempts: number;
   autoResumeBaseDelayMs: number;
@@ -239,6 +242,26 @@ function parseKaminoCollateralMode(value: unknown): "exit" | "max-value" | "toke
   return undefined;
 }
 
+function parseKaminoAvgPriceBasis(value: unknown): "deposit" | "debt" | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "deposit") return "deposit";
+  if (trimmed === "debt") return "debt";
+  return undefined;
+}
+
+function parseKaminoAvgMode(value: unknown): "cumulative" | "reset" | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "cumulative") return "cumulative";
+  if (trimmed === "reset") return "reset";
+  return undefined;
+}
+
 function timeframeToSeconds(timeframe: TrendTimeframe): number {
   switch (timeframe) {
     case "1m":
@@ -340,6 +363,28 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     throw new Error("kaminoCollateralMode must be exit, max-value, tokenA, tokenB, or both");
   }
 
+  const envKaminoAvgPriceBasisRaw = process.env.KAMINO_AVG_PRICE_BASIS ?? "";
+  const envKaminoAvgPriceBasis = parseKaminoAvgPriceBasis(envKaminoAvgPriceBasisRaw);
+  if (envKaminoAvgPriceBasisRaw && !envKaminoAvgPriceBasis) {
+    throw new Error("KAMINO_AVG_PRICE_BASIS must be deposit or debt");
+  }
+  const dataKaminoAvgPriceBasisRaw = (data as any).kaminoAvgPriceBasis;
+  const dataKaminoAvgPriceBasis = parseKaminoAvgPriceBasis(dataKaminoAvgPriceBasisRaw);
+  if (dataKaminoAvgPriceBasisRaw != null && dataKaminoAvgPriceBasis === undefined) {
+    throw new Error("kaminoAvgPriceBasis must be deposit or debt");
+  }
+
+  const envKaminoAvgModeRaw = process.env.KAMINO_AVG_MODE ?? "";
+  const envKaminoAvgMode = parseKaminoAvgMode(envKaminoAvgModeRaw);
+  if (envKaminoAvgModeRaw && !envKaminoAvgMode) {
+    throw new Error("KAMINO_AVG_MODE must be cumulative or reset");
+  }
+  const dataKaminoAvgModeRaw = (data as any).kaminoAvgMode;
+  const dataKaminoAvgMode = parseKaminoAvgMode(dataKaminoAvgModeRaw);
+  if (dataKaminoAvgModeRaw != null && dataKaminoAvgMode === undefined) {
+    throw new Error("kaminoAvgMode must be cumulative or reset");
+  }
+
   const envTrendTimeframeRaw = process.env.TREND_TIMEFRAME ?? "";
   const envTrendTimeframe = parseTrendTimeframe(envTrendTimeframeRaw);
   if (envTrendTimeframeRaw && !envTrendTimeframe) {
@@ -419,6 +464,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     ?? Number((data as any).autoResumeBaseDelayMs ?? 5000);
   const kaminoAutoCloseOnTokenChange = parseEnvBool(process.env.KAMINO_AUTO_CLOSE_ON_TOKEN_CHANGE)
     ?? Boolean((data as any).kaminoAutoCloseOnTokenChange ?? true);
+  const kaminoConvertToCollateral = parseEnvBool(process.env.KAMINO_CONVERT_TO_COLLATERAL)
+    ?? Boolean((data as any).kaminoConvertToCollateral ?? false);
   const envNetwork = parseEnvString(process.env.NETWORK);
   const envRpcUrl = parseEnvString(process.env.RPC_URL);
   const envWhirlpoolAddress = parseEnvString(process.env.WHIRLPOOL_ADDRESS);
@@ -510,6 +557,13 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? dataKaminoCollateralMode
       ?? "max-value",
     kaminoAutoCloseOnTokenChange,
+    kaminoConvertToCollateral,
+    kaminoAvgPriceBasis: envKaminoAvgPriceBasis
+      ?? dataKaminoAvgPriceBasis
+      ?? "deposit",
+    kaminoAvgMode: envKaminoAvgMode
+      ?? dataKaminoAvgMode
+      ?? "cumulative",
     autoResumeEnabled,
     autoResumeMaxAttempts: Number(autoResumeMaxAttempts),
     autoResumeBaseDelayMs: Number(autoResumeBaseDelayMs),
@@ -663,6 +717,15 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (typeof config.kaminoAutoCloseOnTokenChange !== "boolean") {
     throw new Error("kaminoAutoCloseOnTokenChange must be boolean");
+  }
+  if (typeof config.kaminoConvertToCollateral !== "boolean") {
+    throw new Error("kaminoConvertToCollateral must be boolean");
+  }
+  if (!parseKaminoAvgPriceBasis(config.kaminoAvgPriceBasis)) {
+    throw new Error("kaminoAvgPriceBasis must be deposit or debt");
+  }
+  if (!parseKaminoAvgMode(config.kaminoAvgMode)) {
+    throw new Error("kaminoAvgMode must be cumulative or reset");
   }
   if (!Number.isFinite(config.minSolBalance) || config.minSolBalance < 0) {
     throw new Error("minSolBalance must be >= 0");

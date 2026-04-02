@@ -9,6 +9,10 @@ export type KaminoCollateralEntry = {
   debtUsd: number | null;
   avgPriceUsdc: number | null;
   targetPriceUsdc: number | null;
+  currentPriceUsdc?: number | null;
+  gapToTargetPct?: number | null;
+  currentUsd?: number | null;
+  pnlUsd?: number | null;
 };
 
 export type KaminoCycleState = {

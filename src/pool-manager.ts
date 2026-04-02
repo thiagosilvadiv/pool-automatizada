@@ -48,6 +48,9 @@ export type PoolOverrides = {
   kaminoPriceBufferPct?: number;
   kaminoCollateralMode?: "exit" | "max-value" | "tokenA" | "tokenB" | "both";
   kaminoAutoCloseOnTokenChange?: boolean;
+  kaminoConvertToCollateral?: boolean;
+  kaminoAvgPriceBasis?: "deposit" | "debt";
+  kaminoAvgMode?: "cumulative" | "reset";
   hedgeEnabled?: boolean;
   hedgePct?: number;
   hedgeSymbol?: string;
@@ -1221,6 +1224,41 @@ export class PoolManager {
       normalized.kaminoAutoCloseOnTokenChange = value;
     }
 
+    if (overrides.kaminoConvertToCollateral != null) {
+      const raw = overrides.kaminoConvertToCollateral as unknown;
+      let value: boolean | null = null;
+      if (typeof raw === "boolean") {
+        value = raw;
+      } else if (typeof raw === "string") {
+        const normalizedValue = raw.trim().toLowerCase();
+        if (["true", "1", "yes", "sim", "on"].includes(normalizedValue)) {
+          value = true;
+        } else if (["false", "0", "no", "nao", "nÃ£o", "off"].includes(normalizedValue)) {
+          value = false;
+        }
+      }
+      if (value === null) {
+        throw new Error("kaminoConvertToCollateral override must be boolean");
+      }
+      normalized.kaminoConvertToCollateral = value;
+    }
+
+    if (overrides.kaminoAvgPriceBasis != null) {
+      const value = String(overrides.kaminoAvgPriceBasis).trim().toLowerCase();
+      if (!["deposit", "debt"].includes(value)) {
+        throw new Error("kaminoAvgPriceBasis override must be deposit or debt");
+      }
+      normalized.kaminoAvgPriceBasis = value as PoolOverrides["kaminoAvgPriceBasis"];
+    }
+
+    if (overrides.kaminoAvgMode != null) {
+      const value = String(overrides.kaminoAvgMode).trim().toLowerCase();
+      if (!["cumulative", "reset"].includes(value)) {
+        throw new Error("kaminoAvgMode override must be cumulative or reset");
+      }
+      normalized.kaminoAvgMode = value as PoolOverrides["kaminoAvgMode"];
+    }
+
     if (overrides.hedgeEnabled != null) {
       const raw = overrides.hedgeEnabled as unknown;
       let value: boolean | null = null;
@@ -1591,6 +1629,53 @@ export class PoolManager {
           throw new Error("kaminoAutoCloseOnTokenChange override must be boolean");
         }
         next.kaminoAutoCloseOnTokenChange = value;
+      }
+    }
+
+    if ("kaminoConvertToCollateral" in updates) {
+      if (updates.kaminoConvertToCollateral == null) {
+        delete next.kaminoConvertToCollateral;
+      } else {
+        const raw = updates.kaminoConvertToCollateral as unknown;
+        let value: boolean | null = null;
+        if (typeof raw === "boolean") {
+          value = raw;
+        } else if (typeof raw === "string") {
+          const normalizedValue = raw.trim().toLowerCase();
+          if (["true", "1", "yes", "sim", "on"].includes(normalizedValue)) {
+            value = true;
+          } else if (["false", "0", "no", "nao", "nÃ£o", "off"].includes(normalizedValue)) {
+            value = false;
+          }
+        }
+        if (value === null) {
+          throw new Error("kaminoConvertToCollateral override must be boolean");
+        }
+        next.kaminoConvertToCollateral = value;
+      }
+    }
+
+    if ("kaminoAvgPriceBasis" in updates) {
+      if (updates.kaminoAvgPriceBasis == null) {
+        delete next.kaminoAvgPriceBasis;
+      } else {
+        const value = String(updates.kaminoAvgPriceBasis).trim().toLowerCase();
+        if (!["deposit", "debt"].includes(value)) {
+          throw new Error("kaminoAvgPriceBasis override must be deposit or debt");
+        }
+        next.kaminoAvgPriceBasis = value as PoolOverrides["kaminoAvgPriceBasis"];
+      }
+    }
+
+    if ("kaminoAvgMode" in updates) {
+      if (updates.kaminoAvgMode == null) {
+        delete next.kaminoAvgMode;
+      } else {
+        const value = String(updates.kaminoAvgMode).trim().toLowerCase();
+        if (!["cumulative", "reset"].includes(value)) {
+          throw new Error("kaminoAvgMode override must be cumulative or reset");
+        }
+        next.kaminoAvgMode = value as PoolOverrides["kaminoAvgMode"];
       }
     }
 
