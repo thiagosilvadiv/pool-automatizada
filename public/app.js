@@ -63,6 +63,7 @@ const poolAutoAddEnabledInput = document.getElementById("poolAutoAddEnabled");
 const poolKaminoEnabledInput = document.getElementById("poolKaminoEnabled");
 const poolKaminoDepositPctInput = document.getElementById("poolKaminoDepositPct");
 const poolKaminoBorrowAssetInput = document.getElementById("poolKaminoBorrowAsset");
+const poolKaminoMarketInput = document.getElementById("poolKaminoMarket");
 const poolKaminoMaxLtvInput = document.getElementById("poolKaminoMaxLtv");
 const poolKaminoCloseRuleInput = document.getElementById("poolKaminoCloseRule");
 const poolKaminoPriceBufferInput = document.getElementById("poolKaminoPriceBuffer");
@@ -94,6 +95,7 @@ const editPoolAutoAddEnabledInput = document.getElementById("editPoolAutoAddEnab
 const editPoolKaminoEnabledInput = document.getElementById("editPoolKaminoEnabled");
 const editPoolKaminoDepositPctInput = document.getElementById("editPoolKaminoDepositPct");
 const editPoolKaminoBorrowAssetInput = document.getElementById("editPoolKaminoBorrowAsset");
+const editPoolKaminoMarketInput = document.getElementById("editPoolKaminoMarket");
 const editPoolKaminoMaxLtvInput = document.getElementById("editPoolKaminoMaxLtv");
 const editPoolKaminoCloseRuleInput = document.getElementById("editPoolKaminoCloseRule");
 const editPoolKaminoPriceBufferInput = document.getElementById("editPoolKaminoPriceBuffer");
@@ -120,6 +122,9 @@ let activeActionMenu = null;
 let swapErrorDetails = [];
 let historyEditState = null;
 let historyEditPendingRender = false;
+let cachedKaminoMarkets = [];
+let kaminoMarketsLoaded = false;
+let kaminoMarketsLoading = false;
 
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
@@ -630,6 +635,11 @@ async function fetchPools() {
   return res.json();
 }
 
+async function fetchKaminoMarkets() {
+  const res = await fetch("/api/kamino/markets");
+  return res.json();
+}
+
 let hedgeSymbolsLoaded = false;
 let hedgeSymbolsLoading = false;
 
@@ -655,6 +665,60 @@ async function ensureHedgeSymbolsLoaded() {
     hedgeSymbolsLoaded = true;
   } finally {
     hedgeSymbolsLoading = false;
+  }
+}
+
+function formatMarketAddress(address) {
+  const value = String(address ?? "").trim();
+  if (!value) return "-";
+  if (value.length <= 12) return value;
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function getKaminoMarketPlaceholderLabel(config) {
+  const addr = config?.kaminoMarketAddress ?? "";
+  if (!addr) return "Padrao (KAMINO_MARKET)";
+  return `Padrao (${formatMarketAddress(addr)})`;
+}
+
+function renderKaminoMarketOptions() {
+  const selects = [poolKaminoMarketInput, editPoolKaminoMarketInput].filter((el) => el instanceof HTMLSelectElement);
+  if (!selects.length) return;
+  const options = cachedKaminoMarkets.map((entry) => {
+    const name = entry?.name ?? "Market";
+    const address = entry?.address ?? "";
+    const label = address ? `${name} (${formatMarketAddress(address)})` : name;
+    return `<option value="${escapeHtml(address)}">${escapeHtml(label)}</option>`;
+  }).join("");
+  selects.forEach((select) => {
+    const current = select.value;
+    select.innerHTML = `<option value="">${escapeHtml(getKaminoMarketPlaceholderLabel(cachedConfig))}</option>${options}`;
+    if (current && cachedKaminoMarkets.some((entry) => entry.address === current)) {
+      select.value = current;
+    } else {
+      select.value = "";
+    }
+  });
+}
+
+function updateKaminoMarketPlaceholder(config) {
+  const label = getKaminoMarketPlaceholderLabel(config);
+  setSelectPlaceholder(poolKaminoMarketInput, label);
+  setSelectPlaceholder(editPoolKaminoMarketInput, label);
+}
+
+async function ensureKaminoMarketsLoaded() {
+  if (kaminoMarketsLoaded || kaminoMarketsLoading) {
+    return;
+  }
+  kaminoMarketsLoading = true;
+  try {
+    const data = await fetchKaminoMarkets().catch(() => null);
+    cachedKaminoMarkets = Array.isArray(data?.markets) ? data.markets : [];
+    kaminoMarketsLoaded = true;
+    renderKaminoMarketOptions();
+  } finally {
+    kaminoMarketsLoading = false;
   }
 }
 
@@ -1001,6 +1065,10 @@ function openEditPoolModal(pool) {
   if (editPoolKaminoBorrowAssetInput) {
     editPoolKaminoBorrowAssetInput.value = overrides.kaminoBorrowAsset ?? "";
     setSelectPlaceholder(editPoolKaminoBorrowAssetInput, `Padrão (${defaultKaminoBorrowAsset.toUpperCase?.() ?? defaultKaminoBorrowAsset})`);
+  }
+  if (editPoolKaminoMarketInput) {
+    editPoolKaminoMarketInput.value = overrides.kaminoMarketAddress ?? "";
+    setSelectPlaceholder(editPoolKaminoMarketInput, getKaminoMarketPlaceholderLabel(cachedConfig));
   }
   if (editPoolKaminoMaxLtvInput) {
     editPoolKaminoMaxLtvInput.value = overrides.kaminoMaxLtv ?? "";
@@ -1552,6 +1620,10 @@ async function updateUI() {
       const label = (config.kaminoBorrowAsset ?? "usdc").toUpperCase?.() ?? config.kaminoBorrowAsset;
       setSelectPlaceholder(poolKaminoBorrowAssetInput, `Padrão (${label})`);
     }
+    updateKaminoMarketPlaceholder(config);
+    if (!kaminoMarketsLoaded) {
+      void ensureKaminoMarketsLoaded();
+    }
     if (poolKaminoCloseRuleInput) {
       setSelectPlaceholder(poolKaminoCloseRuleInput, `Padrão (${config.kaminoCloseRule ?? "avg-price"})`);
     }
@@ -1767,6 +1839,7 @@ addPoolBtn.addEventListener("click", async () => {
   const kaminoEnabledRaw = poolKaminoEnabledInput?.value ?? "";
   const kaminoDepositPct = parseOptionalNumber(poolKaminoDepositPctInput?.value);
   const kaminoBorrowAssetRaw = poolKaminoBorrowAssetInput?.value ?? "";
+  const kaminoMarketRaw = poolKaminoMarketInput?.value?.trim() ?? "";
   const kaminoMaxLtv = parseOptionalNumber(poolKaminoMaxLtvInput?.value);
   const kaminoCloseRuleRaw = poolKaminoCloseRuleInput?.value ?? "";
   const kaminoPriceBuffer = parseOptionalNumber(poolKaminoPriceBufferInput?.value);
@@ -1852,6 +1925,9 @@ addPoolBtn.addEventListener("click", async () => {
       }
       overrides.kaminoBorrowAsset = parsed;
     }
+    if (kaminoMarketRaw) {
+      overrides.kaminoMarketAddress = kaminoMarketRaw;
+    }
     if (kaminoMaxLtv !== undefined) {
       overrides.kaminoMaxLtv = kaminoMaxLtv;
     }
@@ -1925,6 +2001,7 @@ addPoolBtn.addEventListener("click", async () => {
     if (poolKaminoEnabledInput) poolKaminoEnabledInput.value = "";
     if (poolKaminoDepositPctInput) poolKaminoDepositPctInput.value = "";
     if (poolKaminoBorrowAssetInput) poolKaminoBorrowAssetInput.value = "";
+    if (poolKaminoMarketInput) poolKaminoMarketInput.value = "";
     if (poolKaminoMaxLtvInput) poolKaminoMaxLtvInput.value = "";
     if (poolKaminoCloseRuleInput) poolKaminoCloseRuleInput.value = "";
     if (poolKaminoPriceBufferInput) poolKaminoPriceBufferInput.value = "";
@@ -2044,6 +2121,13 @@ if (editPoolForm) {
         return;
       }
       overrides.kaminoBorrowAsset = parsed;
+    }
+
+    const kaminoMarketRaw = editPoolKaminoMarketInput?.value?.trim() ?? "";
+    if (!kaminoMarketRaw) {
+      overrides.kaminoMarketAddress = null;
+    } else {
+      overrides.kaminoMarketAddress = kaminoMarketRaw;
     }
 
     const kaminoMaxLtvRaw = editPoolKaminoMaxLtvInput?.value?.trim() ?? "";
@@ -2754,6 +2838,7 @@ if (exportHistoryBtn) {
 }
 
 updateUI();
+ensureKaminoMarketsLoaded();
 applyHistoryColumnVisibility();
 syncHistoryTypeControls();
 syncHistoryRowLimit();

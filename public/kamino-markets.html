@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="pt-br">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orca Liquidity Bot - Kamino Markets</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Kamino Markets</h1>
+        <p class="subtitle">Cadastre o market da Kamino (endereco + apelido) para usar por pool.</p>
+        <nav class="nav">
+          <a href="/">Painel</a>
+          <a href="/analytics.html">Analises</a>
+          <a href="/charts.html">Graficos</a>
+          <a href="/allowlist.html">Tokens Permitidos</a>
+        </nav>
+      </header>
+
+      <section class="panel">
+        <h2>Cadastro</h2>
+        <input id="marketId" type="hidden" />
+        <div class="row wrap">
+          <div class="field">
+            <label for="marketName">Nome</label>
+            <input id="marketName" type="text" placeholder="Ex: Fartcoin Market" />
+          </div>
+          <div class="field grow">
+            <label for="marketAddress">Market address</label>
+            <input id="marketAddress" type="text" placeholder="Ex: 4UwtBqa8DDtcWV6nWFregeMVkGdfWfiYeFxoHaR2hm9c" />
+          </div>
+        </div>
+        <div class="row wrap">
+          <button id="marketSave" class="primary">Salvar</button>
+          <button id="marketCancel" class="ghost hidden">Cancelar</button>
+          <span id="marketStatus" class="subtitle"></span>
+        </div>
+        <div id="marketDefault" class="subtitle"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Markets cadastrados</h2>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Nome</th>
+              <th>Endereco</th>
+              <th>Acoes</th>
+            </tr>
+          </thead>
+          <tbody id="marketsBody">
+            <tr><td colspan="3">Sem markets cadastrados</td></tr>
+          </tbody>
+        </table>
+        <div class="subtitle">Total: <strong id="marketsCount">0</strong></div>
+      </section>
+    </main>
+    <script src="kamino-markets.js"></script>
+  </body>
+</html>
+

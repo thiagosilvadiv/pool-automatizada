@@ -363,3 +363,105 @@ export async function createAiAnalysisStore(): Promise<AiAnalysisStore> {
   const filePath = defaultAiAnalysisFile();
   return new FileAiAnalysisStore(filePath);
 }
+
+export type KaminoMarketEntry = {
+  id: string;
+  name: string;
+  address: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type KaminoMarketsState = {
+  markets: KaminoMarketEntry[];
+  updatedAt: string | null;
+};
+
+export type KaminoMarketsStore = {
+  load(): Promise<KaminoMarketsState | null>;
+  save(state: KaminoMarketsState): Promise<void>;
+};
+
+export function defaultKaminoMarketsFile(name = "kamino-markets.json"): string {
+  return path.join(__dirname, "..", "data", name);
+}
+
+function normalizeKaminoMarketsState(input: unknown): KaminoMarketsState {
+  if (!input || typeof input !== "object") {
+    return { markets: [], updatedAt: null };
+  }
+  const rawMarkets = Array.isArray((input as any).markets)
+    ? (input as any).markets
+    : (Array.isArray(input) ? input : []);
+  const markets = rawMarkets.map((item: any) => {
+    const address = String(item?.address ?? item?.marketAddress ?? "").trim();
+    if (!address) return null;
+    const id = String(item?.id ?? address).trim() || address;
+    const name = String(item?.name ?? item?.label ?? address).trim() || address;
+    const createdAt = typeof item?.createdAt === "string" ? item.createdAt : new Date().toISOString();
+    const updatedAt = typeof item?.updatedAt === "string" ? item.updatedAt : createdAt;
+    return { id, name, address, createdAt, updatedAt };
+  }).filter(Boolean) as KaminoMarketEntry[];
+  const updatedAt = typeof (input as any).updatedAt === "string" ? (input as any).updatedAt : null;
+  return { markets, updatedAt };
+}
+
+class FileKaminoMarketsStore implements KaminoMarketsStore {
+  private filePath: string;
+
+  constructor(filePath: string) {
+    this.filePath = filePath;
+  }
+
+  async load(): Promise<KaminoMarketsState | null> {
+    try {
+      const raw = await fs.readFile(this.filePath, "utf8");
+      const parsed = JSON.parse(raw);
+      return normalizeKaminoMarketsState(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  async save(state: KaminoMarketsState): Promise<void> {
+    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    await fs.writeFile(this.filePath, JSON.stringify(state, null, 2), "utf8");
+  }
+}
+
+class RedisKaminoMarketsStore implements KaminoMarketsStore {
+  private key: string;
+
+  constructor(key: string) {
+    this.key = key;
+  }
+
+  async load(): Promise<KaminoMarketsState | null> {
+    const client = await getRedisClient();
+    if (!client) {
+      return null;
+    }
+    const raw = await client.get(this.key);
+    if (!raw) {
+      return null;
+    }
+    return normalizeKaminoMarketsState(JSON.parse(raw));
+  }
+
+  async save(state: KaminoMarketsState): Promise<void> {
+    const client = await getRedisClient();
+    if (!client) {
+      throw new Error("Redis not configured");
+    }
+    await client.set(this.key, JSON.stringify(state));
+  }
+}
+
+export async function createKaminoMarketsStore(): Promise<KaminoMarketsStore> {
+  const client = await getRedisClient();
+  if (client) {
+    return new RedisKaminoMarketsStore(getRedisKey("kamino-markets"));
+  }
+  const filePath = defaultKaminoMarketsFile();
+  return new FileKaminoMarketsStore(filePath);
+}

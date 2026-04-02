@@ -42,6 +42,7 @@ export type PoolOverrides = {
   kaminoRebalanceEnabled?: boolean;
   kaminoDepositPct?: number;
   kaminoBorrowAsset?: "usdc" | "usdt" | "auto";
+  kaminoMarketAddress?: string | null;
   kaminoMaxLtv?: number;
   kaminoCloseRule?: "avg-price" | "breakeven" | "manual";
   kaminoPriceBufferPct?: number;
@@ -1154,6 +1155,14 @@ export class PoolManager {
       normalized.kaminoBorrowAsset = value as PoolOverrides["kaminoBorrowAsset"];
     }
 
+    if (overrides.kaminoMarketAddress != null) {
+      const value = String(overrides.kaminoMarketAddress).trim();
+      if (!value) {
+        throw new Error("kaminoMarketAddress override must be a non-empty string");
+      }
+      normalized.kaminoMarketAddress = value;
+    }
+
     if (overrides.kaminoMaxLtv != null) {
       const value = Number(overrides.kaminoMaxLtv);
       if (!Number.isFinite(value) || value < 0 || value > 1) {
@@ -1492,6 +1501,18 @@ export class PoolManager {
           throw new Error("kaminoBorrowAsset override must be usdc, usdt, or auto");
         }
         next.kaminoBorrowAsset = value as PoolOverrides["kaminoBorrowAsset"];
+      }
+    }
+
+    if ("kaminoMarketAddress" in updates) {
+      if (updates.kaminoMarketAddress == null) {
+        delete next.kaminoMarketAddress;
+      } else {
+        const value = String(updates.kaminoMarketAddress).trim();
+        if (!value) {
+          throw new Error("kaminoMarketAddress override must be a non-empty string");
+        }
+        next.kaminoMarketAddress = value;
       }
     }
 

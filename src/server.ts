@@ -1,6 +1,7 @@
 import express, { Request, Response, NextFunction, type Express } from "express";
 import path from "path";
 import { fileURLToPath } from "url";
+import { randomUUID } from "crypto";
 
 import { Config } from "./config.js";
 import { buildConnection, buildWallet, loadKeypair } from "./solana.js";
@@ -9,6 +10,7 @@ import { PoolManager } from "./pool-manager.js";
 import { getTrendSeries } from "./trend.js";
 import { listLinearSymbols } from "./bybit.js";
 import type { HistoryEvent } from "./runner.js";
+import { createKaminoMarketsStore, type KaminoMarketEntry, type KaminoMarketsState } from "./storage.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -94,6 +96,17 @@ export async function startServer(config: Config): Promise<void> {
   const poolManager = new PoolManager(config, connection, wallet);
   await poolManager.init();
   poolManager.startAutoCloseEmptyAccounts();
+
+  const kaminoMarketsStore = await createKaminoMarketsStore();
+  let kaminoMarketsState: KaminoMarketsState = (await kaminoMarketsStore.load()) ?? {
+    markets: [],
+    updatedAt: null
+  };
+
+  const saveKaminoMarketsState = async (next: KaminoMarketsState) => {
+    kaminoMarketsState = next;
+    await kaminoMarketsStore.save(kaminoMarketsState);
+  };
 
   app.get("/api/status", (_req: Request, res: Response) => {
     const status = poolManager.getSelectedStatus();
@@ -248,6 +261,98 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
+  app.get("/api/kamino/markets", (_req: Request, res: Response) => {
+    res.json(kaminoMarketsState);
+  });
+
+  app.post("/api/kamino/markets", async (req: Request, res: Response) => {
+    try {
+      const name = String(req.body?.name ?? "").trim();
+      const address = String(req.body?.marketAddress ?? req.body?.address ?? "").trim();
+      if (!name) {
+        res.status(400).json({ ok: false, error: "name is required" });
+        return;
+      }
+      if (!address) {
+        res.status(400).json({ ok: false, error: "marketAddress is required" });
+        return;
+      }
+      if (kaminoMarketsState.markets.some((entry) => entry.address === address)) {
+        res.status(400).json({ ok: false, error: "marketAddress already exists" });
+        return;
+      }
+      const now = new Date().toISOString();
+      const entry: KaminoMarketEntry = {
+        id: randomUUID(),
+        name,
+        address,
+        createdAt: now,
+        updatedAt: now
+      };
+      await saveKaminoMarketsState({
+        markets: [...kaminoMarketsState.markets, entry],
+        updatedAt: now
+      });
+      res.json({ ok: true, entry, markets: kaminoMarketsState.markets });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.patch("/api/kamino/markets/:id", async (req: Request, res: Response) => {
+    try {
+      const id = String(req.params.id ?? "").trim();
+      const entry = kaminoMarketsState.markets.find((item) => item.id === id);
+      if (!entry) {
+        res.status(404).json({ ok: false, error: "market not found" });
+        return;
+      }
+      const nameRaw = req.body?.name;
+      const addressRaw = req.body?.marketAddress ?? req.body?.address;
+      if (nameRaw == null && addressRaw == null) {
+        res.status(400).json({ ok: false, error: "name or marketAddress is required" });
+        return;
+      }
+      const name = nameRaw != null ? String(nameRaw).trim() : entry.name;
+      const address = addressRaw != null ? String(addressRaw).trim() : entry.address;
+      if (!name) {
+        res.status(400).json({ ok: false, error: "name is required" });
+        return;
+      }
+      if (!address) {
+        res.status(400).json({ ok: false, error: "marketAddress is required" });
+        return;
+      }
+      if (kaminoMarketsState.markets.some((item) => item.address === address && item.id !== id)) {
+        res.status(400).json({ ok: false, error: "marketAddress already exists" });
+        return;
+      }
+      const now = new Date().toISOString();
+      const updated: KaminoMarketEntry = { ...entry, name, address, updatedAt: now };
+      const markets = kaminoMarketsState.markets.map((item) => item.id === id ? updated : item);
+      await saveKaminoMarketsState({ markets, updatedAt: now });
+      res.json({ ok: true, entry: updated, markets });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.delete("/api/kamino/markets/:id", async (req: Request, res: Response) => {
+    try {
+      const id = String(req.params.id ?? "").trim();
+      const next = kaminoMarketsState.markets.filter((item) => item.id !== id);
+      if (next.length === kaminoMarketsState.markets.length) {
+        res.status(404).json({ ok: false, error: "market not found" });
+        return;
+      }
+      const now = new Date().toISOString();
+      await saveKaminoMarketsState({ markets: next, updatedAt: now });
+      res.json({ ok: true, markets: kaminoMarketsState.markets });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   app.get("/api/config", (_req: Request, res: Response) => {
     const selectedId = poolManager.getSelectedPoolId();
     const selected = poolManager.listPools().find((entry) => entry.id === selectedId) ?? null;
@@ -281,6 +386,7 @@ export async function startServer(config: Config): Promise<void> {
       kaminoRebalanceEnabled: config.kaminoRebalanceEnabled,
       kaminoDepositPct: config.kaminoDepositPct,
       kaminoBorrowAsset: config.kaminoBorrowAsset,
+      kaminoMarketAddress: config.kaminoMarketAddress,
       kaminoMaxLtv: config.kaminoMaxLtv,
       kaminoCloseRule: config.kaminoCloseRule,
       kaminoPriceBufferPct: config.kaminoPriceBufferPct,

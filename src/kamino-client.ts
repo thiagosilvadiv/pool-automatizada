@@ -496,7 +496,9 @@ export async function createKaminoClient(ctx: KaminoClientContext): Promise<Kami
     process.env.KAMINO_WS_URL ||
     process.env.RPC_WS_URL ||
     deriveWsUrl(rpcUrl);
-  const marketRaw = process.env.KAMINO_MARKET || DEFAULT_KAMINO_MARKET;
+  const marketRaw = ctx.config.kaminoMarketAddress
+    || process.env.KAMINO_MARKET
+    || DEFAULT_KAMINO_MARKET;
   let marketAddress: Address;
   try {
     marketAddress = address(marketRaw);

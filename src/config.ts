@@ -38,6 +38,7 @@ export type Config = {
   kaminoRebalanceEnabled: boolean;
   kaminoDepositPct: number;
   kaminoBorrowAsset: "usdc" | "usdt" | "auto";
+  kaminoMarketAddress: string | null;
   kaminoMaxLtv: number;
   kaminoCloseRule: "avg-price" | "breakeven" | "manual";
   kaminoPriceBufferPct: number;
@@ -495,6 +496,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     kaminoBorrowAsset: envKaminoBorrowAsset
       ?? dataKaminoBorrowAsset
       ?? "usdc",
+    kaminoMarketAddress: parseEnvString(process.env.KAMINO_MARKET)
+      ?? (data as any).kaminoMarketAddress
+      ?? null,
     kaminoMaxLtv: parseEnvNumber(process.env.KAMINO_MAX_LTV)
       ?? Number((data as any).kaminoMaxLtv ?? 0.4),
     kaminoCloseRule: envKaminoCloseRule
@@ -641,6 +645,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!parseKaminoBorrowAsset(config.kaminoBorrowAsset)) {
     throw new Error("kaminoBorrowAsset must be usdc, usdt, or auto");
+  }
+  if (config.kaminoMarketAddress != null && !String(config.kaminoMarketAddress).trim()) {
+    throw new Error("kaminoMarketAddress must be a non-empty string");
   }
   if (!Number.isFinite(config.kaminoMaxLtv) || config.kaminoMaxLtv < 0 || config.kaminoMaxLtv > 1) {
     throw new Error("kaminoMaxLtv must be between 0 and 1");

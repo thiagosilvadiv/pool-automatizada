@@ -668,10 +668,20 @@ export class OrcaBot {
       const kamino = await this.ensureKaminoClient();
       const supported = await kamino.supportsCollateral(mint);
       if (!supported) {
-        const marketHint = process.env.KAMINO_MARKET ? ` (market ${process.env.KAMINO_MARKET})` : "";
-        const message = `Token nÃ£o suportado como colateral no Kamino${marketHint}`;
+        const message = `Token nÃ£o suportado como colateral no Kamino${this.getKaminoMarketHint()}`;
         this.setError(message);
         return { ok: false, reason: message, status: this.getStatus() };
+      }
+
+      let stable: { mint: string; decimals: number; label: string } | null = null;
+      if (Number.isFinite(borrowUsd) && borrowUsd > 0) {
+        const resolved = await this.resolveKaminoBorrowStable(kamino);
+        if (!resolved.stable) {
+          const message = `Borrow indisponÃ­vel: ${resolved.reason ?? "reserve nÃ£o encontrada"}${this.getKaminoMarketHint()}`;
+          this.setError(message);
+          return { ok: false, reason: message, status: this.getStatus() };
+        }
+        stable = resolved.stable;
       }
 
       await kamino.ensureObligation();
@@ -680,18 +690,21 @@ export class OrcaBot {
       this.lastStatus.lastAction = "kamino-deposit";
 
       let borrowSig: string | undefined;
-      if (Number.isFinite(borrowUsd) && borrowUsd > 0) {
-        const stable = await this.getStableMintInfo();
-        const borrowSupport = await kamino.supportsBorrow(stable.mint);
-        if (!borrowSupport.ok) {
-          const marketHint = process.env.KAMINO_MARKET ? ` (market ${process.env.KAMINO_MARKET})` : "";
-          const message = `Borrow ${stable.label} indisponÃ­vel: ${borrowSupport.reason ?? "reserve nÃ£o encontrada"}${marketHint}`;
-          this.setError(message);
-          return { ok: false, reason: message, status: this.getStatus() };
+      if (Number.isFinite(borrowUsd) && borrowUsd > 0 && stable) {
+        try {
+          borrowSig = await kamino.borrow({ mint: stable.mint, amount: borrowUsd });
+          this.queueHistoryAction("kamino-borrow", { lastAction: "kamino-borrow" });
+          this.lastStatus.lastAction = "kamino-borrow";
+        } catch (err) {
+          this.setError(err);
+          try {
+            await kamino.withdraw({ mint, amount });
+            this.queueHistoryAction("kamino-withdraw", { lastAction: "kamino-withdraw" });
+          } catch (rollbackErr) {
+            logger.warn({ err: rollbackErr }, "rollback kamino withdraw failed");
+          }
+          return { ok: false, reason: this.lastStatus.lastError ?? "Falha ao emprestar no Kamino", status: this.getStatus() };
         }
-        borrowSig = await kamino.borrow({ mint: stable.mint, amount: borrowUsd });
-        this.queueHistoryAction("kamino-borrow", { lastAction: "kamino-borrow" });
-        this.lastStatus.lastAction = "kamino-borrow";
       }
 
       this.lastStatus.lastError = null;
@@ -1849,7 +1862,16 @@ export class OrcaBot {
   }
 
   updateConfig(config: Config): void {
+    const previousMarket = this.config.kaminoMarketAddress
+      ?? process.env.KAMINO_MARKET
+      ?? null;
+    const nextMarket = config.kaminoMarketAddress
+      ?? process.env.KAMINO_MARKET
+      ?? null;
     this.config = config;
+    if (previousMarket !== nextMarket) {
+      this.kaminoClient = null;
+    }
     this.outOfRangeSince = null;
   }
 
@@ -1866,6 +1888,13 @@ export class OrcaBot {
 
   private isKaminoSimulated(): boolean {
     return Boolean(this.config.dryRun || process.env.KAMINO_NOOP === "true");
+  }
+
+  private getKaminoMarketHint(): string {
+    const market = this.config.kaminoMarketAddress
+      ?? process.env.KAMINO_MARKET
+      ?? "";
+    return market ? ` (market ${market})` : "";
   }
 
   private resolveKaminoBorrowMint(): { mint: string; label: string } {
@@ -1891,22 +1920,75 @@ export class OrcaBot {
     return { mint: usdcMint, label: "USDC" };
   }
 
+  private resolveKaminoBorrowCandidates(): { mint: string; label: string }[] {
+    const usdcMint = (this.config.autoSwapFeesToUsdcTargetMint || DEFAULT_USDC_MINT).trim() || DEFAULT_USDC_MINT;
+    const usdtMint = String(process.env.KAMINO_USDT_MINT ?? "").trim();
+    const asset = this.config.kaminoBorrowAsset ?? "usdc";
+    if (asset === "usdt") {
+      if (!usdtMint) {
+        throw new Error("KAMINO_USDT_MINT requerido quando kaminoBorrowAsset=usdt");
+      }
+      return [{ mint: usdtMint, label: "USDT" }];
+    }
+    if (asset === "usdc") {
+      return [{ mint: usdcMint, label: "USDC" }];
+    }
+    const candidates: { mint: string; label: string }[] = [];
+    if (usdcMint) candidates.push({ mint: usdcMint, label: "USDC" });
+    if (usdtMint) candidates.push({ mint: usdtMint, label: "USDT" });
+    return candidates;
+  }
+
+  private async resolveKaminoBorrowStable(
+    kamino: KaminoClient
+  ): Promise<{ stable: { mint: string; decimals: number; label: string } | null; reason?: string }> {
+    const candidates = this.resolveKaminoBorrowCandidates();
+    if (!candidates.length) {
+      return { stable: null, reason: "Nenhum stable configurado para borrow" };
+    }
+    let lastReason: string | undefined;
+    for (const candidate of candidates) {
+      const support = await kamino.supportsBorrow(candidate.mint);
+      if (support.ok) {
+        const stable = await this.getStableMintInfoByMint(candidate.mint, candidate.label);
+        return { stable };
+      }
+      lastReason = support.reason ?? `Borrow indisponÃ­vel em ${candidate.label}`;
+    }
+    return { stable: null, reason: lastReason };
+  }
+
   private async getStableMintInfo(): Promise<{ mint: string; decimals: number; label: string }> {
     const resolved = this.resolveKaminoBorrowMint();
-    const cached = this.stableMintCache.get(resolved.mint);
+    return this.getStableMintInfoByMint(resolved.mint, resolved.label);
+  }
+
+  private getStableLabelForMint(mint: string): string {
+    const usdcMint = (this.config.autoSwapFeesToUsdcTargetMint || DEFAULT_USDC_MINT).trim() || DEFAULT_USDC_MINT;
+    const usdtMint = String(process.env.KAMINO_USDT_MINT ?? "").trim();
+    if (mint === usdcMint) return "USDC";
+    if (mint === usdtMint) return "USDT";
+    return "Stable";
+  }
+
+  private async getStableMintInfoByMint(
+    mint: string,
+    label: string
+  ): Promise<{ mint: string; decimals: number; label: string }> {
+    const cached = this.stableMintCache.get(mint);
     if (cached) {
-      return { mint: cached.mint, decimals: cached.decimals, label: resolved.label };
+      return { mint: cached.mint, decimals: cached.decimals, label };
     }
     let decimals = 6;
     try {
-      const mintInfo = await getMint(this.connection, new PublicKey(resolved.mint));
+      const mintInfo = await getMint(this.connection, new PublicKey(mint));
       decimals = Number(mintInfo.decimals ?? decimals);
     } catch (err) {
-      logger.warn({ err, mint: resolved.mint }, "falha ao buscar decimais do stable");
+      logger.warn({ err, mint }, "falha ao buscar decimais do stable");
     }
-    const entry = { mint: resolved.mint, decimals };
-    this.stableMintCache.set(resolved.mint, entry);
-    return { ...entry, label: resolved.label };
+    const entry = { mint, decimals };
+    this.stableMintCache.set(mint, entry);
+    return { ...entry, label };
   }
 
   private async getTokenUsdValue(input: {
@@ -2307,7 +2389,10 @@ export class OrcaBot {
       throw new Error("Fechamento falhou: posição ainda aberta");
     }
 
-    const stable = await this.getStableMintInfo();
+    const debtMint = state.debtMint ?? null;
+    const stable = debtMint
+      ? await this.getStableMintInfoByMint(debtMint, this.getStableLabelForMint(debtMint))
+      : await this.getStableMintInfo();
     const kamino = await this.ensureKaminoClient();
     const debtAmount = Number(state.debtAmount ?? 0);
     if (debtAmount > 0) {
@@ -2399,6 +2484,12 @@ export class OrcaBot {
       return "kamino-rebalance-failed";
     }
     const kamino = await this.ensureKaminoClient();
+    const borrowStableResult = await this.resolveKaminoBorrowStable(kamino);
+    if (!borrowStableResult.stable) {
+      this.setError(`Borrow indisponÃ­vel: ${borrowStableResult.reason ?? "reserve nÃ£o encontrada"}${this.getKaminoMarketHint()}`);
+      return "kamino-rebalance-failed";
+    }
+    const stable = borrowStableResult.stable;
     let deposited = false;
     this.outOfRangeSince = null;
 
@@ -2486,9 +2577,7 @@ export class OrcaBot {
       }
       const supported = await kamino.supportsCollateral(entry.mint);
       if (!supported) {
-        const marketHint = process.env.KAMINO_MARKET ? " (market " + process.env.KAMINO_MARKET + ")" : "";
-
-        this.setError("Token de saída não suportado como colateral no Kamino" + marketHint);
+        this.setError("Token de saida nao suportado como colateral no Kamino" + this.getKaminoMarketHint());
         return "kamino-rebalance-failed";
       }
     }
@@ -2522,16 +2611,16 @@ export class OrcaBot {
     const borrowUsd = Math.max(0, desiredBorrowUsd);
     if (borrowUsd <= 0) {
       this.setError("Borrow USD insuficiente para reabrir a pool");
-      return "kamino-rebalance-failed";
-    }
-
-    const stable = await this.getStableMintInfo();
-    const borrowSupport = await kamino.supportsBorrow(stable.mint);
-    if (!borrowSupport.ok) {
-      const marketHint = process.env.KAMINO_MARKET ? " (market " + process.env.KAMINO_MARKET + ")" : "";
-      this.setError(
-        "Borrow " + stable.label + " indisponÃ­vel: " + (borrowSupport.reason ?? "reserve nÃ£o encontrada") + marketHint
-      );
+      if (deposited) {
+        for (const entry of depositedEntries) {
+          try {
+            await kamino.withdraw({ mint: entry.mint, amount: entry.amount });
+            this.queueHistoryAction("kamino-withdraw");
+          } catch (withdrawErr) {
+            logger.warn({ err: withdrawErr }, "rollback kamino withdraw failed");
+          }
+        }
+      }
       return "kamino-rebalance-failed";
     }
     try {
@@ -4084,3 +4173,4 @@ function truncateJupiterError(value: string, max = 160): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max - 1)}…`;
 }
+
