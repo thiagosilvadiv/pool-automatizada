@@ -41,6 +41,8 @@ export type Config = {
   kaminoMaxLtv: number;
   kaminoCloseRule: "avg-price" | "breakeven" | "manual";
   kaminoPriceBufferPct: number;
+  kaminoCollateralMode: "exit" | "max-value" | "tokenA" | "tokenB" | "both";
+  kaminoAutoCloseOnTokenChange: boolean;
   autoResumeEnabled: boolean;
   autoResumeMaxAttempts: number;
   autoResumeBaseDelayMs: number;
@@ -223,6 +225,19 @@ function parseKaminoCloseRule(value: unknown): "avg-price" | "breakeven" | "manu
   return undefined;
 }
 
+function parseKaminoCollateralMode(value: unknown): "exit" | "max-value" | "tokenA" | "tokenB" | "both" | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "exit") return "exit";
+  if (trimmed === "max-value" || trimmed === "max_value" || trimmed === "maxvalue") return "max-value";
+  if (trimmed === "both" || trimmed === "dual") return "both";
+  if (trimmed === "tokena" || trimmed === "token_a") return "tokenA";
+  if (trimmed === "tokenb" || trimmed === "token_b") return "tokenB";
+  return undefined;
+}
+
 function timeframeToSeconds(timeframe: TrendTimeframe): number {
   switch (timeframe) {
     case "1m":
@@ -313,6 +328,17 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     throw new Error("kaminoCloseRule must be avg-price, breakeven, or manual");
   }
 
+  const envKaminoCollateralModeRaw = process.env.KAMINO_COLLATERAL_MODE ?? "";
+  const envKaminoCollateralMode = parseKaminoCollateralMode(envKaminoCollateralModeRaw);
+  if (envKaminoCollateralModeRaw && !envKaminoCollateralMode) {
+    throw new Error("KAMINO_COLLATERAL_MODE must be exit, max-value, tokenA, tokenB, or both");
+  }
+  const dataKaminoCollateralModeRaw = (data as any).kaminoCollateralMode;
+  const dataKaminoCollateralMode = parseKaminoCollateralMode(dataKaminoCollateralModeRaw);
+  if (dataKaminoCollateralModeRaw != null && dataKaminoCollateralMode === undefined) {
+    throw new Error("kaminoCollateralMode must be exit, max-value, tokenA, tokenB, or both");
+  }
+
   const envTrendTimeframeRaw = process.env.TREND_TIMEFRAME ?? "";
   const envTrendTimeframe = parseTrendTimeframe(envTrendTimeframeRaw);
   if (envTrendTimeframeRaw && !envTrendTimeframe) {
@@ -390,6 +416,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     ?? Number((data as any).autoResumeMaxAttempts ?? 5);
   const autoResumeBaseDelayMs = parseEnvNumber(process.env.AUTO_RESUME_BASE_DELAY_MS)
     ?? Number((data as any).autoResumeBaseDelayMs ?? 5000);
+  const kaminoAutoCloseOnTokenChange = parseEnvBool(process.env.KAMINO_AUTO_CLOSE_ON_TOKEN_CHANGE)
+    ?? Boolean((data as any).kaminoAutoCloseOnTokenChange ?? true);
   const envNetwork = parseEnvString(process.env.NETWORK);
   const envRpcUrl = parseEnvString(process.env.RPC_URL);
   const envWhirlpoolAddress = parseEnvString(process.env.WHIRLPOOL_ADDRESS);
@@ -474,6 +502,10 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? "avg-price",
     kaminoPriceBufferPct: parseEnvNumber(process.env.KAMINO_PRICE_BUFFER_PCT)
       ?? Number((data as any).kaminoPriceBufferPct ?? 0.5),
+    kaminoCollateralMode: envKaminoCollateralMode
+      ?? dataKaminoCollateralMode
+      ?? "max-value",
+    kaminoAutoCloseOnTokenChange,
     autoResumeEnabled,
     autoResumeMaxAttempts: Number(autoResumeMaxAttempts),
     autoResumeBaseDelayMs: Number(autoResumeBaseDelayMs),
@@ -618,6 +650,12 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.kaminoPriceBufferPct) || config.kaminoPriceBufferPct < 0) {
     throw new Error("kaminoPriceBufferPct must be >= 0");
+  }
+  if (!parseKaminoCollateralMode(config.kaminoCollateralMode)) {
+    throw new Error("kaminoCollateralMode must be exit, max-value, tokenA, tokenB, or both");
+  }
+  if (typeof config.kaminoAutoCloseOnTokenChange !== "boolean") {
+    throw new Error("kaminoAutoCloseOnTokenChange must be boolean");
   }
   if (!Number.isFinite(config.minSolBalance) || config.minSolBalance < 0) {
     throw new Error("minSolBalance must be >= 0");

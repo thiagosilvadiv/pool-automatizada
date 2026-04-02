@@ -904,6 +904,23 @@ button.danger:not(.ghost):hover {
   word-break: break-all;
 }
 
+.kamino-collaterals {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.kamino-collaterals .kv {
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.kamino-collaterals .kv span:last-child {
+  max-width: none;
+  font-weight: 500;
+  color: var(--muted);
+}
+
 h2 {
   margin: 0 0 12px;
   font-size: 18px;

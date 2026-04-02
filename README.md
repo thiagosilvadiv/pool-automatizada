@@ -55,18 +55,6 @@ npm run dev -- --config config.json --ui
 
 Abra `http://localhost:3000` no navegador.
 
-### IA de Estratégia (novo)
-
-Com a UI ativa, abra `http://localhost:3000/ai-strategy.html` para gerar diagnóstico de pools com recomendações.
-
-Variáveis de ambiente da IA:
-
-- `OPENAI_API_KEY`: chave da OpenAI (obrigatória para enriquecimento por IA)
-- `OPENAI_DEFAULT_MODEL`: modelo padrão da análise
-- `OPENAI_RECOMMENDED_MODELS`: lista CSV para o dropdown de modelos
-- `OPENAI_ALLOW_CUSTOM_MODEL`: permite texto livre de modelo (`true`/`false`)
-- `OPENAI_TIMEOUT_MS`: timeout da chamada OpenAI em milissegundos
-
 ### Autenticação da UI (opcional)
 
 Defina `UI_USER` e `UI_PASS` para proteger a interface com HTTP Basic Auth.

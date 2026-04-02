@@ -157,8 +157,11 @@ describe("config", () => {
       kaminoBorrowAsset: "usdc",
       kaminoMaxLtv: 0.4,
       kaminoCloseRule: "avg-price",
-      kaminoPriceBufferPct: 0.5
+      kaminoPriceBufferPct: 0.5,
+      kaminoCollateralMode: "exit",
+      kaminoAutoCloseOnTokenChange: true
     })).not.toThrow();
+    expect(() => loadWith({ kaminoCollateralMode: "both" })).not.toThrow();
   });
 
   it("rejects invalid kamino settings", () => {
@@ -168,5 +171,6 @@ describe("config", () => {
     expect(() => loadWith({ kaminoMaxLtv: 2 })).toThrow();
     expect(() => loadWith({ kaminoCloseRule: "later" })).toThrow();
     expect(() => loadWith({ kaminoPriceBufferPct: -0.1 })).toThrow();
+    expect(() => loadWith({ kaminoCollateralMode: "maybe" })).toThrow();
   });
 });

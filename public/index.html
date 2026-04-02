@@ -15,7 +15,6 @@
           <a href="/analytics.html">Análises</a>
           <a href="/charts.html">Gráficos</a>
           <a href="/allowlist.html">Tokens Permitidos</a>
-          <a href="/ai-strategy.html">IA Estrategia</a>
         </nav>
       </header>
 
@@ -100,6 +99,63 @@
           <div class="field">
             <label for="poolAutoAddEnabled">Auto adicionar liquidez</label>
             <select id="poolAutoAddEnabled">
+              <option value="">Padrão</option>
+              <option value="true">Sim</option>
+              <option value="false">Não</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolKaminoEnabled">Kamino rebalance</label>
+            <select id="poolKaminoEnabled">
+              <option value="">Padrão</option>
+              <option value="true">Sim</option>
+              <option value="false">Não</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolKaminoDepositPct">Kamino depósito %</label>
+            <input id="poolKaminoDepositPct" type="number" min="0" max="100" step="0.1" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="poolKaminoBorrowAsset">Kamino empréstimo</label>
+            <select id="poolKaminoBorrowAsset">
+              <option value="">Padrão</option>
+              <option value="usdc">USDC</option>
+              <option value="usdt">USDT</option>
+              <option value="auto">Auto</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolKaminoMaxLtv">Kamino LTV máx</label>
+            <input id="poolKaminoMaxLtv" type="number" min="0" max="1" step="0.01" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="poolKaminoCloseRule">Kamino regra de fechamento</label>
+            <select id="poolKaminoCloseRule">
+              <option value="">Padrão</option>
+              <option value="avg-price">Preço médio</option>
+              <option value="breakeven">Breakeven</option>
+              <option value="manual">Manual</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolKaminoPriceBuffer">Kamino buffer %</label>
+            <input id="poolKaminoPriceBuffer" type="number" min="0" step="0.1" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="poolKaminoCollateralMode">Kamino colateral</label>
+            <select id="poolKaminoCollateralMode">
+              <option value="">Padrão</option>
+              <option value="exit">Token da saída</option>
+              <option value="max-value">Maior valor USD</option>
+              <option value="both">Ambos (dual)</option>
+              <option value="tokenA">Token A</option>
+              <option value="tokenB">Token B</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="poolKaminoAutoClose">Auto-fechar ao mudar token</label>
+            <select id="poolKaminoAutoClose">
               <option value="">Padrão</option>
               <option value="true">Sim</option>
               <option value="false">Não</option>
@@ -235,12 +291,14 @@
           <div class="card">
             <h3>Kamino Rebalance</h3>
             <div class="kv"><span>Status</span><span id="kaminoStatus">-</span></div>
+            <div class="kv"><span>Simulado</span><span id="kaminoSimulated">-</span></div>
             <div class="kv"><span>LTV</span><span id="kaminoLtv">-</span></div>
             <div class="kv"><span>Colateral (USD)</span><span id="kaminoCollateralUsd">-</span></div>
             <div class="kv"><span>Dívida (USD)</span><span id="kaminoDebtUsd">-</span></div>
             <div class="kv"><span>Preço médio</span><span id="kaminoAvgPrice">-</span></div>
             <div class="kv"><span>Preço alvo</span><span id="kaminoTargetPrice">-</span></div>
             <div class="kv"><span>Ciclos</span><span id="kaminoCycleCount">-</span></div>
+            <div class="kamino-collaterals" id="kaminoCollaterals"></div>
             <button id="kaminoCloseBtn" class="ghost">Fechar ciclo Kamino</button>
           </div>
         </div>
@@ -447,6 +505,63 @@
           <div class="field">
             <label for="editPoolAutoAddEnabled">Auto adicionar liquidez</label>
             <select id="editPoolAutoAddEnabled">
+              <option value="">Padrão</option>
+              <option value="true">Sim</option>
+              <option value="false">Não</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolKaminoEnabled">Kamino rebalance</label>
+            <select id="editPoolKaminoEnabled">
+              <option value="">Padrão</option>
+              <option value="true">Sim</option>
+              <option value="false">Não</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolKaminoDepositPct">Kamino depósito %</label>
+            <input id="editPoolKaminoDepositPct" type="number" min="0" max="100" step="0.1" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="editPoolKaminoBorrowAsset">Kamino empréstimo</label>
+            <select id="editPoolKaminoBorrowAsset">
+              <option value="">Padrão</option>
+              <option value="usdc">USDC</option>
+              <option value="usdt">USDT</option>
+              <option value="auto">Auto</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolKaminoMaxLtv">Kamino LTV máx</label>
+            <input id="editPoolKaminoMaxLtv" type="number" min="0" max="1" step="0.01" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="editPoolKaminoCloseRule">Kamino regra de fechamento</label>
+            <select id="editPoolKaminoCloseRule">
+              <option value="">Padrão</option>
+              <option value="avg-price">Preço médio</option>
+              <option value="breakeven">Breakeven</option>
+              <option value="manual">Manual</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolKaminoPriceBuffer">Kamino buffer %</label>
+            <input id="editPoolKaminoPriceBuffer" type="number" min="0" step="0.1" placeholder="Padrão" />
+          </div>
+          <div class="field">
+            <label for="editPoolKaminoCollateralMode">Kamino colateral</label>
+            <select id="editPoolKaminoCollateralMode">
+              <option value="">Padrão</option>
+              <option value="exit">Token da saída</option>
+              <option value="max-value">Maior valor USD</option>
+              <option value="both">Ambos (dual)</option>
+              <option value="tokenA">Token A</option>
+              <option value="tokenB">Token B</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="editPoolKaminoAutoClose">Auto-fechar ao mudar token</label>
+            <select id="editPoolKaminoAutoClose">
               <option value="">Padrão</option>
               <option value="true">Sim</option>
               <option value="false">Não</option>

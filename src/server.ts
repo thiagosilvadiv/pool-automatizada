@@ -9,12 +9,6 @@ import { PoolManager } from "./pool-manager.js";
 import { getTrendSeries } from "./trend.js";
 import { listLinearSymbols } from "./bybit.js";
 import type { HistoryEvent } from "./runner.js";
-import {
-  AiStrategyService,
-  StrategyModelError,
-  type AnalysisChatRequest,
-  type StrategyAnalysisRequest
-} from "./ai-strategy.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,16 +30,6 @@ function isEditableHistoryField(field: string): field is keyof HistoryEvent {
   return HISTORY_EDITABLE_FIELDS.has(field as keyof HistoryEvent);
 }
 
-type AiStrategyRouteService = Pick<
-  AiStrategyService,
-  "getModelSettings"
-  | "listHistory"
-  | "getHistoryById"
-  | "runAnalysis"
-  | "getChatThread"
-  | "sendChatMessage"
->;
-
 type PoolSummaryRouteService = Pick<PoolManager, "listSummaries" | "getSelectedPoolId" | "getAutoResumeStatus">;
 
 export function registerPoolsSummaryRoute(app: Express, poolManager: PoolSummaryRouteService): void {
@@ -59,74 +43,6 @@ export function registerPoolsSummaryRoute(app: Express, poolManager: PoolSummary
   });
 }
 
-export function registerAiStrategyRoutes(app: Express, aiStrategy: AiStrategyRouteService): void {
-  app.get("/api/ai/models", (_req: Request, res: Response) => {
-    res.json(aiStrategy.getModelSettings());
-  });
-
-  app.get("/api/ai/analysis/history", (_req: Request, res: Response) => {
-    res.json({ analyses: aiStrategy.listHistory() });
-  });
-
-  app.get("/api/ai/analysis/history/:id", (req: Request, res: Response) => {
-    const item = aiStrategy.getHistoryById(String(req.params.id ?? ""));
-    if (!item) {
-      res.status(404).json({ ok: false, error: "Analysis not found" });
-      return;
-    }
-    res.json(item);
-  });
-
-  app.post("/api/ai/analysis", async (req: Request, res: Response) => {
-    try {
-      const raw = (req.body ?? {}) as StrategyAnalysisRequest;
-      const result = await aiStrategy.runAnalysis(raw);
-      res.json({ ok: true, result });
-    } catch (err) {
-      if (err instanceof StrategyModelError) {
-        res.status(400).json({
-          ok: false,
-          code: err.code,
-          error: err.message,
-          suggestedModel: err.suggestedModel,
-          canUseDefault: err.canUseDefault
-        });
-        return;
-      }
-      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
-  app.get("/api/ai/analysis/:id/chat", (req: Request, res: Response) => {
-    const analysisId = String(req.params.id ?? "").trim();
-    const thread = aiStrategy.getChatThread(analysisId);
-    if (!thread) {
-      res.status(404).json({ ok: false, error: "Analysis not found" });
-      return;
-    }
-    res.json({ ok: true, thread });
-  });
-
-  app.post("/api/ai/analysis/chat", async (req: Request, res: Response) => {
-    try {
-      const raw = (req.body ?? {}) as AnalysisChatRequest;
-      const thread = await aiStrategy.sendChatMessage(raw);
-      res.json({ ok: true, thread });
-    } catch (err) {
-      if (err instanceof StrategyModelError) {
-        res.status(400).json({
-          ok: false,
-          code: err.code,
-          error: err.message,
-          suggestedModel: err.suggestedModel,
-          canUseDefault: err.canUseDefault
-        });
-        return;
-      }
-      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-}
 
 export async function startServer(config: Config): Promise<void> {
   const app = express();
@@ -178,8 +94,6 @@ export async function startServer(config: Config): Promise<void> {
   const poolManager = new PoolManager(config, connection, wallet);
   await poolManager.init();
   poolManager.startAutoCloseEmptyAccounts();
-  const aiStrategy = new AiStrategyService(poolManager, config);
-  await aiStrategy.init();
 
   app.get("/api/status", (_req: Request, res: Response) => {
     const status = poolManager.getSelectedStatus();
@@ -206,7 +120,9 @@ export async function startServer(config: Config): Promise<void> {
         kaminoAvgPriceUsdc: null,
         kaminoTargetPriceUsdc: null,
         kaminoCycleCount: 0,
-        kaminoLastError: null
+        kaminoLastError: null,
+        kaminoCollaterals: [],
+        kaminoSimulated: Boolean(config.dryRun || process.env.KAMINO_NOOP === "true")
       });
       return;
     }
@@ -330,6 +246,8 @@ export async function startServer(config: Config): Promise<void> {
       kaminoMaxLtv: config.kaminoMaxLtv,
       kaminoCloseRule: config.kaminoCloseRule,
       kaminoPriceBufferPct: config.kaminoPriceBufferPct,
+      kaminoCollateralMode: config.kaminoCollateralMode,
+      kaminoAutoCloseOnTokenChange: config.kaminoAutoCloseOnTokenChange,
       hedgeEnabled: config.hedgeEnabled,
       hedgePct: config.hedgePct,
       hedgeSymbol: config.hedgeSymbol,
@@ -365,7 +283,6 @@ export async function startServer(config: Config): Promise<void> {
 
   registerPoolsSummaryRoute(app, poolManager);
 
-  registerAiStrategyRoutes(app, aiStrategy);
 
   app.get("/api/trend-series/:id", async (req: Request, res: Response) => {
     try {

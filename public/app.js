@@ -33,6 +33,8 @@ const kaminoDebtUsdEl = document.getElementById("kaminoDebtUsd");
 const kaminoAvgPriceEl = document.getElementById("kaminoAvgPrice");
 const kaminoTargetPriceEl = document.getElementById("kaminoTargetPrice");
 const kaminoCycleCountEl = document.getElementById("kaminoCycleCount");
+const kaminoSimulatedEl = document.getElementById("kaminoSimulated");
+const kaminoCollateralsEl = document.getElementById("kaminoCollaterals");
 const historyBody = document.getElementById("historyBody");
 const hedgeLogBody = document.getElementById("hedgeLogBody");
 const poolNameLabel = document.getElementById("poolNameLabel");
@@ -50,6 +52,14 @@ const poolTrendUpInput = document.getElementById("poolTrendUp");
 const poolTrendDownInput = document.getElementById("poolTrendDown");
 const poolBudgetInput = document.getElementById("poolBudget");
 const poolAutoAddEnabledInput = document.getElementById("poolAutoAddEnabled");
+const poolKaminoEnabledInput = document.getElementById("poolKaminoEnabled");
+const poolKaminoDepositPctInput = document.getElementById("poolKaminoDepositPct");
+const poolKaminoBorrowAssetInput = document.getElementById("poolKaminoBorrowAsset");
+const poolKaminoMaxLtvInput = document.getElementById("poolKaminoMaxLtv");
+const poolKaminoCloseRuleInput = document.getElementById("poolKaminoCloseRule");
+const poolKaminoPriceBufferInput = document.getElementById("poolKaminoPriceBuffer");
+const poolKaminoCollateralModeInput = document.getElementById("poolKaminoCollateralMode");
+const poolKaminoAutoCloseInput = document.getElementById("poolKaminoAutoClose");
 const poolHedgeEnabledInput = document.getElementById("poolHedgeEnabled");
 const poolHedgePctInput = document.getElementById("poolHedgePct");
 const poolHedgeMarginPctInput = document.getElementById("poolHedgeMarginPct");
@@ -73,6 +83,14 @@ const editPoolTrendUpInput = document.getElementById("editPoolTrendUp");
 const editPoolTrendDownInput = document.getElementById("editPoolTrendDown");
 const editPoolBudgetInput = document.getElementById("editPoolBudget");
 const editPoolAutoAddEnabledInput = document.getElementById("editPoolAutoAddEnabled");
+const editPoolKaminoEnabledInput = document.getElementById("editPoolKaminoEnabled");
+const editPoolKaminoDepositPctInput = document.getElementById("editPoolKaminoDepositPct");
+const editPoolKaminoBorrowAssetInput = document.getElementById("editPoolKaminoBorrowAsset");
+const editPoolKaminoMaxLtvInput = document.getElementById("editPoolKaminoMaxLtv");
+const editPoolKaminoCloseRuleInput = document.getElementById("editPoolKaminoCloseRule");
+const editPoolKaminoPriceBufferInput = document.getElementById("editPoolKaminoPriceBuffer");
+const editPoolKaminoCollateralModeInput = document.getElementById("editPoolKaminoCollateralMode");
+const editPoolKaminoAutoCloseInput = document.getElementById("editPoolKaminoAutoClose");
 const editPoolHedgeEnabledInput = document.getElementById("editPoolHedgeEnabled");
 const editPoolHedgePctInput = document.getElementById("editPoolHedgePct");
 const editPoolHedgeMarginPctInput = document.getElementById("editPoolHedgeMarginPct");
@@ -289,6 +307,25 @@ function shortMint(mint) {
 function formatMintLabel(mint) {
   if (!mint || typeof mint !== "string") return "";
   return KNOWN_MINT_LABELS[mint] ?? shortMint(mint);
+}
+
+function renderKaminoCollaterals(items) {
+  if (!kaminoCollateralsEl) return;
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) {
+    kaminoCollateralsEl.innerHTML = "<div class=\"kv\"><span>Tokens</span><span>-</span></div>";
+    return;
+  }
+  const rows = list.map((entry) => {
+    const label = formatMintLabel(entry?.mint) || shortMint(entry?.mint ?? "");
+    const colUsd = formatNumber(entry?.usd, 2);
+    const debtUsd = formatNumber(entry?.debtUsd, 2);
+    const avg = formatNumber(entry?.avgPriceUsdc, 6);
+    const target = formatNumber(entry?.targetPriceUsdc, 6);
+    const text = `Col ${colUsd} / Dívida ${debtUsd} / Média ${avg} / Alvo ${target}`;
+    return `<div class="kv"><span>${escapeHtml(label)}</span><span>${escapeHtml(text)}</span></div>`;
+  });
+  kaminoCollateralsEl.innerHTML = rows.join("");
 }
 
 function describeToken(side, info) {
@@ -641,6 +678,34 @@ function parseTrendTargetInput(value) {
   return null;
 }
 
+function parseKaminoBorrowAssetInput(value) {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (["usdc", "usdt", "auto"].includes(trimmed)) return trimmed;
+  return null;
+}
+
+function parseKaminoCloseRuleInput(value) {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (["avg-price", "breakeven", "manual"].includes(trimmed)) return trimmed;
+  return null;
+}
+
+function parseKaminoCollateralModeInput(value) {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "exit") return "exit";
+  if (trimmed === "max-value") return "max-value";
+  if (trimmed === "both" || trimmed === "dual") return "both";
+  if (trimmed === "tokena" || trimmed === "token_a") return "tokenA";
+  if (trimmed === "tokenb" || trimmed === "token_b") return "tokenB";
+  return null;
+}
+
 function formatTrendBadge(pool, usageLabel) {
   if (!usageLabel) {
     return "<span class=\"trend-badge trend-off\">Desativado</span>";
@@ -855,6 +920,14 @@ function openEditPoolModal(pool) {
   const defaultTrendDown = cachedConfig?.trendTargetDown ?? "other";
   const defaultHedgeEnabled = cachedConfig?.hedgeEnabled ?? false;
   const defaultAutoAddEnabled = cachedConfig?.autoAddLiquidityEnabled ?? false;
+  const defaultKaminoEnabled = cachedConfig?.kaminoRebalanceEnabled ?? false;
+  const defaultKaminoDepositPct = cachedConfig?.kaminoDepositPct ?? "-";
+  const defaultKaminoBorrowAsset = cachedConfig?.kaminoBorrowAsset ?? "usdc";
+  const defaultKaminoMaxLtv = cachedConfig?.kaminoMaxLtv ?? "-";
+  const defaultKaminoCloseRule = cachedConfig?.kaminoCloseRule ?? "avg-price";
+  const defaultKaminoPriceBuffer = cachedConfig?.kaminoPriceBufferPct ?? "-";
+  const defaultKaminoCollateralMode = cachedConfig?.kaminoCollateralMode ?? "max-value";
+  const defaultKaminoAutoClose = cachedConfig?.kaminoAutoCloseOnTokenChange ?? true;
   const defaultHedgePct = cachedConfig?.hedgePct ?? "-";
   const defaultHedgeMarginPct = cachedConfig?.hedgeMarginPct ?? "-";
   const defaultHedgeSymbol = cachedConfig?.hedgeSymbol ?? "-";
@@ -874,6 +947,40 @@ function openEditPoolModal(pool) {
   if (editPoolAutoAddEnabledInput) {
     editPoolAutoAddEnabledInput.value = overrides.autoAddLiquidityEnabled === undefined ? "" : String(overrides.autoAddLiquidityEnabled);
     setSelectPlaceholder(editPoolAutoAddEnabledInput, `Padrão (${defaultAutoAddEnabled ? "Sim" : "Não"})`);
+  }
+  if (editPoolKaminoEnabledInput) {
+    editPoolKaminoEnabledInput.value = overrides.kaminoRebalanceEnabled === undefined ? "" : String(overrides.kaminoRebalanceEnabled);
+    setSelectPlaceholder(editPoolKaminoEnabledInput, `Padrão (${defaultKaminoEnabled ? "Sim" : "Não"})`);
+  }
+  if (editPoolKaminoDepositPctInput) {
+    editPoolKaminoDepositPctInput.value = overrides.kaminoDepositPct ?? "";
+    editPoolKaminoDepositPctInput.placeholder = `Padrão (${formatNumber(defaultKaminoDepositPct, 2)})`;
+  }
+  if (editPoolKaminoBorrowAssetInput) {
+    editPoolKaminoBorrowAssetInput.value = overrides.kaminoBorrowAsset ?? "";
+    setSelectPlaceholder(editPoolKaminoBorrowAssetInput, `Padrão (${defaultKaminoBorrowAsset.toUpperCase?.() ?? defaultKaminoBorrowAsset})`);
+  }
+  if (editPoolKaminoMaxLtvInput) {
+    editPoolKaminoMaxLtvInput.value = overrides.kaminoMaxLtv ?? "";
+    editPoolKaminoMaxLtvInput.placeholder = `Padrão (${formatNumber(defaultKaminoMaxLtv, 2)})`;
+  }
+  if (editPoolKaminoCloseRuleInput) {
+    editPoolKaminoCloseRuleInput.value = overrides.kaminoCloseRule ?? "";
+    setSelectPlaceholder(editPoolKaminoCloseRuleInput, `Padrão (${defaultKaminoCloseRule})`);
+  }
+  if (editPoolKaminoPriceBufferInput) {
+    editPoolKaminoPriceBufferInput.value = overrides.kaminoPriceBufferPct ?? "";
+    editPoolKaminoPriceBufferInput.placeholder = `Padrão (${formatNumber(defaultKaminoPriceBuffer, 2)})`;
+  }
+  if (editPoolKaminoCollateralModeInput) {
+    editPoolKaminoCollateralModeInput.value = overrides.kaminoCollateralMode ?? "";
+    setSelectPlaceholder(editPoolKaminoCollateralModeInput, `Padrão (${defaultKaminoCollateralMode})`);
+  }
+  if (editPoolKaminoAutoCloseInput) {
+    editPoolKaminoAutoCloseInput.value = overrides.kaminoAutoCloseOnTokenChange === undefined
+      ? ""
+      : String(overrides.kaminoAutoCloseOnTokenChange);
+    setSelectPlaceholder(editPoolKaminoAutoCloseInput, `Padrão (${defaultKaminoAutoClose ? "Sim" : "Não"})`);
   }
   if (editPoolHedgeEnabledInput) {
     editPoolHedgeEnabledInput.value = overrides.hedgeEnabled === undefined ? "" : String(overrides.hedgeEnabled);
@@ -1328,6 +1435,9 @@ async function updateUI() {
     if (kaminoStatusEl) {
       kaminoStatusEl.textContent = status.kaminoActive ? "Ativo" : "Inativo";
     }
+    if (kaminoSimulatedEl) {
+      kaminoSimulatedEl.textContent = status.kaminoSimulated ? "Sim" : "Não";
+    }
     if (kaminoLtvEl) {
       kaminoLtvEl.textContent = status.kaminoLtv != null
         ? `${formatNumber(status.kaminoLtv * 100, 2)}%`
@@ -1348,6 +1458,7 @@ async function updateUI() {
     if (kaminoCycleCountEl) {
       kaminoCycleCountEl.textContent = status.kaminoCycleCount ?? "-";
     }
+    renderKaminoCollaterals(status.kaminoCollaterals);
     if (kaminoCloseBtn) {
       kaminoCloseBtn.disabled = !status.kaminoActive;
     }
@@ -1382,6 +1493,34 @@ async function updateUI() {
     }
     if (poolAutoAddEnabledInput) {
       setSelectPlaceholder(poolAutoAddEnabledInput, `Padrão (${config.autoAddLiquidityEnabled ? "Sim" : "Não"})`);
+    }
+    if (poolKaminoEnabledInput) {
+      setSelectPlaceholder(poolKaminoEnabledInput, `Padrão (${config.kaminoRebalanceEnabled ? "Sim" : "Não"})`);
+    }
+    if (poolKaminoBorrowAssetInput) {
+      const label = (config.kaminoBorrowAsset ?? "usdc").toUpperCase?.() ?? config.kaminoBorrowAsset;
+      setSelectPlaceholder(poolKaminoBorrowAssetInput, `Padrão (${label})`);
+    }
+    if (poolKaminoCloseRuleInput) {
+      setSelectPlaceholder(poolKaminoCloseRuleInput, `Padrão (${config.kaminoCloseRule ?? "avg-price"})`);
+    }
+    if (poolKaminoCollateralModeInput) {
+      setSelectPlaceholder(poolKaminoCollateralModeInput, `Padrão (${config.kaminoCollateralMode ?? "max-value"})`);
+    }
+    if (poolKaminoAutoCloseInput) {
+      setSelectPlaceholder(
+        poolKaminoAutoCloseInput,
+        `Padrão (${config.kaminoAutoCloseOnTokenChange ? "Sim" : "Não"})`
+      );
+    }
+    if (poolKaminoDepositPctInput) {
+      poolKaminoDepositPctInput.placeholder = `Padrão (${formatNumber(config.kaminoDepositPct, 2)})`;
+    }
+    if (poolKaminoMaxLtvInput) {
+      poolKaminoMaxLtvInput.placeholder = `Padrão (${formatNumber(config.kaminoMaxLtv, 2)})`;
+    }
+    if (poolKaminoPriceBufferInput) {
+      poolKaminoPriceBufferInput.placeholder = `Padrão (${formatNumber(config.kaminoPriceBufferPct, 2)})`;
     }
     if (poolHedgeEntryModeInput) {
       setSelectPlaceholder(poolHedgeEntryModeInput, `Padrão (${formatHedgeEntryMode(config.hedgeEntryMode ?? "off")})`);
@@ -1513,6 +1652,14 @@ addPoolBtn.addEventListener("click", async () => {
   const trendTargetDownRaw = poolTrendDownInput?.value ?? "";
   const budgetUsd = parseOptionalNumber(poolBudgetInput.value);
   const autoAddRaw = poolAutoAddEnabledInput?.value ?? "";
+  const kaminoEnabledRaw = poolKaminoEnabledInput?.value ?? "";
+  const kaminoDepositPct = parseOptionalNumber(poolKaminoDepositPctInput?.value);
+  const kaminoBorrowAssetRaw = poolKaminoBorrowAssetInput?.value ?? "";
+  const kaminoMaxLtv = parseOptionalNumber(poolKaminoMaxLtvInput?.value);
+  const kaminoCloseRuleRaw = poolKaminoCloseRuleInput?.value ?? "";
+  const kaminoPriceBuffer = parseOptionalNumber(poolKaminoPriceBufferInput?.value);
+  const kaminoCollateralModeRaw = poolKaminoCollateralModeInput?.value ?? "";
+  const kaminoAutoCloseRaw = poolKaminoAutoCloseInput?.value ?? "";
   const hedgeEnabledRaw = poolHedgeEnabledInput?.value ?? "";
   const hedgePct = parseOptionalNumber(poolHedgePctInput?.value);
   const hedgeMarginPct = parseOptionalNumber(poolHedgeMarginPctInput?.value);
@@ -1576,6 +1723,50 @@ addPoolBtn.addEventListener("click", async () => {
       }
       overrides.autoAddLiquidityEnabled = parsed;
     }
+    if (kaminoEnabledRaw) {
+      const parsed = parseTrendEnabledInput(kaminoEnabledRaw);
+      if (parsed === null) {
+        throw new Error("Kamino rebalance inválido. Use Sim ou Não.");
+      }
+      overrides.kaminoRebalanceEnabled = parsed;
+    }
+    if (kaminoDepositPct !== undefined) {
+      overrides.kaminoDepositPct = kaminoDepositPct;
+    }
+    if (kaminoBorrowAssetRaw) {
+      const parsed = parseKaminoBorrowAssetInput(kaminoBorrowAssetRaw);
+      if (!parsed) {
+        throw new Error("Kamino empréstimo inválido.");
+      }
+      overrides.kaminoBorrowAsset = parsed;
+    }
+    if (kaminoMaxLtv !== undefined) {
+      overrides.kaminoMaxLtv = kaminoMaxLtv;
+    }
+    if (kaminoCloseRuleRaw) {
+      const parsed = parseKaminoCloseRuleInput(kaminoCloseRuleRaw);
+      if (!parsed) {
+        throw new Error("Kamino regra de fechamento inválida.");
+      }
+      overrides.kaminoCloseRule = parsed;
+    }
+    if (kaminoPriceBuffer !== undefined) {
+      overrides.kaminoPriceBufferPct = kaminoPriceBuffer;
+    }
+    if (kaminoCollateralModeRaw) {
+      const parsed = parseKaminoCollateralModeInput(kaminoCollateralModeRaw);
+      if (!parsed) {
+        throw new Error("Kamino colateral inválido.");
+      }
+      overrides.kaminoCollateralMode = parsed;
+    }
+    if (kaminoAutoCloseRaw) {
+      const parsed = parseTrendEnabledInput(kaminoAutoCloseRaw);
+      if (parsed === null) {
+        throw new Error("Auto-fechar Kamino inválido. Use Sim ou Não.");
+      }
+      overrides.kaminoAutoCloseOnTokenChange = parsed;
+    }
     if (hedgeEnabledRaw) {
       const parsed = parseTrendEnabledInput(hedgeEnabledRaw);
       if (parsed === null) {
@@ -1619,6 +1810,14 @@ addPoolBtn.addEventListener("click", async () => {
     if (poolTrendDownInput) poolTrendDownInput.value = "";
     poolBudgetInput.value = "";
     if (poolAutoAddEnabledInput) poolAutoAddEnabledInput.value = "";
+    if (poolKaminoEnabledInput) poolKaminoEnabledInput.value = "";
+    if (poolKaminoDepositPctInput) poolKaminoDepositPctInput.value = "";
+    if (poolKaminoBorrowAssetInput) poolKaminoBorrowAssetInput.value = "";
+    if (poolKaminoMaxLtvInput) poolKaminoMaxLtvInput.value = "";
+    if (poolKaminoCloseRuleInput) poolKaminoCloseRuleInput.value = "";
+    if (poolKaminoPriceBufferInput) poolKaminoPriceBufferInput.value = "";
+    if (poolKaminoCollateralModeInput) poolKaminoCollateralModeInput.value = "";
+    if (poolKaminoAutoCloseInput) poolKaminoAutoCloseInput.value = "";
     if (poolHedgeEnabledInput) poolHedgeEnabledInput.value = "";
     if (poolHedgePctInput) poolHedgePctInput.value = "";
     if (poolHedgeMarginPctInput) poolHedgeMarginPctInput.value = "";
@@ -1688,6 +1887,126 @@ if (editPoolForm) {
         return;
       }
       overrides.autoAddLiquidityEnabled = parsed;
+    }
+
+    const kaminoEnabledRaw = editPoolKaminoEnabledInput?.value ?? "";
+    if (!kaminoEnabledRaw) {
+      overrides.kaminoRebalanceEnabled = null;
+    } else {
+      const parsed = parseTrendEnabledInput(kaminoEnabledRaw);
+      if (parsed === null) {
+        if (editPoolError) {
+          editPoolError.textContent = "Kamino rebalance inválido. Use Sim ou Não.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.kaminoRebalanceEnabled = parsed;
+    }
+
+    const kaminoDepositRaw = editPoolKaminoDepositPctInput?.value?.trim() ?? "";
+    if (!kaminoDepositRaw) {
+      overrides.kaminoDepositPct = null;
+    } else {
+      const parsed = parseOptionalNumber(kaminoDepositRaw);
+      if (parsed === undefined) {
+        if (editPoolError) {
+          editPoolError.textContent = "Kamino depósito % inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.kaminoDepositPct = parsed;
+    }
+
+    const kaminoBorrowRaw = editPoolKaminoBorrowAssetInput?.value ?? "";
+    if (!kaminoBorrowRaw) {
+      overrides.kaminoBorrowAsset = null;
+    } else {
+      const parsed = parseKaminoBorrowAssetInput(kaminoBorrowRaw);
+      if (!parsed) {
+        if (editPoolError) {
+          editPoolError.textContent = "Kamino empréstimo inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.kaminoBorrowAsset = parsed;
+    }
+
+    const kaminoMaxLtvRaw = editPoolKaminoMaxLtvInput?.value?.trim() ?? "";
+    if (!kaminoMaxLtvRaw) {
+      overrides.kaminoMaxLtv = null;
+    } else {
+      const parsed = parseOptionalNumber(kaminoMaxLtvRaw);
+      if (parsed === undefined) {
+        if (editPoolError) {
+          editPoolError.textContent = "Kamino LTV inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.kaminoMaxLtv = parsed;
+    }
+
+    const kaminoCloseRuleRaw = editPoolKaminoCloseRuleInput?.value ?? "";
+    if (!kaminoCloseRuleRaw) {
+      overrides.kaminoCloseRule = null;
+    } else {
+      const parsed = parseKaminoCloseRuleInput(kaminoCloseRuleRaw);
+      if (!parsed) {
+        if (editPoolError) {
+          editPoolError.textContent = "Kamino regra de fechamento inválida.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.kaminoCloseRule = parsed;
+    }
+
+    const kaminoBufferRaw = editPoolKaminoPriceBufferInput?.value?.trim() ?? "";
+    if (!kaminoBufferRaw) {
+      overrides.kaminoPriceBufferPct = null;
+    } else {
+      const parsed = parseOptionalNumber(kaminoBufferRaw);
+      if (parsed === undefined) {
+        if (editPoolError) {
+          editPoolError.textContent = "Kamino buffer % inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.kaminoPriceBufferPct = parsed;
+    }
+
+    const kaminoCollateralModeRaw = editPoolKaminoCollateralModeInput?.value ?? "";
+    if (!kaminoCollateralModeRaw) {
+      overrides.kaminoCollateralMode = null;
+    } else {
+      const parsed = parseKaminoCollateralModeInput(kaminoCollateralModeRaw);
+      if (!parsed) {
+        if (editPoolError) {
+          editPoolError.textContent = "Kamino colateral inválido.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.kaminoCollateralMode = parsed;
+    }
+
+    const kaminoAutoCloseRaw = editPoolKaminoAutoCloseInput?.value ?? "";
+    if (!kaminoAutoCloseRaw) {
+      overrides.kaminoAutoCloseOnTokenChange = null;
+    } else {
+      const parsed = parseTrendEnabledInput(kaminoAutoCloseRaw);
+      if (parsed === null) {
+        if (editPoolError) {
+          editPoolError.textContent = "Auto-fechar Kamino inválido. Use Sim ou Não.";
+          editPoolError.classList.remove("hidden");
+        }
+        return;
+      }
+      overrides.kaminoAutoCloseOnTokenChange = parsed;
     }
 
     const exitTokenRaw = editPoolExitTokenInput?.value?.trim() ?? "";

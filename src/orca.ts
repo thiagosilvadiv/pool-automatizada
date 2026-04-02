@@ -14,7 +14,7 @@ import { WalletLike } from "./solana.js";
 import { getSolUsdPrice } from "./pyth.js";
 import { getTrendSnapshot } from "./trend.js";
 import type { TrendDirection, TrendTarget, TrendTimeframe } from "./trend.js";
-import type { KaminoCycleState } from "./kamino-types.js";
+import type { KaminoCollateralEntry, KaminoCycleState } from "./kamino-types.js";
 
 const whirlpools = whirlpoolsSdk as any;
 const common = commonSdk as any;
@@ -98,6 +98,8 @@ export type BotStatus = {
   kaminoTargetPriceUsdc: number | null;
   kaminoCycleCount: number;
   kaminoLastError: string | null;
+  kaminoCollaterals: KaminoCollateralEntry[];
+  kaminoSimulated: boolean;
 };
 
 type SwapWalletToSolDetail = {
@@ -208,7 +210,9 @@ export class OrcaBot {
     kaminoAvgPriceUsdc: null,
     kaminoTargetPriceUsdc: null,
     kaminoCycleCount: 0,
-    kaminoLastError: null
+    kaminoLastError: null,
+    kaminoCollaterals: [],
+    kaminoSimulated: false
   };
 
   private constructor(ctx: any, client: any, botCtx: BotContext) {
@@ -1560,21 +1564,87 @@ export class OrcaBot {
   }
 
   getStatus(): BotStatus {
-    return { ...this.lastStatus };
+    return {
+      ...this.lastStatus,
+      kaminoCollaterals: Array.isArray(this.lastStatus.kaminoCollaterals)
+        ? this.lastStatus.kaminoCollaterals.map((item) => ({ ...item }))
+        : []
+    };
   }
 
   getKaminoState(): KaminoCycleState | null {
-    return this.kaminoState ? { ...this.kaminoState } : null;
+    if (!this.kaminoState) {
+      return null;
+    }
+    return {
+      ...this.kaminoState,
+      collaterals: Array.isArray(this.kaminoState.collaterals)
+        ? this.kaminoState.collaterals.map((item) => ({ ...item }))
+        : []
+    };
   }
 
   setKaminoState(state: KaminoCycleState | null): void {
-    this.kaminoState = state ? { ...state } : null;
+    this.kaminoState = this.normalizeKaminoState(state);
     this.syncKaminoStatus();
   }
 
+  private normalizeKaminoState(state: KaminoCycleState | null): KaminoCycleState | null {
+    if (!state) {
+      return null;
+    }
+    const collaterals: KaminoCollateralEntry[] = Array.isArray(state.collaterals)
+      ? state.collaterals.map((item) => ({
+        mint: String(item.mint ?? ""),
+        amount: Number(item.amount ?? 0),
+        usd: item.usd == null ? null : Number(item.usd),
+        debtUsd: item.debtUsd == null ? null : Number(item.debtUsd),
+        avgPriceUsdc: item.avgPriceUsdc == null ? null : Number(item.avgPriceUsdc),
+        targetPriceUsdc: item.targetPriceUsdc == null ? null : Number(item.targetPriceUsdc)
+      })).filter((item) => item.mint && Number.isFinite(item.amount))
+      : [];
+    if (collaterals.length === 0 && state.collateralMint) {
+      collaterals.push({
+        mint: state.collateralMint,
+        amount: Number(state.collateralAmount ?? 0),
+        usd: state.collateralUsd ?? null,
+        debtUsd: state.debtUsd ?? null,
+        avgPriceUsdc: state.avgPriceUsdc ?? null,
+        targetPriceUsdc: state.targetPriceUsdc ?? null
+      });
+    }
+    const collateralUsd = collaterals.length
+      ? collaterals.reduce((sum, item) => sum + (Number(item.usd ?? 0) || 0), 0)
+      : (state.collateralUsd ?? null);
+    const debtUsd = collaterals.length
+      ? collaterals.reduce((sum, item) => sum + (Number(item.debtUsd ?? 0) || 0), 0)
+      : (state.debtUsd ?? null);
+    const single = collaterals.length === 1 ? collaterals[0] : null;
+    return {
+      ...state,
+      collateralMint: single ? single.mint : state.collateralMint ?? null,
+      collateralAmount: single ? Number(single.amount ?? 0) : Number(state.collateralAmount ?? 0),
+      collateralUsd: typeof collateralUsd === "number" && Number.isFinite(collateralUsd) && collateralUsd > 0
+        ? collateralUsd
+        : (state.collateralUsd ?? null),
+      debtUsd: typeof debtUsd === "number" && Number.isFinite(debtUsd) && debtUsd > 0
+        ? debtUsd
+        : (state.debtUsd ?? null),
+      avgPriceUsdc: single ? single.avgPriceUsdc : state.avgPriceUsdc ?? null,
+      targetPriceUsdc: single ? single.targetPriceUsdc : state.targetPriceUsdc ?? null,
+      collaterals
+    };
+  }
+
   queueHistoryAction(action: string, overrides?: Partial<BotStatus>): void {
-    const snapshot: BotStatus = {
+    const base: BotStatus = {
       ...this.lastStatus,
+      kaminoCollaterals: Array.isArray(this.lastStatus.kaminoCollaterals)
+        ? this.lastStatus.kaminoCollaterals.map((item) => ({ ...item }))
+        : []
+    };
+    const snapshot: BotStatus = {
+      ...base,
       ...overrides,
       lastAction: action
     };
@@ -1606,17 +1676,33 @@ export class OrcaBot {
   private syncKaminoStatus(): void {
     const state = this.kaminoState;
     this.lastStatus.kaminoActive = Boolean(state?.active);
-    this.lastStatus.kaminoCollateralUsd = state?.collateralUsd ?? null;
-    this.lastStatus.kaminoDebtUsd = state?.debtUsd ?? null;
-    if (state?.collateralUsd != null && state.collateralUsd > 0 && state?.debtUsd != null) {
-      this.lastStatus.kaminoLtv = state.debtUsd / state.collateralUsd;
+    const collaterals = Array.isArray(state?.collaterals)
+      ? state.collaterals.map((item) => ({ ...item }))
+      : [];
+    const collateralUsd = collaterals.length
+      ? collaterals.reduce((sum, item) => sum + (Number(item.usd ?? 0) || 0), 0)
+      : (state?.collateralUsd ?? null);
+    const debtUsd = collaterals.length
+      ? collaterals.reduce((sum, item) => sum + (Number(item.debtUsd ?? 0) || 0), 0)
+      : (state?.debtUsd ?? null);
+    this.lastStatus.kaminoCollaterals = collaterals;
+    this.lastStatus.kaminoCollateralUsd = Number.isFinite(collateralUsd) ? collateralUsd : null;
+    this.lastStatus.kaminoDebtUsd = Number.isFinite(debtUsd) ? debtUsd : null;
+    if (collateralUsd != null && collateralUsd > 0 && debtUsd != null) {
+      this.lastStatus.kaminoLtv = debtUsd / collateralUsd;
     } else {
       this.lastStatus.kaminoLtv = null;
     }
-    this.lastStatus.kaminoAvgPriceUsdc = state?.avgPriceUsdc ?? null;
-    this.lastStatus.kaminoTargetPriceUsdc = state?.targetPriceUsdc ?? null;
+    if (collaterals.length === 1) {
+      this.lastStatus.kaminoAvgPriceUsdc = collaterals[0].avgPriceUsdc ?? null;
+      this.lastStatus.kaminoTargetPriceUsdc = collaterals[0].targetPriceUsdc ?? null;
+    } else {
+      this.lastStatus.kaminoAvgPriceUsdc = null;
+      this.lastStatus.kaminoTargetPriceUsdc = null;
+    }
     this.lastStatus.kaminoCycleCount = state?.cycleCount ?? 0;
     this.lastStatus.kaminoLastError = state?.lastError ?? null;
+    this.lastStatus.kaminoSimulated = this.isKaminoSimulated();
   }
 
   setSwapAllowlist(mints: string[]): void {
@@ -1640,6 +1726,10 @@ export class OrcaBot {
       });
     }
     return this.kaminoClient;
+  }
+
+  private isKaminoSimulated(): boolean {
+    return Boolean(this.config.dryRun || process.env.KAMINO_NOOP === "true");
   }
 
   private resolveKaminoBorrowMint(): { mint: string; label: string } {
@@ -1859,36 +1949,193 @@ export class OrcaBot {
     return { side: "tokenB", mint: tokenBMint, amount: input.tokenBAmount, usdValue: usdB ?? 0, decimals: tokenBDecimals };
   }
 
+  private async buildExitTokenBySide(input: {
+    side: "tokenA" | "tokenB";
+    tokenAAmount: number;
+    tokenBAmount: number;
+    solUsdPrice: number | null;
+  }): Promise<{ side: "tokenA" | "tokenB"; mint: string; amount: number; usdValue: number; decimals: number } | null> {
+    if (!this.poolState) {
+      return null;
+    }
+    let stable: { mint: string; decimals: number; label: string };
+    try {
+      stable = await this.getStableMintInfo();
+    } catch (err) {
+      this.setError(err);
+      return null;
+    }
+    const tokenAMint = this.poolState.tokenMintA.toBase58();
+    const tokenBMint = this.poolState.tokenMintB.toBase58();
+    const tokenADecimals = this.poolState.decimalsA;
+    const tokenBDecimals = this.poolState.decimalsB;
+    const amount = input.side === "tokenA" ? input.tokenAAmount : input.tokenBAmount;
+    if (amount <= 0) {
+      return null;
+    }
+    let usdValue: number | null = null;
+    if (input.side === "tokenA") {
+      if (this.poolState.isTokenASol && input.solUsdPrice) {
+        usdValue = amount * input.solUsdPrice;
+      } else if (!this.isSwapAllowlistActive() || this.isSwapAllowed(tokenAMint)) {
+        usdValue = await this.getTokenUsdValue({
+          mint: tokenAMint,
+          amountUi: amount,
+          decimals: tokenADecimals,
+          stableMint: stable.mint,
+          stableDecimals: stable.decimals
+        });
+      }
+      if (usdValue == null) return null;
+      return { side: "tokenA", mint: tokenAMint, amount, usdValue, decimals: tokenADecimals };
+    }
+    if (this.poolState.isTokenBSol && input.solUsdPrice) {
+      usdValue = amount * input.solUsdPrice;
+    } else if (!this.isSwapAllowlistActive() || this.isSwapAllowed(tokenBMint)) {
+      usdValue = await this.getTokenUsdValue({
+        mint: tokenBMint,
+        amountUi: amount,
+        decimals: tokenBDecimals,
+        stableMint: stable.mint,
+        stableDecimals: stable.decimals
+      });
+    }
+    if (usdValue == null) return null;
+    return { side: "tokenB", mint: tokenBMint, amount, usdValue, decimals: tokenBDecimals };
+  }
+
+  private async resolveKaminoCollateralToken(input: {
+    tokenAAmount: number;
+    tokenBAmount: number;
+    solUsdPrice: number | null;
+    price: number;
+    positionRange: Range;
+  }): Promise<{ side: "tokenA" | "tokenB"; mint: string; amount: number; usdValue: number; decimals: number } | null> {
+    const mode = this.config.kaminoCollateralMode ?? "max-value";
+    if (mode === "both") {
+      return this.pickExitTokenByUsd({
+        tokenAAmount: input.tokenAAmount,
+        tokenBAmount: input.tokenBAmount,
+        solUsdPrice: input.solUsdPrice
+      });
+    }
+    if (mode === "tokenA" || mode === "tokenB") {
+      const forced = await this.buildExitTokenBySide({
+        side: mode,
+        tokenAAmount: input.tokenAAmount,
+        tokenBAmount: input.tokenBAmount,
+        solUsdPrice: input.solUsdPrice
+      });
+      if (forced) {
+        return forced;
+      }
+      return this.pickExitTokenByUsd({
+        tokenAAmount: input.tokenAAmount,
+        tokenBAmount: input.tokenBAmount,
+        solUsdPrice: input.solUsdPrice
+      });
+    }
+    if (mode === "exit") {
+      let side: "tokenA" | "tokenB" | null = null;
+      if (Number.isFinite(input.price) && input.positionRange) {
+        if (input.price <= input.positionRange.lower) {
+          side = "tokenA";
+        } else if (input.price >= input.positionRange.upper) {
+          side = "tokenB";
+        }
+      }
+      if (side) {
+        const forced = await this.buildExitTokenBySide({
+          side,
+          tokenAAmount: input.tokenAAmount,
+          tokenBAmount: input.tokenBAmount,
+          solUsdPrice: input.solUsdPrice
+        });
+        if (forced) {
+          return forced;
+        }
+      }
+    }
+    return this.pickExitTokenByUsd({
+      tokenAAmount: input.tokenAAmount,
+      tokenBAmount: input.tokenBAmount,
+      solUsdPrice: input.solUsdPrice
+    });
+  }
+
+  private async resolveKaminoCollateralTokens(input: {
+    tokenAAmount: number;
+    tokenBAmount: number;
+    solUsdPrice: number | null;
+    price: number;
+    positionRange: Range;
+  }): Promise<{ side: "tokenA" | "tokenB"; mint: string; amount: number; usdValue: number; decimals: number }[] | null> {
+    const mode = this.config.kaminoCollateralMode ?? "max-value";
+    if (mode !== "both") {
+      const token = await this.resolveKaminoCollateralToken(input);
+      return token ? [token] : null;
+    }
+    const selections: { side: "tokenA" | "tokenB"; mint: string; amount: number; usdValue: number; decimals: number }[] = [];
+    const tokenA = await this.buildExitTokenBySide({
+      side: "tokenA",
+      tokenAAmount: input.tokenAAmount,
+      tokenBAmount: input.tokenBAmount,
+      solUsdPrice: input.solUsdPrice
+    });
+    if (tokenA && tokenA.amount > 0) {
+      selections.push(tokenA);
+    }
+    const tokenB = await this.buildExitTokenBySide({
+      side: "tokenB",
+      tokenAAmount: input.tokenAAmount,
+      tokenBAmount: input.tokenBAmount,
+      solUsdPrice: input.solUsdPrice
+    });
+    if (tokenB && tokenB.amount > 0) {
+      selections.push(tokenB);
+    }
+    return selections.length ? selections : null;
+  }
+
   private async maybeCloseKaminoCycle(currentPrice: number): Promise<boolean> {
     const state = this.kaminoState;
     if (!state || !state.active) {
       return false;
     }
-    if (!state.collateralMint || !state.avgPriceUsdc) {
+    const rule = this.config.kaminoCloseRule ?? "avg-price";
+    if (rule === "manual") {
       return false;
     }
-    const rule = this.config.kaminoCloseRule ?? "avg-price";
-    const target = rule === "breakeven"
-      ? state.avgPriceUsdc
-      : (state.targetPriceUsdc ?? null);
-    if (!target || target <= 0) {
+    const collaterals = Array.isArray(state.collaterals) ? state.collaterals : [];
+    if (!collaterals.length) {
       return false;
     }
     try {
       const stable = await this.getStableMintInfo();
-      const decimals = await this.getTokenDecimals(state.collateralMint);
-      const priceUsd = await this.getTokenUsdPrice({
-        mint: state.collateralMint,
-        decimals,
-        stableMint: stable.mint,
-        stableDecimals: stable.decimals
-      });
-      if (priceUsd == null) {
-        return false;
+      let ready = true;
+      for (const entry of collaterals) {
+        const target = rule === "breakeven"
+          ? entry.avgPriceUsdc
+          : (entry.targetPriceUsdc ?? null);
+        if (!target || target <= 0) {
+          ready = false;
+          break;
+        }
+        const decimals = await this.getTokenDecimals(entry.mint);
+        const priceUsd = await this.getTokenUsdPrice({
+          mint: entry.mint,
+          decimals,
+          stableMint: stable.mint,
+          stableDecimals: stable.decimals
+        });
+        if (priceUsd == null || priceUsd < target) {
+          ready = false;
+          break;
+        }
       }
-      if (priceUsd >= target) {
+      if (ready) {
         logger.info(
-          { priceUsd, target, rule, collateralMint: state.collateralMint },
+          { rule, collaterals: collaterals.map((item) => item.mint) },
           "kamino target atingido; fechando ciclo"
         );
         await this.closeKaminoCycle("target");
@@ -1902,7 +2149,7 @@ export class OrcaBot {
     return false;
   }
 
-  private async closeKaminoCycle(mode: "manual" | "target"): Promise<void> {
+  private async closeKaminoCycle(mode: "manual" | "target" | "token-change"): Promise<void> {
     const state = this.kaminoState;
     if (!state || !state.active) {
       this.setError("Nenhum ciclo Kamino ativo");
@@ -1963,9 +2210,23 @@ export class OrcaBot {
       await kamino.repay({ mint: stable.mint, amount: debtAmount });
       this.queueHistoryAction("kamino-repay");
     }
-    if (state.collateralMint && state.collateralAmount > 0) {
-      await kamino.withdraw({ mint: state.collateralMint, amount: state.collateralAmount });
-      this.queueHistoryAction("kamino-withdraw");
+    const collaterals = Array.isArray(state.collaterals) && state.collaterals.length
+      ? state.collaterals
+      : (state.collateralMint
+        ? [{
+          mint: state.collateralMint,
+          amount: state.collateralAmount ?? 0,
+          usd: state.collateralUsd ?? null,
+          debtUsd: state.debtUsd ?? null,
+          avgPriceUsdc: state.avgPriceUsdc ?? null,
+          targetPriceUsdc: state.targetPriceUsdc ?? null
+        }]
+        : []);
+    for (const entry of collaterals) {
+      if (entry.mint && entry.amount > 0) {
+        await kamino.withdraw({ mint: entry.mint, amount: entry.amount });
+        this.queueHistoryAction("kamino-withdraw");
+      }
     }
     const nextState: KaminoCycleState = {
       active: false,
@@ -1977,6 +2238,7 @@ export class OrcaBot {
       debtUsd: null,
       avgPriceUsdc: null,
       targetPriceUsdc: null,
+      collaterals: [],
       cycleCount: state.cycleCount ?? 0,
       updatedAt: new Date().toISOString(),
       lastError: null
@@ -2014,58 +2276,106 @@ export class OrcaBot {
       return "close-failed";
     }
 
-    const balances = await this.getTokenBalances();
-    let exitToken: Awaited<ReturnType<typeof this.pickExitTokenByUsd>>;
-    try {
-      exitToken = await this.pickExitTokenByUsd({
-        tokenAAmount: balances.tokenA,
-        tokenBAmount: balances.tokenB,
-        solUsdPrice: input.solUsdPrice
+    const resolveTokens = async (balancesInput: { tokenA: number; tokenB: number }) => {
+      return this.resolveKaminoCollateralTokens({
+        tokenAAmount: balancesInput.tokenA,
+        tokenBAmount: balancesInput.tokenB,
+        solUsdPrice: input.solUsdPrice,
+        price: input.price,
+        positionRange: input.positionRange
       });
+    };
+
+    const balances = await this.getTokenBalances();
+    let exitTokens: Awaited<ReturnType<typeof resolveTokens>>;
+    try {
+      exitTokens = await resolveTokens(balances);
     } catch (err) {
       this.setError(err);
       return "kamino-rebalance-failed";
     }
-    if (!exitToken) {
+    if (!exitTokens || exitTokens.length === 0) {
       this.setError("Não foi possível determinar token de saída para Kamino");
       return "kamino-rebalance-failed";
     }
-
-    if (this.kaminoState?.active
-      && this.kaminoState.collateralMint
-      && this.kaminoState.collateralMint !== exitToken.mint) {
-      this.setError("Token de colateral mudou; feche o ciclo Kamino antes de continuar");
-      return "kamino-rebalance-failed";
-    }
-
-    const supported = await kamino.supportsCollateral(exitToken.mint);
-    if (!supported) {
-      this.setError("Token de saída não suportado como colateral no Kamino");
-      return "kamino-rebalance-failed";
+    const isDual = (this.config.kaminoCollateralMode ?? "max-value") === "both";
+    if (!isDual && this.kaminoState?.active) {
+      const existing = Array.isArray(this.kaminoState.collaterals) && this.kaminoState.collaterals.length
+        ? this.kaminoState.collaterals.map((item) => item.mint)
+        : (this.kaminoState.collateralMint ? [this.kaminoState.collateralMint] : []);
+      const nextMint = exitTokens[0]?.mint;
+      if (nextMint && existing.length > 0 && !existing.includes(nextMint)) {
+        if (this.config.kaminoAutoCloseOnTokenChange) {
+          try {
+            await this.closeKaminoCycle("token-change");
+          } catch (err) {
+            this.setError(err);
+            return "kamino-rebalance-failed";
+          }
+          if (this.kaminoState?.active) {
+            this.setError("Falha ao fechar ciclo Kamino anterior");
+            return "kamino-rebalance-failed";
+          }
+          const refreshedBalances = await this.getTokenBalances();
+          exitTokens = await resolveTokens(refreshedBalances);
+          if (!exitTokens || exitTokens.length === 0) {
+            this.setError("Não foi possível determinar token de saída após fechar ciclo Kamino");
+            return "kamino-rebalance-failed";
+          }
+        } else {
+          this.setError("Token de colateral mudou; feche o ciclo Kamino antes de continuar");
+          return "kamino-rebalance-failed";
+        }
+      }
     }
 
     const depositPct = Math.max(0, Math.min(100, Number(this.config.kaminoDepositPct ?? 100)));
-    const depositAmount = exitToken.amount * (depositPct / 100);
-    if (depositAmount <= 0) {
+    const deposits = exitTokens.map((token) => {
+      const amount = token.amount * (depositPct / 100);
+      const usdValue = token.usdValue ?? null;
+      const depositUsd = usdValue != null ? usdValue * (depositPct / 100) : null;
+      return { ...token, depositAmount: amount, depositUsd };
+    }).filter((item) => item.depositAmount > 0);
+    if (!deposits.length) {
       this.setError("Saldo insuficiente para depositar no Kamino");
       return "kamino-rebalance-failed";
     }
 
+    for (const entry of deposits) {
+      if (entry.depositUsd == null || !Number.isFinite(entry.depositUsd)) {
+        this.setError("Não foi possível precificar o colateral para Kamino");
+        return "kamino-rebalance-failed";
+      }
+      const supported = await kamino.supportsCollateral(entry.mint);
+      if (!supported) {
+        this.setError("Token de saída não suportado como colateral no Kamino");
+        return "kamino-rebalance-failed";
+      }
+    }
+
+    const depositedEntries: { mint: string; amount: number }[] = [];
     try {
       await kamino.ensureObligation();
-      await kamino.depositCollateral({ mint: exitToken.mint, amount: depositAmount });
-      deposited = true;
-      this.queueHistoryAction("kamino-deposit");
+      for (const entry of deposits) {
+        await kamino.depositCollateral({ mint: entry.mint, amount: entry.depositAmount });
+        depositedEntries.push({ mint: entry.mint, amount: entry.depositAmount });
+        this.queueHistoryAction("kamino-deposit");
+      }
+      deposited = depositedEntries.length > 0;
     } catch (err) {
       this.setError(err);
+      for (const entry of depositedEntries) {
+        try {
+          await kamino.withdraw({ mint: entry.mint, amount: entry.amount });
+        } catch (withdrawErr) {
+          logger.warn({ err: withdrawErr }, "rollback kamino withdraw failed");
+        }
+      }
       return "kamino-rebalance-failed";
     }
 
-    const collateralUsd = exitToken.usdValue ?? null;
-    const depositUsd = collateralUsd != null ? collateralUsd * (depositPct / 100) : null;
-    const maxBorrowUsd = depositUsd != null
-      ? depositUsd * Math.max(0, Math.min(1, this.config.kaminoMaxLtv ?? 0))
-      : 0;
+    const totalDepositUsd = deposits.reduce((sum, entry) => sum + (entry.depositUsd ?? 0), 0);
+    const maxBorrowUsd = totalDepositUsd * Math.max(0, Math.min(1, this.config.kaminoMaxLtv ?? 0));
     const desiredBorrowUsd = this.config.budgetUsd != null
       ? Math.min(maxBorrowUsd, this.config.budgetUsd)
       : maxBorrowUsd;
@@ -2082,11 +2392,13 @@ export class OrcaBot {
     } catch (err) {
       this.setError(err);
       if (deposited) {
-        try {
-          await kamino.withdraw({ mint: exitToken.mint, amount: depositAmount });
-          this.queueHistoryAction("kamino-withdraw");
-        } catch (withdrawErr) {
-          logger.warn({ err: withdrawErr }, "rollback kamino withdraw failed");
+        for (const entry of depositedEntries) {
+          try {
+            await kamino.withdraw({ mint: entry.mint, amount: entry.amount });
+            this.queueHistoryAction("kamino-withdraw");
+          } catch (withdrawErr) {
+            logger.warn({ err: withdrawErr }, "rollback kamino withdraw failed");
+          }
         }
       }
       return "kamino-rebalance-failed";
@@ -2180,23 +2492,67 @@ export class OrcaBot {
     }
 
     const previous = this.kaminoState;
-    const nextCollateralAmount = (previous?.collateralAmount ?? 0) + depositAmount;
+    const existingCollaterals = Array.isArray(previous?.collaterals) && previous.collaterals.length
+      ? previous.collaterals.map((item) => ({ ...item }))
+      : (previous?.collateralMint
+        ? [{
+          mint: previous.collateralMint,
+          amount: previous.collateralAmount ?? 0,
+          usd: previous.collateralUsd ?? null,
+          debtUsd: previous.debtUsd ?? null,
+          avgPriceUsdc: previous.avgPriceUsdc ?? null,
+          targetPriceUsdc: previous.targetPriceUsdc ?? null
+        }]
+        : []);
+    const nextMap = new Map<string, KaminoCollateralEntry>();
+    for (const entry of existingCollaterals) {
+      if (entry.mint) {
+        nextMap.set(entry.mint, { ...entry });
+      }
+    }
+    for (const entry of deposits) {
+      const share = totalDepositUsd > 0 ? (entry.depositUsd ?? 0) / totalDepositUsd : 0;
+      const debtUsd = borrowUsd * share;
+      const prev = nextMap.get(entry.mint) ?? {
+        mint: entry.mint,
+        amount: 0,
+        usd: null,
+        debtUsd: null,
+        avgPriceUsdc: null,
+        targetPriceUsdc: null
+      };
+      const nextAmount = (prev.amount ?? 0) + entry.depositAmount;
+      const nextUsd = (prev.usd ?? 0) + (entry.depositUsd ?? 0);
+      const nextDebtUsd = (prev.debtUsd ?? 0) + debtUsd;
+      const avgPriceUsdc = nextAmount > 0 ? nextDebtUsd / nextAmount : null;
+      const targetPriceUsdc = avgPriceUsdc != null
+        ? avgPriceUsdc * (1 + (this.config.kaminoPriceBufferPct ?? 0) / 100)
+        : null;
+      nextMap.set(entry.mint, {
+        mint: entry.mint,
+        amount: nextAmount,
+        usd: nextUsd > 0 ? nextUsd : null,
+        debtUsd: nextDebtUsd > 0 ? nextDebtUsd : null,
+        avgPriceUsdc,
+        targetPriceUsdc
+      });
+    }
+    const nextCollaterals = Array.from(nextMap.values());
+    const totalCollateralUsd = nextCollaterals.reduce((sum, item) => sum + (item.usd ?? 0), 0);
+    const totalDebtUsd = nextCollaterals.reduce((sum, item) => sum + (item.debtUsd ?? 0), 0);
+    const single = nextCollaterals.length === 1 ? nextCollaterals[0] : null;
     const nextDebtAmount = (previous?.debtAmount ?? 0) + borrowUsd;
-    const avgPriceUsdc = nextCollateralAmount > 0 ? nextDebtAmount / nextCollateralAmount : null;
-    const targetPriceUsdc = avgPriceUsdc != null
-      ? avgPriceUsdc * (1 + (this.config.kaminoPriceBufferPct ?? 0) / 100)
-      : null;
-    const nextCollateralUsd = (previous?.collateralUsd ?? 0) + (depositUsd ?? 0);
     const nextState: KaminoCycleState = {
       active: true,
-      collateralMint: exitToken.mint,
-      collateralAmount: nextCollateralAmount,
-      collateralUsd: Number.isFinite(nextCollateralUsd) && nextCollateralUsd > 0 ? nextCollateralUsd : null,
+      collateralMint: single ? single.mint : null,
+      collateralAmount: single ? single.amount : 0,
+      collateralUsd: totalCollateralUsd > 0 ? totalCollateralUsd : null,
       debtMint: stable.mint,
       debtAmount: nextDebtAmount,
-      debtUsd: nextDebtAmount,
-      avgPriceUsdc,
-      targetPriceUsdc,
+      debtUsd: totalDebtUsd > 0 ? totalDebtUsd : null,
+      avgPriceUsdc: single ? single.avgPriceUsdc : null,
+      targetPriceUsdc: single ? single.targetPriceUsdc : null,
+      collaterals: nextCollaterals,
       cycleCount: (previous?.cycleCount ?? 0) + 1,
       updatedAt: new Date().toISOString(),
       lastError: null

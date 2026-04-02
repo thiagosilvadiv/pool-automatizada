@@ -45,6 +45,8 @@ export type PoolOverrides = {
   kaminoMaxLtv?: number;
   kaminoCloseRule?: "avg-price" | "breakeven" | "manual";
   kaminoPriceBufferPct?: number;
+  kaminoCollateralMode?: "exit" | "max-value" | "tokenA" | "tokenB" | "both";
+  kaminoAutoCloseOnTokenChange?: boolean;
   hedgeEnabled?: boolean;
   hedgePct?: number;
   hedgeSymbol?: string;
@@ -1158,6 +1160,40 @@ export class PoolManager {
       normalized.kaminoPriceBufferPct = value;
     }
 
+    if (overrides.kaminoCollateralMode != null) {
+      const value = String(overrides.kaminoCollateralMode).trim().toLowerCase();
+      if (!["exit", "max-value", "both", "dual", "tokena", "tokenb", "token_a", "token_b"].includes(value)) {
+        throw new Error("kaminoCollateralMode override must be exit, max-value, tokenA, tokenB, or both");
+      }
+      if (value === "tokena" || value === "token_a") {
+        normalized.kaminoCollateralMode = "tokenA";
+      } else if (value === "tokenb" || value === "token_b") {
+        normalized.kaminoCollateralMode = "tokenB";
+      } else if (value === "dual") {
+        normalized.kaminoCollateralMode = "both";
+      } else {
+        normalized.kaminoCollateralMode = value as PoolOverrides["kaminoCollateralMode"];
+      }
+    }
+    if (overrides.kaminoAutoCloseOnTokenChange != null) {
+      const raw = overrides.kaminoAutoCloseOnTokenChange as unknown;
+      let value: boolean | null = null;
+      if (typeof raw === "boolean") {
+        value = raw;
+      } else if (typeof raw === "string") {
+        const normalizedValue = raw.trim().toLowerCase();
+        if (["true", "1", "yes", "sim", "on"].includes(normalizedValue)) {
+          value = true;
+        } else if (["false", "0", "no", "nao", "não", "off"].includes(normalizedValue)) {
+          value = false;
+        }
+      }
+      if (value === null) {
+        throw new Error("kaminoAutoCloseOnTokenChange override must be boolean");
+      }
+      normalized.kaminoAutoCloseOnTokenChange = value;
+    }
+
     if (overrides.hedgeEnabled != null) {
       const raw = overrides.hedgeEnabled as unknown;
       let value: boolean | null = null;
@@ -1474,6 +1510,48 @@ export class PoolManager {
           throw new Error("kaminoPriceBufferPct override must be >= 0");
         }
         next.kaminoPriceBufferPct = value;
+      }
+    }
+
+    if ("kaminoCollateralMode" in updates) {
+      if (updates.kaminoCollateralMode == null) {
+        delete next.kaminoCollateralMode;
+      } else {
+        const value = String(updates.kaminoCollateralMode).trim().toLowerCase();
+        if (!["exit", "max-value", "both", "dual", "tokena", "tokenb", "token_a", "token_b"].includes(value)) {
+          throw new Error("kaminoCollateralMode override must be exit, max-value, tokenA, tokenB, or both");
+        }
+        if (value === "tokena" || value === "token_a") {
+          next.kaminoCollateralMode = "tokenA";
+        } else if (value === "tokenb" || value === "token_b") {
+          next.kaminoCollateralMode = "tokenB";
+        } else if (value === "dual") {
+          next.kaminoCollateralMode = "both";
+        } else {
+          next.kaminoCollateralMode = value as PoolOverrides["kaminoCollateralMode"];
+        }
+      }
+    }
+    if ("kaminoAutoCloseOnTokenChange" in updates) {
+      if (updates.kaminoAutoCloseOnTokenChange == null) {
+        delete next.kaminoAutoCloseOnTokenChange;
+      } else {
+        const raw = updates.kaminoAutoCloseOnTokenChange as unknown;
+        let value: boolean | null = null;
+        if (typeof raw === "boolean") {
+          value = raw;
+        } else if (typeof raw === "string") {
+          const normalizedValue = raw.trim().toLowerCase();
+          if (["true", "1", "yes", "sim", "on"].includes(normalizedValue)) {
+            value = true;
+          } else if (["false", "0", "no", "nao", "não", "off"].includes(normalizedValue)) {
+            value = false;
+          }
+        }
+        if (value === null) {
+          throw new Error("kaminoAutoCloseOnTokenChange override must be boolean");
+        }
+        next.kaminoAutoCloseOnTokenChange = value;
       }
     }
 
