@@ -682,6 +682,13 @@ export class OrcaBot {
       let borrowSig: string | undefined;
       if (Number.isFinite(borrowUsd) && borrowUsd > 0) {
         const stable = await this.getStableMintInfo();
+        const borrowSupport = await kamino.supportsBorrow(stable.mint);
+        if (!borrowSupport.ok) {
+          const marketHint = process.env.KAMINO_MARKET ? ` (market ${process.env.KAMINO_MARKET})` : "";
+          const message = `Borrow ${stable.label} indisponÃ­vel: ${borrowSupport.reason ?? "reserve nÃ£o encontrada"}${marketHint}`;
+          this.setError(message);
+          return { ok: false, reason: message, status: this.getStatus() };
+        }
         borrowSig = await kamino.borrow({ mint: stable.mint, amount: borrowUsd });
         this.queueHistoryAction("kamino-borrow", { lastAction: "kamino-borrow" });
         this.lastStatus.lastAction = "kamino-borrow";
@@ -2519,6 +2526,14 @@ export class OrcaBot {
     }
 
     const stable = await this.getStableMintInfo();
+    const borrowSupport = await kamino.supportsBorrow(stable.mint);
+    if (!borrowSupport.ok) {
+      const marketHint = process.env.KAMINO_MARKET ? " (market " + process.env.KAMINO_MARKET + ")" : "";
+      this.setError(
+        "Borrow " + stable.label + " indisponÃ­vel: " + (borrowSupport.reason ?? "reserve nÃ£o encontrada") + marketHint
+      );
+      return "kamino-rebalance-failed";
+    }
     try {
       await kamino.borrow({ mint: stable.mint, amount: borrowUsd });
       this.queueHistoryAction("kamino-borrow");

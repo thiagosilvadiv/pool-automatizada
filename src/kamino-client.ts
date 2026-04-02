@@ -43,6 +43,7 @@ export type KaminoClient = {
   withdraw(input: { mint: string; amount: number }): Promise<string>;
   getPositionState(): Promise<KaminoPositionState | null>;
   supportsCollateral(mint: string): Promise<boolean>;
+  supportsBorrow(mint: string): Promise<{ ok: boolean; reason?: string }>;
 };
 
 const DEFAULT_KAMINO_MARKET = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF";
@@ -203,6 +204,22 @@ class RealKaminoClient implements KaminoClient {
   async supportsCollateral(mint: string): Promise<boolean> {
     const market = await this.loadMarket();
     return Boolean(market.getReserveByMint(address(mint)));
+  }
+
+  async supportsBorrow(mint: string): Promise<{ ok: boolean; reason?: string }> {
+    const market = await this.loadMarket();
+    const reserve = market.getReserveByMint(address(mint));
+    if (!reserve) {
+      return { ok: false, reason: "Reserve nÃ£o encontrada no market" };
+    }
+    const config = (reserve as any).state?.config ?? (reserve as any).config ?? (reserve as any).reserveConfig ?? null;
+    if (config) {
+      const borrowLimit = Number(config.borrowLimit ?? config.borrowLimitUsd ?? config.maxBorrow ?? NaN);
+      if (Number.isFinite(borrowLimit) && borrowLimit <= 0) {
+        return { ok: false, reason: "Borrow desativado para este ativo" };
+      }
+    }
+    return { ok: true };
   }
 
   async depositCollateral(input: { mint: string; amount: number }): Promise<string> {
@@ -458,6 +475,10 @@ class NoopKaminoClient implements KaminoClient {
 
   async supportsCollateral(_mint: string): Promise<boolean> {
     return true;
+  }
+
+  async supportsBorrow(_mint: string): Promise<{ ok: boolean; reason?: string }> {
+    return { ok: true };
   }
 }
 
