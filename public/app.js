@@ -13,12 +13,6 @@ const targetRangeEl = document.getElementById("targetRange");
 const positionRangeEl = document.getElementById("positionRange");
 const positionMintEl = document.getElementById("positionMint");
 const solBalanceEl = document.getElementById("solBalance");
-const walletAEl = document.getElementById("walletA");
-const walletBEl = document.getElementById("walletB");
-const positionAEl = document.getElementById("positionA");
-const positionBEl = document.getElementById("positionB");
-const portfolioEl = document.getElementById("portfolio");
-const pnlEl = document.getElementById("pnl");
 const solUsdEl = document.getElementById("solUsd");
 const budgetUsdEl = document.getElementById("budgetUsd");
 const budgetSolEl = document.getElementById("budgetSol");
@@ -55,13 +49,10 @@ const poolHedgeMarginPctInput = document.getElementById("poolHedgeMarginPct");
 const poolHedgeSymbolInput = document.getElementById("poolHedgeSymbol");
 const poolHedgeLeverageInput = document.getElementById("poolHedgeLeverage");
 const poolHedgeEntryModeInput = document.getElementById("poolHedgeEntryMode");
-const poolPnlTargetUsdInput = document.getElementById("poolPnlTargetUsd");
-const poolPnlTargetPctInput = document.getElementById("poolPnlTargetPct");
 const poolTrendHint = document.getElementById("poolTrendHint");
 const addPoolBtn = document.getElementById("addPoolBtn");
 const poolsBody = document.getElementById("poolsBody");
 const poolError = document.getElementById("poolError");
-const resultsBody = document.getElementById("resultsBody");
 const editPoolModal = document.getElementById("editPoolModal");
 const editPoolForm = document.getElementById("editPoolForm");
 const editPoolIdInput = document.getElementById("editPoolId");
@@ -81,8 +72,6 @@ const editPoolHedgeMarginPctInput = document.getElementById("editPoolHedgeMargin
 const editPoolHedgeSymbolInput = document.getElementById("editPoolHedgeSymbol");
 const editPoolHedgeLeverageInput = document.getElementById("editPoolHedgeLeverage");
 const editPoolHedgeEntryModeInput = document.getElementById("editPoolHedgeEntryMode");
-const editPoolPnlTargetUsdInput = document.getElementById("editPoolPnlTargetUsd");
-const editPoolPnlTargetPctInput = document.getElementById("editPoolPnlTargetPct");
 const editPoolTrendHint = document.getElementById("editPoolTrendHint");
 const editPoolError = document.getElementById("editPoolError");
 const swapResultModal = document.getElementById("swapResultModal");
@@ -855,8 +844,6 @@ function openEditPoolModal(pool) {
   const defaultHedgeSymbol = cachedConfig?.hedgeSymbol ?? "-";
   const defaultHedgeLeverage = cachedConfig?.hedgeLeverage ?? "-";
   const defaultHedgeEntryMode = cachedConfig?.hedgeEntryMode ?? "off";
-  const defaultPnlTargetUsd = cachedConfig?.pnlTargetUsd ?? "-";
-  const defaultPnlTargetPct = cachedConfig?.pnlTargetPct ?? "-";
   const tokenInfo = getTokenInfo(pool);
 
   if (editPoolIdInput) editPoolIdInput.value = pool.id ?? "";
@@ -895,14 +882,6 @@ function openEditPoolModal(pool) {
   if (editPoolHedgeEntryModeInput) {
     editPoolHedgeEntryModeInput.value = overrides.hedgeEntryMode ?? "";
     setSelectPlaceholder(editPoolHedgeEntryModeInput, `Padrão (${formatHedgeEntryMode(defaultHedgeEntryMode)})`);
-  }
-  if (editPoolPnlTargetUsdInput) {
-    editPoolPnlTargetUsdInput.value = overrides.pnlTargetUsd ?? "";
-    editPoolPnlTargetUsdInput.placeholder = `Padrão (${formatNumber(defaultPnlTargetUsd, 2)})`;
-  }
-  if (editPoolPnlTargetPctInput) {
-    editPoolPnlTargetPctInput.value = overrides.pnlTargetPct ?? "";
-    editPoolPnlTargetPctInput.placeholder = `Padrão (${formatNumber(defaultPnlTargetPct, 2)})`;
   }
   if (editPoolExitTokenInput) {
     updateExitTokenSelectHints(editPoolExitTokenInput, tokenInfo);
@@ -1282,29 +1261,6 @@ function renderPools(data, config) {
   poolsBody.innerHTML = rows.join("");
 }
 
-function renderResults(data) {
-  const pools = data?.pools ?? [];
-  if (!pools.length) {
-    resultsBody.innerHTML = "<tr><td colspan=\"7\">Sem dados ainda</td></tr>";
-    return;
-  }
-  const rows = pools.map((pool) => {
-    const statusLabel = pool.running ? "Rodando" : "Parado";
-    return `
-      <tr>
-        <td>${pool.name}</td>
-        <td>${statusLabel}</td>
-        <td>${pool.lastAction ?? "-"}</td>
-        <td>${formatNumber(pool.lastPrice, 8)}</td>
-        <td>${formatNumber(pool.positionValueUsd, 2)}</td>
-        <td>${formatNumber(pool.positionPnlUsd, 2)}</td>
-        <td>${formatNumber(pool.positionPnlSol, 4)}</td>
-      </tr>
-    `;
-  });
-  resultsBody.innerHTML = rows.join("");
-}
-
 async function updateUI() {
   try {
     const [status, config, history, pools, hedgeLogs] = await Promise.all([
@@ -1336,13 +1292,6 @@ async function updateUI() {
     positionRangeEl.textContent = formatRange(status.positionRange, tokenInfo);
     positionMintEl.textContent = status.positionMint ?? "-";
     solBalanceEl.textContent = formatNumber(status.solBalance, 4);
-
-    walletAEl.textContent = formatNumber(status.tokenABalance, 6);
-    walletBEl.textContent = formatNumber(status.tokenBBalance, 6);
-    positionAEl.textContent = formatNumber(status.positionTokenA, 6);
-    positionBEl.textContent = formatNumber(status.positionTokenB, 6);
-    portfolioEl.textContent = formatNumber(status.portfolioValue, 6);
-    pnlEl.textContent = formatNumber(status.pnl, 6);
 
     solUsdEl.textContent = formatNumber(status.solUsdPrice, 4);
     budgetUsdEl.textContent = formatNumber(status.budgetUsd, 2);
@@ -1394,12 +1343,6 @@ async function updateUI() {
     if (poolHedgeEntryModeInput) {
       setSelectPlaceholder(poolHedgeEntryModeInput, `Padrão (${formatHedgeEntryMode(config.hedgeEntryMode ?? "off")})`);
     }
-    if (poolPnlTargetUsdInput) {
-      poolPnlTargetUsdInput.placeholder = `Padrão (${formatNumber(config.pnlTargetUsd ?? "-", 2)})`;
-    }
-    if (poolPnlTargetPctInput) {
-      poolPnlTargetPctInput.placeholder = `Padrão (${formatNumber(config.pnlTargetPct ?? "-", 2)})`;
-    }
     if (poolTrendTimeframeInput) {
       setSelectPlaceholder(poolTrendTimeframeInput, `Padrão (${config.trendTimeframe ?? "1m"})`);
     }
@@ -1412,7 +1355,6 @@ async function updateUI() {
     }
     renderHedgeLogs(hedgeLogs);
     renderPools(pools, config);
-    renderResults(pools);
   } catch (err) {
     statusBadge.textContent = "Erro";
     statusBadge.classList.remove("running");
@@ -1520,8 +1462,6 @@ addPoolBtn.addEventListener("click", async () => {
   const hedgeSymbol = poolHedgeSymbolInput?.value?.trim();
   const hedgeLeverage = parseOptionalNumber(poolHedgeLeverageInput?.value);
   const hedgeEntryMode = poolHedgeEntryModeInput?.value?.trim();
-  const pnlTargetUsd = parseOptionalNumber(poolPnlTargetUsdInput?.value);
-  const pnlTargetPct = parseOptionalNumber(poolPnlTargetPctInput?.value);
   poolError.classList.add("hidden");
   try {
     const overrides = {};
@@ -1601,12 +1541,6 @@ addPoolBtn.addEventListener("click", async () => {
     if (hedgeEntryMode) {
       overrides.hedgeEntryMode = hedgeEntryMode;
     }
-    if (pnlTargetUsd !== undefined) {
-      overrides.pnlTargetUsd = pnlTargetUsd;
-    }
-    if (pnlTargetPct !== undefined) {
-      overrides.pnlTargetPct = pnlTargetPct;
-    }
     const res = await fetch("/api/pools", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1634,8 +1568,6 @@ addPoolBtn.addEventListener("click", async () => {
     if (poolHedgeSymbolInput) poolHedgeSymbolInput.value = "";
     if (poolHedgeLeverageInput) poolHedgeLeverageInput.value = "";
     if (poolHedgeEntryModeInput) poolHedgeEntryModeInput.value = "";
-    if (poolPnlTargetUsdInput) poolPnlTargetUsdInput.value = "";
-    if (poolPnlTargetPctInput) poolPnlTargetPctInput.value = "";
     updateUI();
   } catch (err) {
     poolError.textContent = err instanceof Error ? err.message : String(err);
@@ -1878,36 +1810,6 @@ if (editPoolForm) {
       overrides.hedgeEntryMode = null;
     } else {
       overrides.hedgeEntryMode = hedgeEntryModeRaw;
-    }
-
-    const pnlTargetUsdRaw = editPoolPnlTargetUsdInput?.value?.trim() ?? "";
-    if (!pnlTargetUsdRaw) {
-      overrides.pnlTargetUsd = null;
-    } else {
-      const parsed = parseOptionalNumber(pnlTargetUsdRaw);
-      if (parsed === undefined) {
-        if (editPoolError) {
-          editPoolError.textContent = "PnL alvo (USD) inválido.";
-          editPoolError.classList.remove("hidden");
-        }
-        return;
-      }
-      overrides.pnlTargetUsd = parsed;
-    }
-
-    const pnlTargetPctRaw = editPoolPnlTargetPctInput?.value?.trim() ?? "";
-    if (!pnlTargetPctRaw) {
-      overrides.pnlTargetPct = null;
-    } else {
-      const parsed = parseOptionalNumber(pnlTargetPctRaw);
-      if (parsed === undefined) {
-        if (editPoolError) {
-          editPoolError.textContent = "PnL alvo (%) inválido.";
-          editPoolError.classList.remove("hidden");
-        }
-        return;
-      }
-      overrides.pnlTargetPct = parsed;
     }
 
     try {

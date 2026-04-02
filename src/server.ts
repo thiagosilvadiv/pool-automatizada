@@ -313,8 +313,6 @@ export async function startServer(config: Config): Promise<void> {
       hedgeLeverage: config.hedgeLeverage,
       hedgeMarginPct: config.hedgeMarginPct,
       hedgeEntryMode: config.hedgeEntryMode,
-      pnlTargetUsd: config.pnlTargetUsd,
-      pnlTargetPct: config.pnlTargetPct,
       tokenAMint: selectedStatus?.tokenAMint ?? null,
       tokenBMint: selectedStatus?.tokenBMint ?? null,
       isTokenASol: selectedStatus?.isTokenASol ?? null,

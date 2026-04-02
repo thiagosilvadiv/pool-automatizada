@@ -73,8 +73,6 @@ export type Config = {
   hedgeLeverage: number;
   hedgeMarginPct: number;
   hedgeEntryMode: HedgeEntryMode;
-  pnlTargetUsd: number | null;
-  pnlTargetPct: number | null;
 };
 
 export type HedgeEntryMode =
@@ -324,10 +322,6 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     || inferTrendNetworkId(process.env.NETWORK ?? data.network ?? "mainnet-beta");
   const envHedgeEntryMode = parseHedgeEntryMode(process.env.HEDGE_ENTRY_MODE)
     ?? parseHedgeEntryMode((data as any).hedgeEntryMode);
-  const envPnlTargetUsd = parseEnvNumber(process.env.PNL_TARGET_USD);
-  const envPnlTargetPct = parseEnvNumber(process.env.PNL_TARGET_PCT);
-  const dataPnlTargetUsd = (data as any).pnlTargetUsd;
-  const dataPnlTargetPct = (data as any).pnlTargetPct;
   const dataOpenAiModels = normalizeModelList((data as any).openaiRecommendedModels);
   const envOpenAiModels = normalizeModelList(process.env.OPENAI_RECOMMENDED_MODELS);
   const defaultOpenAiModels = ["gpt-5.4-mini", "gpt-5.4", "gpt-4.1-mini"];
@@ -467,9 +461,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     hedgeSymbol: (envHedgeSymbol ?? (data as any).hedgeSymbol ?? "").trim().toUpperCase(),
     hedgeLeverage: parseEnvNumber(process.env.HEDGE_LEVERAGE) ?? Number((data as any).hedgeLeverage ?? 1),
     hedgeMarginPct: parseEnvNumber(process.env.HEDGE_MARGIN_PCT) ?? Number((data as any).hedgeMarginPct ?? 0),
-    hedgeEntryMode: envHedgeEntryMode ?? "off",
-    pnlTargetUsd: envPnlTargetUsd ?? (dataPnlTargetUsd == null ? null : Number(dataPnlTargetUsd)),
-    pnlTargetPct: envPnlTargetPct ?? (dataPnlTargetPct == null ? null : Number(dataPnlTargetPct))
+    hedgeEntryMode: envHedgeEntryMode ?? "off"
   };
 
   if (!configPath && !envJson && !envPath && !config.rpcUrl) {
@@ -638,16 +630,6 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     }
   }
 
-  if (config.pnlTargetUsd !== null) {
-    if (!Number.isFinite(config.pnlTargetUsd) || config.pnlTargetUsd <= 0) {
-      throw new Error("pnlTargetUsd must be > 0 or null");
-    }
-  }
-  if (config.pnlTargetPct !== null) {
-    if (!Number.isFinite(config.pnlTargetPct) || config.pnlTargetPct <= 0 || config.pnlTargetPct > 100) {
-      throw new Error("pnlTargetPct must be between 0 and 100 or null");
-    }
-  }
 
   return config;
 }

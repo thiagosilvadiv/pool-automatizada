@@ -156,7 +156,7 @@ export class BotRunner {
   private lastHedgeClose: HedgeCloseResult | null = null;
   private hedgeDecisionByMint = new Map<string, { status: "opened" | "skipped" | "failed"; reason: string | null }>();
   private pendingClose = false;
-  private pendingCloseMode: "manual" | "target" = "manual";
+  private pendingCloseMode: "manual" = "manual";
   private pendingCloseRequestedAt: string | null = null;
   private autoAddRequestedByMint = new Set<string>();
   private onAutoAddRequest?: (poolId: string) => void;
@@ -513,67 +513,6 @@ export class BotRunner {
     return this.hedgeDecisionByMint.get(mint) ?? null;
   }
 
-  private async checkPnlTarget(status: BotStatus): Promise<boolean> {
-    const targetUsd = Number.isFinite(this.config.pnlTargetUsd ?? NaN) ? Number(this.config.pnlTargetUsd) : null;
-    const targetPct = Number.isFinite(this.config.pnlTargetPct ?? NaN) ? Number(this.config.pnlTargetPct) : null;
-    if (targetUsd == null && targetPct == null) {
-      return false;
-    }
-    const mint = status.positionMint ?? null;
-    if (!mint) {
-      return false;
-    }
-    const poolPnl = typeof status.positionPnlUsd === "number" && Number.isFinite(status.positionPnlUsd)
-      ? status.positionPnlUsd
-      : null;
-    const poolFees = typeof status.positionFeesUsd === "number" && Number.isFinite(status.positionFeesUsd)
-      ? status.positionFeesUsd
-      : null;
-    const poolPnlNet = poolPnl != null && poolFees != null ? poolPnl - poolFees : poolPnl;
-    let hedgePnl: number | null = null;
-    let hedgeFees: number | null = null;
-    if (this.hedgeManager.getState()?.active) {
-      const hedgeOpen = await this.hedgeManager.getOpenPnlNetUsd();
-      if (hedgeOpen) {
-        hedgePnl = hedgeOpen.pnlUsd;
-        hedgeFees = hedgeOpen.feesUsd;
-      } else {
-        hedgePnl = await this.hedgeManager.getOpenPnlUsd();
-      }
-    }
-    const hasPool = poolPnlNet != null && Number.isFinite(poolPnlNet);
-    const hasHedge = hedgePnl != null && Number.isFinite(hedgePnl);
-    if (!hasPool && !hasHedge) {
-      return false;
-    }
-    const totalPnl = (hasPool ? poolPnlNet! : 0) + (hasHedge ? hedgePnl! : 0);
-
-    let entryUsd: number | null = status.positionEntryUsd ?? null;
-    if (entryUsd == null) {
-      entryUsd = this.entryByMint.get(mint) ?? null;
-    }
-    if (entryUsd != null && !isEntryUsdSane(entryUsd, status.budgetUsd ?? null, status.portfolioUsd ?? null, {
-      minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
-    })) {
-      entryUsd = null;
-    }
-
-    const hitUsd = targetUsd != null && totalPnl >= targetUsd;
-    const hitPct = targetPct != null && entryUsd != null && totalPnl >= entryUsd * (targetPct / 100);
-    if (!hitUsd && !hitPct) {
-      return false;
-    }
-
-    this.pendingClose = true;
-    this.pendingCloseMode = "target";
-    this.pendingCloseRequestedAt = new Date().toISOString();
-    logger.info(
-      { totalPnl, targetUsd, targetPct, entryUsd, positionMint: mint, poolFees, hedgeFees },
-      "pnl target reached; closing position"
-    );
-    return true;
-  }
-
   private schedule(): void {
     if (!this.running) {
       return;
@@ -742,11 +681,6 @@ export class BotRunner {
           return;
         }
       }
-      const targetTriggered = await this.checkPnlTarget(status);
-      if (targetTriggered) {
-        this.recordEvent(status, { hedgeClose: hedgeCloseForClosePosition });
-        return;
-      }
       this.recordEvent(status, { hedgeClose: hedgeCloseForClosePosition ?? hedgeCloseForRebalance });
       this.maybeRequestAutoAdd(status);
     } catch (err) {
@@ -875,7 +809,7 @@ export class BotRunner {
     return null;
   }
 
-  private async performClose(mode: "manual" | "target"): Promise<RunnerStatus> {
+  private async performClose(mode: "manual"): Promise<RunnerStatus> {
     if (this.inFlight) {
       return this.getStatus();
     }

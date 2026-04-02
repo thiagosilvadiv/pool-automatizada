@@ -45,8 +45,6 @@ export type PoolOverrides = {
   hedgeLeverage?: number;
   hedgeMarginPct?: number;
   hedgeEntryMode?: "off" | "trend-down" | "trend-up" | "trend-any" | "force-down" | "force-up";
-  pnlTargetUsd?: number | null;
-  pnlTargetPct?: number | null;
 };
 
 export type PoolSummary = {
@@ -980,6 +978,9 @@ export class PoolManager {
     if (!overrides) {
       return undefined;
     }
+    const sanitized = overrides as Record<string, unknown>;
+    delete sanitized.pnlTargetUsd;
+    delete sanitized.pnlTargetPct;
     const normalized: PoolOverrides = {};
 
     if (overrides.rangeWidthPct != null) {
@@ -1143,22 +1144,6 @@ export class PoolManager {
       normalized.hedgeEntryMode = value as PoolOverrides["hedgeEntryMode"];
     }
 
-    if (overrides.pnlTargetUsd != null) {
-      const value = Number(overrides.pnlTargetUsd);
-      if (!Number.isFinite(value) || value <= 0) {
-        throw new Error("pnlTargetUsd override must be > 0");
-      }
-      normalized.pnlTargetUsd = value;
-    }
-
-    if (overrides.pnlTargetPct != null) {
-      const value = Number(overrides.pnlTargetPct);
-      if (!Number.isFinite(value) || value <= 0 || value > 100) {
-        throw new Error("pnlTargetPct override must be between 0 and 100");
-      }
-      normalized.pnlTargetPct = value;
-    }
-
     if (normalized.hedgeEnabled === true) {
       const symbol = normalized.hedgeSymbol ?? this.baseConfig.hedgeSymbol ?? "";
       if (!symbol || !symbol.trim()) {
@@ -1187,6 +1172,12 @@ export class PoolManager {
     updates: PoolOverrides
   ): PoolOverrides {
     const next: PoolOverrides = { ...current };
+    if ("pnlTargetUsd" in (next as Record<string, unknown>)) {
+      delete (next as Record<string, unknown>).pnlTargetUsd;
+    }
+    if ("pnlTargetPct" in (next as Record<string, unknown>)) {
+      delete (next as Record<string, unknown>).pnlTargetPct;
+    }
 
     if ("rangeWidthPct" in updates) {
       if (updates.rangeWidthPct == null) {
@@ -1410,30 +1401,6 @@ export class PoolManager {
           throw new Error("hedgeEntryMode override must be off, trend-down, trend-up, trend-any, force-down, or force-up");
         }
         next.hedgeEntryMode = value as PoolOverrides["hedgeEntryMode"];
-      }
-    }
-
-    if ("pnlTargetUsd" in updates) {
-      if (updates.pnlTargetUsd == null) {
-        delete next.pnlTargetUsd;
-      } else {
-        const value = Number(updates.pnlTargetUsd);
-        if (!Number.isFinite(value) || value <= 0) {
-          throw new Error("pnlTargetUsd override must be > 0");
-        }
-        next.pnlTargetUsd = value;
-      }
-    }
-
-    if ("pnlTargetPct" in updates) {
-      if (updates.pnlTargetPct == null) {
-        delete next.pnlTargetPct;
-      } else {
-        const value = Number(updates.pnlTargetPct);
-        if (!Number.isFinite(value) || value <= 0 || value > 100) {
-          throw new Error("pnlTargetPct override must be between 0 and 100");
-        }
-        next.pnlTargetPct = value;
       }
     }
 
