@@ -37,6 +37,12 @@ const kaminoCycleCountEl = document.getElementById("kaminoCycleCount");
 const kaminoSimulatedEl = document.getElementById("kaminoSimulated");
 const kaminoLastErrorEl = document.getElementById("kaminoLastError");
 const kaminoCollateralsEl = document.getElementById("kaminoCollaterals");
+const kaminoTestTokenSelect = document.getElementById("kaminoTestToken");
+const kaminoTestMintInput = document.getElementById("kaminoTestMint");
+const kaminoTestAmountInput = document.getElementById("kaminoTestAmount");
+const kaminoTestBorrowInput = document.getElementById("kaminoTestBorrow");
+const kaminoTestBtn = document.getElementById("kaminoTestBtn");
+const kaminoTestResult = document.getElementById("kaminoTestResult");
 const historyBody = document.getElementById("historyBody");
 const hedgeLogBody = document.getElementById("hedgeLogBody");
 const poolNameLabel = document.getElementById("poolNameLabel");
@@ -338,6 +344,40 @@ function describeToken(side, info) {
   const mint = side === "tokenA" ? info.tokenAMint : info.tokenBMint;
   if (mint) return `${base} (${formatMintLabel(mint)})`;
   return base;
+}
+
+function updateKaminoTestTokenHints(info) {
+  if (!(kaminoTestTokenSelect instanceof HTMLSelectElement)) return;
+  const optionA = kaminoTestTokenSelect.querySelector("option[value=\"tokenA\"]");
+  const optionB = kaminoTestTokenSelect.querySelector("option[value=\"tokenB\"]");
+  if (optionA) optionA.textContent = describeToken("tokenA", info);
+  if (optionB) optionB.textContent = describeToken("tokenB", info);
+}
+
+function syncKaminoTestMint(info) {
+  if (!(kaminoTestMintInput instanceof HTMLInputElement)) return;
+  const choice = kaminoTestTokenSelect instanceof HTMLSelectElement
+    ? kaminoTestTokenSelect.value
+    : "manual";
+  const mint =
+    choice === "tokenA" ? info?.tokenAMint
+      : choice === "tokenB" ? info?.tokenBMint
+        : null;
+  const manual = choice === "manual";
+  kaminoTestMintInput.disabled = !manual;
+  if (!manual) {
+    kaminoTestMintInput.value = mint ?? "";
+  }
+}
+
+function setKaminoTestResult(message, isError) {
+  if (!kaminoTestResult) return;
+  kaminoTestResult.textContent = message || "";
+  if (isError) {
+    kaminoTestResult.classList.add("is-error");
+  } else {
+    kaminoTestResult.classList.remove("is-error");
+  }
 }
 
 function getOtherTokenLabel(info) {
@@ -1471,6 +1511,8 @@ async function updateUI() {
     if (kaminoCloseBtn) {
       kaminoCloseBtn.disabled = !status.kaminoActive;
     }
+    updateKaminoTestTokenHints(tokenInfo);
+    syncKaminoTestMint(tokenInfo);
 
     statusBadge.textContent = status.running ? "Rodando" : "Parado";
     statusBadge.classList.toggle("running", status.running);
@@ -1581,6 +1623,67 @@ if (kaminoCloseBtn) {
       window.alert(msg);
     }
     updateUI();
+  });
+}
+
+if (kaminoTestTokenSelect) {
+  kaminoTestTokenSelect.addEventListener("change", () => {
+    syncKaminoTestMint(getTokenInfo(cachedConfig));
+  });
+}
+
+if (kaminoTestBtn) {
+  kaminoTestBtn.addEventListener("click", async () => {
+    const info = getTokenInfo(cachedConfig);
+    const choice = kaminoTestTokenSelect instanceof HTMLSelectElement
+      ? kaminoTestTokenSelect.value
+      : "manual";
+    const mint =
+      choice === "tokenA" ? info?.tokenAMint
+        : choice === "tokenB" ? info?.tokenBMint
+          : (kaminoTestMintInput?.value ?? "").trim();
+    const amountRaw = kaminoTestAmountInput?.value ?? "";
+    const borrowRaw = kaminoTestBorrowInput?.value ?? "";
+    const amount = Number(amountRaw);
+    const borrowUsd = borrowRaw.trim() ? Number(borrowRaw) : undefined;
+
+    if (!mint) {
+      setKaminoTestResult("Selecione um token ou informe o mint.", true);
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setKaminoTestResult("Informe a quantidade de colateral.", true);
+      return;
+    }
+    if (borrowUsd != null && (!Number.isFinite(borrowUsd) || borrowUsd < 0)) {
+      setKaminoTestResult("Borrow USD invÃ¡lido.", true);
+      return;
+    }
+
+    setKaminoTestResult("Enviando transaÃ§Ã£o para Kamino...", false);
+    if (kaminoTestBtn) kaminoTestBtn.disabled = true;
+    try {
+      const res = await fetch("/api/kamino/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ collateralMint: mint, collateralAmount: amount, borrowUsd })
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) {
+        const msg = data?.error ?? data?.reason ?? "Falha ao executar teste Kamino.";
+        setKaminoTestResult(msg, true);
+      } else {
+        const parts = [];
+        if (data.depositSig) parts.push(`DepÃ³sito OK: ${data.depositSig}`);
+        if (data.borrowSig) parts.push(`EmprÃ©stimo OK: ${data.borrowSig}`);
+        setKaminoTestResult(parts.length ? parts.join(" | ") : "DepÃ³sito enviado.", false);
+      }
+    } catch (err) {
+      setKaminoTestResult(err instanceof Error ? err.message : String(err), true);
+    } finally {
+      if (kaminoTestBtn) kaminoTestBtn.disabled = false;
+      updateUI();
+    }
   });
 }
 

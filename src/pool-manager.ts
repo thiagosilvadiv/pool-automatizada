@@ -447,6 +447,24 @@ export class PoolManager {
     return { ok: result.ok, reason: result.reason };
   }
 
+  async testKaminoSelected(input: {
+    collateralMint: string;
+    collateralAmount: number;
+    borrowUsd?: number;
+  }): Promise<{ ok: boolean; reason?: string; depositSig?: string; borrowSig?: string }> {
+    if (!this.selectedPoolId) {
+      throw new Error("No pool selected");
+    }
+    const record = this.getRecord(this.selectedPoolId);
+    const result = await record.runner.testKaminoNow(input);
+    return {
+      ok: result.ok,
+      reason: result.reason,
+      depositSig: result.depositSig,
+      borrowSig: result.borrowSig
+    };
+  }
+
   async topUpSolSelected(): Promise<{ ok: boolean; reason?: string }> {
     if (!this.selectedPoolId) {
       throw new Error("No pool selected");

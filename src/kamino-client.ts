@@ -37,10 +37,10 @@ export type KaminoPositionState = {
 
 export type KaminoClient = {
   ensureObligation(): Promise<void>;
-  depositCollateral(input: { mint: string; amount: number }): Promise<void>;
-  borrow(input: { mint: string; amount: number }): Promise<void>;
-  repay(input: { mint: string; amount: number }): Promise<void>;
-  withdraw(input: { mint: string; amount: number }): Promise<void>;
+  depositCollateral(input: { mint: string; amount: number }): Promise<string>;
+  borrow(input: { mint: string; amount: number }): Promise<string>;
+  repay(input: { mint: string; amount: number }): Promise<string>;
+  withdraw(input: { mint: string; amount: number }): Promise<string>;
   getPositionState(): Promise<KaminoPositionState | null>;
   supportsCollateral(mint: string): Promise<boolean>;
 };
@@ -205,7 +205,7 @@ class RealKaminoClient implements KaminoClient {
     return Boolean(market.getReserveByMint(address(mint)));
   }
 
-  async depositCollateral(input: { mint: string; amount: number }): Promise<void> {
+  async depositCollateral(input: { mint: string; amount: number }): Promise<string> {
     const market = await this.loadMarket();
     const amountRaw = await this.toRawAmountString(input.mint, input.amount);
     const action = await this.buildActionWithFallback(
@@ -239,9 +239,10 @@ class RealKaminoClient implements KaminoClient {
       { sig, mint: input.mint, amount: input.amount },
       "kamino deposit concluÃ­do"
     );
+    return sig;
   }
 
-  async borrow(input: { mint: string; amount: number }): Promise<void> {
+  async borrow(input: { mint: string; amount: number }): Promise<string> {
     const market = await this.loadMarket();
     const amountRaw = await this.toRawAmountString(input.mint, input.amount);
     const action = await this.buildActionWithFallback(
@@ -275,9 +276,10 @@ class RealKaminoClient implements KaminoClient {
       { sig, mint: input.mint, amount: input.amount },
       "kamino borrow concluÃ­do"
     );
+    return sig;
   }
 
-  async repay(input: { mint: string; amount: number }): Promise<void> {
+  async repay(input: { mint: string; amount: number }): Promise<string> {
     const market = await this.loadMarket();
     const amountRaw = await this.toRawAmountString(input.mint, input.amount);
     const currentSlot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
@@ -316,9 +318,10 @@ class RealKaminoClient implements KaminoClient {
       { sig, mint: input.mint, amount: input.amount },
       "kamino repay concluÃ­do"
     );
+    return sig;
   }
 
-  async withdraw(input: { mint: string; amount: number }): Promise<void> {
+  async withdraw(input: { mint: string; amount: number }): Promise<string> {
     const market = await this.loadMarket();
     const amountRaw = await this.toRawAmountString(input.mint, input.amount);
     const action = await this.buildActionWithFallback(
@@ -352,6 +355,7 @@ class RealKaminoClient implements KaminoClient {
       { sig, mint: input.mint, amount: input.amount },
       "kamino withdraw concluÃ­do"
     );
+    return sig;
   }
 
   async getPositionState(): Promise<KaminoPositionState | null> {
@@ -400,7 +404,7 @@ class NoopKaminoClient implements KaminoClient {
     this.ensureEnabled("ensure-obligation");
   }
 
-  async depositCollateral(input: { mint: string; amount: number }): Promise<void> {
+  async depositCollateral(input: { mint: string; amount: number }): Promise<string> {
     this.ensureEnabled("deposit");
     this.lastState = {
       collateralMint: input.mint,
@@ -409,9 +413,10 @@ class NoopKaminoClient implements KaminoClient {
       debtAmount: this.lastState?.debtAmount ?? null,
       ltv: this.lastState?.ltv ?? null
     };
+    return 'noop';
   }
 
-  async borrow(input: { mint: string; amount: number }): Promise<void> {
+  async borrow(input: { mint: string; amount: number }): Promise<string> {
     this.ensureEnabled("borrow");
     this.lastState = {
       collateralMint: this.lastState?.collateralMint ?? null,
@@ -420,9 +425,10 @@ class NoopKaminoClient implements KaminoClient {
       debtAmount: input.amount,
       ltv: this.lastState?.ltv ?? null
     };
+    return 'noop';
   }
 
-  async repay(input: { mint: string; amount: number }): Promise<void> {
+  async repay(input: { mint: string; amount: number }): Promise<string> {
     this.ensureEnabled("repay");
     this.lastState = {
       collateralMint: this.lastState?.collateralMint ?? null,
@@ -431,9 +437,10 @@ class NoopKaminoClient implements KaminoClient {
       debtAmount: Math.max(0, (this.lastState?.debtAmount ?? 0) - input.amount),
       ltv: this.lastState?.ltv ?? null
     };
+    return 'noop';
   }
 
-  async withdraw(input: { mint: string; amount: number }): Promise<void> {
+  async withdraw(input: { mint: string; amount: number }): Promise<string> {
     this.ensureEnabled("withdraw");
     this.lastState = {
       collateralMint: input.mint,
@@ -442,6 +449,7 @@ class NoopKaminoClient implements KaminoClient {
       debtAmount: this.lastState?.debtAmount ?? null,
       ltv: this.lastState?.ltv ?? null
     };
+    return 'noop';
   }
 
   async getPositionState(): Promise<KaminoPositionState | null> {

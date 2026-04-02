@@ -240,6 +240,30 @@ export class BotRunner {
     }
   }
 
+  async testKaminoNow(input: {
+    collateralMint: string;
+    collateralAmount: number;
+    borrowUsd?: number;
+  }): Promise<{ ok: boolean; reason?: string; depositSig?: string; borrowSig?: string; status: RunnerStatus }> {
+    if (this.inFlight) {
+      return { ok: false, reason: "busy", status: this.getStatus() };
+    }
+    this.inFlight = true;
+    try {
+      const result = await this.bot.testKaminoNow(input);
+      this.lastTickAt = new Date().toISOString();
+      this.recordEvent(this.bot.getStatus());
+      this.flushQueuedHistory();
+      return { ...result, status: this.getStatus() };
+    } catch (err) {
+      logger.error({ err }, "kamino-test failed");
+      this.bot.setError(err);
+      return { ok: false, reason: err instanceof Error ? err.message : String(err), status: this.getStatus() };
+    } finally {
+      this.inFlight = false;
+    }
+  }
+
   async topUpSolNow(): Promise<{ ok: boolean; reason?: string; status: RunnerStatus }> {
     if (this.inFlight) {
       return { ok: false, reason: "busy", status: this.getStatus() };

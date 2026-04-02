@@ -166,6 +166,43 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
+  app.post("/api/kamino/test", async (req: Request, res: Response) => {
+    try {
+      const mint = String(req.body?.collateralMint ?? "").trim();
+      const amount = Number(req.body?.collateralAmount);
+      const borrowUsdRaw = req.body?.borrowUsd;
+      const borrowUsd = borrowUsdRaw == null ? undefined : Number(borrowUsdRaw);
+
+      if (!mint) {
+        res.status(400).json({ ok: false, error: "collateralMint is required" });
+        return;
+      }
+      if (!Number.isFinite(amount) || amount <= 0) {
+        res.status(400).json({ ok: false, error: "collateralAmount must be > 0" });
+        return;
+      }
+      if (borrowUsd !== undefined && (!Number.isFinite(borrowUsd) || borrowUsd < 0)) {
+        res.status(400).json({ ok: false, error: "borrowUsd must be >= 0" });
+        return;
+      }
+
+      const result = await poolManager.testKaminoSelected({
+        collateralMint: mint,
+        collateralAmount: amount,
+        borrowUsd
+      });
+      res.json({
+        ok: result.ok,
+        reason: result.reason,
+        depositSig: result.depositSig,
+        borrowSig: result.borrowSig,
+        status: poolManager.getSelectedStatus()
+      });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   app.post("/api/sol-topup", async (_req: Request, res: Response) => {
     try {
       const result = await poolManager.topUpSolSelected();

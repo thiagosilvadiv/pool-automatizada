@@ -302,6 +302,30 @@
             <div class="kv"><span>Erro Kamino</span><span id="kaminoLastError">-</span></div>
             <div class="kamino-collaterals" id="kaminoCollaterals"></div>
             <button id="kaminoCloseBtn" class="ghost">Fechar ciclo Kamino</button>
+            <div class="kamino-test">
+              <div class="field">
+                <label>Colateral</label>
+                <select id="kaminoTestToken">
+                  <option value="tokenA">Token A</option>
+                  <option value="tokenB">Token B</option>
+                  <option value="manual">Mint manual</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>Mint manual</label>
+                <input id="kaminoTestMint" placeholder="Mint SPL" />
+              </div>
+              <div class="field">
+                <label>Qtd colateral</label>
+                <input id="kaminoTestAmount" type="number" step="any" placeholder="0.0" />
+              </div>
+              <div class="field">
+                <label>Borrow USD</label>
+                <input id="kaminoTestBorrow" type="number" step="any" placeholder="0.0" />
+              </div>
+              <button id="kaminoTestBtn" class="ghost">Depositar + Borrow</button>
+              <div id="kaminoTestResult" class="kamino-test-result"></div>
+            </div>
           </div>
         </div>
       </section>

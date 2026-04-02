@@ -628,6 +628,73 @@ export class OrcaBot {
     }
   }
 
+  async testKaminoNow(input: {
+    collateralMint: string;
+    collateralAmount: number;
+    borrowUsd?: number;
+  }): Promise<{ ok: boolean; reason?: string; depositSig?: string; borrowSig?: string; status: BotStatus }> {
+    this.lastStatus.running = true;
+    this.resetActionFee();
+
+    const mint = String(input.collateralMint ?? "").trim();
+    const amount = Number(input.collateralAmount);
+    const borrowUsd = input.borrowUsd != null ? Number(input.borrowUsd) : 0;
+
+    if (!mint) {
+      const message = "Mint do colateral Ã© obrigatÃ³rio";
+      this.setError(message);
+      return { ok: false, reason: message, status: this.getStatus() };
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      const message = "Quantidade de colateral invÃ¡lida";
+      this.setError(message);
+      return { ok: false, reason: message, status: this.getStatus() };
+    }
+
+    const solBalance = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
+    if (solBalance < this.config.minSolBalance) {
+      const message = `Saldo de SOL abaixo do mÃ­nimo (${this.config.minSolBalance}).`;
+      this.setError(message);
+      return { ok: false, reason: message, status: this.getStatus() };
+    }
+
+    if (this.isKaminoSimulated()) {
+      const message = "Kamino estÃ¡ em modo simulado (DRY_RUN ou KAMINO_NOOP).";
+      this.setError(message);
+      return { ok: false, reason: message, status: this.getStatus() };
+    }
+
+    try {
+      const kamino = await this.ensureKaminoClient();
+      const supported = await kamino.supportsCollateral(mint);
+      if (!supported) {
+        const marketHint = process.env.KAMINO_MARKET ? ` (market ${process.env.KAMINO_MARKET})` : "";
+        const message = `Token nÃ£o suportado como colateral no Kamino${marketHint}`;
+        this.setError(message);
+        return { ok: false, reason: message, status: this.getStatus() };
+      }
+
+      await kamino.ensureObligation();
+      const depositSig = await kamino.depositCollateral({ mint, amount });
+      this.queueHistoryAction("kamino-deposit", { lastAction: "kamino-deposit" });
+      this.lastStatus.lastAction = "kamino-deposit";
+
+      let borrowSig: string | undefined;
+      if (Number.isFinite(borrowUsd) && borrowUsd > 0) {
+        const stable = await this.getStableMintInfo();
+        borrowSig = await kamino.borrow({ mint: stable.mint, amount: borrowUsd });
+        this.queueHistoryAction("kamino-borrow", { lastAction: "kamino-borrow" });
+        this.lastStatus.lastAction = "kamino-borrow";
+      }
+
+      this.lastStatus.lastError = null;
+      return { ok: true, depositSig, borrowSig, status: this.getStatus() };
+    } catch (err) {
+      this.setError(err);
+      return { ok: false, reason: err instanceof Error ? err.message : String(err), status: this.getStatus() };
+    }
+  }
+
   async addLiquidityFromWallet(options: { share?: number; maxTokenA?: number; maxTokenB?: number }): Promise<{ ok: boolean; reason?: string }> {
     this.lastStatus.running = true;
     this.resetActionFee();
@@ -2412,7 +2479,9 @@ export class OrcaBot {
       }
       const supported = await kamino.supportsCollateral(entry.mint);
       if (!supported) {
-        this.setError("Token de saída não suportado como colateral no Kamino");
+        const marketHint = process.env.KAMINO_MARKET ? " (market " + process.env.KAMINO_MARKET + ")" : "";
+
+        this.setError("Token de saída não suportado como colateral no Kamino" + marketHint);
         return "kamino-rebalance-failed";
       }
     }
