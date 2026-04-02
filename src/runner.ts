@@ -173,7 +173,7 @@ export class BotRunner {
   constructor(
     bot: OrcaBot,
     config: Config,
-    options: { historyStore: HistoryStore; poolId: string; onAutoAddRequest?: (poolId: string) => void }
+    options: { historyStore: HistoryStore; poolId: string; poolName: string; onAutoAddRequest?: (poolId: string) => void }
   ) {
     this.bot = bot;
     this.config = config;
@@ -181,6 +181,7 @@ export class BotRunner {
     this.hedgeManager = new HedgeManager(config);
     this.poolId = options.poolId;
     this.onAutoAddRequest = options.onAutoAddRequest;
+    this.bot.setPoolMeta({ id: options.poolId, name: options.poolName });
   }
 
   async init(): Promise<void> {

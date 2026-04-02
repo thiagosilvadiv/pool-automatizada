@@ -17,6 +17,9 @@ export type KaminoCollateralEntry = {
 
 export type KaminoCycleState = {
   active: boolean;
+  ownerPoolId?: string | null;
+  ownerPoolName?: string | null;
+  marketAddress?: string | null;
   collateralMint: string | null;
   collateralAmount: number;
   collateralUsd: number | null;

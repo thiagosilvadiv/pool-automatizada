@@ -856,6 +856,7 @@ export class PoolManager {
     const runner = new BotRunner(bot, poolConfig, {
       historyStore,
       poolId: entry.id,
+      poolName: entry.name,
       onAutoAddRequest: (poolId) => {
         this.queueAutoAdd(poolId);
       }

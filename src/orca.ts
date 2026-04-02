@@ -7,6 +7,7 @@ import * as commonSdk from "@orca-so/common-sdk";
 import { Config } from "./config.js";
 import { createKaminoClient } from "./kamino-client.js";
 import type { KaminoClient } from "./kamino-client.js";
+import { releaseKaminoLock, tryAcquireKaminoLock } from "./kamino-lock.js";
 import { logger } from "./logger.js";
 import { calculateRange, isPriceOutOfRange, resolveDirectionalExitPreference, Range } from "./strategy.js";
 import { alignTickRangeToSpacing } from "./tick-range.js";
@@ -101,6 +102,9 @@ export type BotStatus = {
   kaminoLastError: string | null;
   kaminoCollaterals: KaminoCollateralEntry[];
   kaminoSimulated: boolean;
+  kaminoOwnerPoolId: string | null;
+  kaminoOwnerPoolName: string | null;
+  kaminoMarketAddress: string | null;
 };
 
 type SwapWalletToSolDetail = {
@@ -153,6 +157,8 @@ export class OrcaBot {
   private swapAllowlist: Set<string> | null = null;
   private kaminoState: KaminoCycleState | null = null;
   private kaminoClient: KaminoClient | null = null;
+  private poolId: string | null = null;
+  private poolName: string | null = null;
   private pendingHistoryActions: BotStatus[] = [];
   private stableMintCache = new Map<string, { mint: string; decimals: number }>();
   private lastStatus: BotStatus = {
@@ -211,10 +217,13 @@ export class OrcaBot {
   kaminoLtv: null,
     kaminoAvgPriceUsdc: null,
     kaminoTargetPriceUsdc: null,
-    kaminoCycleCount: 0,
-    kaminoLastError: null,
-    kaminoCollaterals: [],
-    kaminoSimulated: false
+  kaminoCycleCount: 0,
+  kaminoLastError: null,
+  kaminoCollaterals: [],
+  kaminoSimulated: false,
+  kaminoOwnerPoolId: null,
+  kaminoOwnerPoolName: null,
+  kaminoMarketAddress: null
   };
 
   private constructor(ctx: any, client: any, botCtx: BotContext) {
@@ -517,7 +526,25 @@ export class OrcaBot {
       }
     }
 
-    if (this.config.kaminoRebalanceEnabled) {
+    const pnlNoFeesUsd = this.getPositionPnlNoFeesUsd();
+    const shouldUseKamino = this.config.kaminoRebalanceEnabled
+      && pnlNoFeesUsd != null
+      && pnlNoFeesUsd < 0;
+    if (this.config.kaminoRebalanceEnabled && !shouldUseKamino) {
+      logger.info(
+        { pnlNoFeesUsd },
+        "Kamino ignorado: PnL sem taxas não negativo ou indisponível"
+      );
+    }
+    let lockOk = true;
+    if (shouldUseKamino) {
+      const lock = this.canUseKaminoLock();
+      lockOk = lock.ok;
+      if (!lockOk) {
+        this.setError(`Kamino ativo na pool ${lock.ownerName}`);
+      }
+    }
+    if (shouldUseKamino && lockOk) {
       const result = await this.rebalanceWithKamino({
         price,
         solUsdPrice,
@@ -527,6 +554,9 @@ export class OrcaBot {
       this.lastStatus.lastAction = result;
       this.lastStatus.positionRange = null;
       this.lastStatus.positionMint = this.currentPositionMint;
+      if (result !== "kamino-rebalanced" && !this.kaminoState?.active) {
+        this.releaseKaminoLockIfOwned();
+      }
       return this.getStatus();
     }
 
@@ -616,6 +646,11 @@ export class OrcaBot {
     return this.getStatus();
   }
 
+  setPoolMeta(meta: { id: string; name: string | null }): void {
+    this.poolId = meta.id;
+    this.poolName = meta.name ?? meta.id;
+  }
+
   async closeKaminoCycleNow(): Promise<{ ok: boolean; reason?: string; status: BotStatus }> {
     this.lastStatus.running = true;
     this.resetActionFee();
@@ -665,6 +700,13 @@ export class OrcaBot {
       return { ok: false, reason: message, status: this.getStatus() };
     }
 
+    const lock = this.canUseKaminoLock();
+    if (!lock.ok) {
+      const message = `Kamino ativo na pool ${lock.ownerName}`;
+      this.setError(message);
+      return { ok: false, reason: message, status: this.getStatus() };
+    }
+
     try {
       const kamino = await this.ensureKaminoClient();
       const supported = await kamino.supportsCollateral(mint);
@@ -704,14 +746,59 @@ export class OrcaBot {
           } catch (rollbackErr) {
             logger.warn({ err: rollbackErr }, "rollback kamino withdraw failed");
           }
+          this.releaseKaminoLockIfOwned();
           return { ok: false, reason: this.lastStatus.lastError ?? "Falha ao emprestar no Kamino", status: this.getStatus() };
         }
       }
+
+      const avgBasis = this.config.kaminoAvgPriceBasis ?? "deposit";
+      const avgMode = this.config.kaminoAvgMode ?? "cumulative";
+      const previous = this.kaminoState;
+      const baseAmount = avgMode === "reset" ? 0 : (previous?.collateralAmount ?? 0);
+      const baseUsd = avgMode === "reset" ? 0 : (previous?.collateralUsd ?? 0);
+      const baseDebtUsd = avgMode === "reset" ? 0 : (previous?.debtUsd ?? 0);
+      const nextAmount = baseAmount + amount;
+      const nextUsd = baseUsd;
+      const nextDebtUsd = baseDebtUsd + (borrowSig ? borrowUsd : 0);
+      const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
+      const avgPriceUsdc = nextAmount > 0 && avgNumerator > 0 ? avgNumerator / nextAmount : null;
+      const targetPriceUsdc = avgPriceUsdc != null
+        ? avgPriceUsdc * (1 + (this.config.kaminoPriceBufferPct ?? 0) / 100)
+        : null;
+      const nextState: KaminoCycleState = {
+        active: true,
+        ownerPoolId: this.poolId ?? previous?.ownerPoolId ?? null,
+        ownerPoolName: this.poolName ?? previous?.ownerPoolName ?? null,
+        marketAddress: this.getKaminoMarketAddress(),
+        collateralMint: mint,
+        collateralAmount: nextAmount,
+        collateralUsd: nextUsd > 0 ? nextUsd : null,
+        debtMint: stable?.mint ?? previous?.debtMint ?? null,
+        debtAmount: nextDebtUsd,
+        debtUsd: nextDebtUsd > 0 ? nextDebtUsd : null,
+        avgPriceUsdc,
+        targetPriceUsdc,
+        collaterals: [{
+          mint,
+          amount: nextAmount,
+          usd: nextUsd > 0 ? nextUsd : null,
+          debtUsd: nextDebtUsd > 0 ? nextDebtUsd : null,
+          avgPriceUsdc,
+          targetPriceUsdc
+        }],
+        cycleCount: (previous?.cycleCount ?? 0) + 1,
+        updatedAt: new Date().toISOString(),
+        lastError: null
+      };
+      this.setKaminoState(nextState);
 
       this.lastStatus.lastError = null;
       return { ok: true, depositSig, borrowSig, status: this.getStatus() };
     } catch (err) {
       this.setError(err);
+      if (!this.kaminoState?.active) {
+        this.releaseKaminoLockIfOwned();
+      }
       return { ok: false, reason: err instanceof Error ? err.message : String(err), status: this.getStatus() };
     }
   }
@@ -1672,6 +1759,20 @@ export class OrcaBot {
       ?? null;
   }
 
+  private getPositionPnlNoFeesUsd(): number | null {
+    const entryUsd = this.lastStatus.positionEntryUsd ?? null;
+    const valueUsd = this.lastStatus.positionValueUsd ?? null;
+    if (entryUsd != null && valueUsd != null) {
+      return valueUsd - entryUsd;
+    }
+    const pnlUsd = this.lastStatus.positionPnlUsd ?? null;
+    const feesUsd = this.lastStatus.positionFeesUsd ?? null;
+    if (pnlUsd != null && feesUsd != null) {
+      return pnlUsd - feesUsd;
+    }
+    return null;
+  }
+
   getStatus(): BotStatus {
     return {
       ...this.lastStatus,
@@ -1694,7 +1795,28 @@ export class OrcaBot {
   }
 
   setKaminoState(state: KaminoCycleState | null): void {
-    this.kaminoState = this.normalizeKaminoState(state);
+    if (state?.active && this.poolId && !state.ownerPoolId) {
+      state = {
+        ...state,
+        ownerPoolId: this.poolId,
+        ownerPoolName: this.poolName ?? this.poolId,
+        marketAddress: state.marketAddress ?? this.getKaminoMarketAddress()
+      };
+    }
+    const normalized = this.normalizeKaminoState(state);
+    if (normalized?.active && this.poolId) {
+      const poolName = this.poolName ?? this.poolId;
+      const lock = tryAcquireKaminoLock({
+        poolId: this.poolId,
+        poolName,
+        marketAddress: this.getKaminoMarketAddress()
+      });
+      if (!lock.ok) {
+        const owner = lock.owner?.poolName ?? lock.owner?.poolId ?? "outra pool";
+        normalized.lastError = `Kamino ativo na pool ${owner}`;
+      }
+    }
+    this.kaminoState = normalized;
     this.syncKaminoStatus();
   }
 
@@ -1735,6 +1857,9 @@ export class OrcaBot {
     const single = collaterals.length === 1 ? collaterals[0] : null;
     return {
       ...state,
+      ownerPoolId: state.ownerPoolId ?? null,
+      ownerPoolName: state.ownerPoolName ?? null,
+      marketAddress: state.marketAddress ?? null,
       collateralMint: single ? single.mint : state.collateralMint ?? null,
       collateralAmount: single ? Number(single.amount ?? 0) : Number(state.collateralAmount ?? 0),
       collateralUsd: typeof collateralUsd === "number" && Number.isFinite(collateralUsd) && collateralUsd > 0
@@ -1790,6 +1915,9 @@ export class OrcaBot {
     const state = this.kaminoState;
     this.lastStatus.kaminoActive = Boolean(state?.active);
     this.lastStatus.kaminoEnabled = Boolean(this.config.kaminoRebalanceEnabled);
+    this.lastStatus.kaminoOwnerPoolId = state?.ownerPoolId ?? null;
+    this.lastStatus.kaminoOwnerPoolName = state?.ownerPoolName ?? null;
+    this.lastStatus.kaminoMarketAddress = state?.marketAddress ?? null;
     const collaterals = Array.isArray(state?.collaterals)
       ? state.collaterals.map((item) => ({ ...item }))
       : [];
@@ -1884,6 +2012,41 @@ export class OrcaBot {
     this.lastStatus.kaminoCollaterals = nextCollaterals;
   }
 
+  private getKaminoMarketAddress(): string | null {
+    return this.config.kaminoMarketAddress
+      ?? process.env.KAMINO_MARKET
+      ?? null;
+  }
+
+  private canUseKaminoLock(): { ok: boolean; ownerName?: string } {
+    if (!this.poolId) {
+      return { ok: true };
+    }
+    const poolName = this.poolName ?? this.poolId;
+    const lock = tryAcquireKaminoLock({
+      poolId: this.poolId,
+      poolName,
+      marketAddress: this.getKaminoMarketAddress()
+    });
+    if (lock.ok) {
+      return { ok: true };
+    }
+    return { ok: false, ownerName: lock.owner?.poolName ?? lock.owner?.poolId ?? "outra pool" };
+  }
+
+  private releaseKaminoLockIfOwned(): void {
+    if (this.poolId) {
+      releaseKaminoLock(this.poolId);
+    }
+  }
+
+  private isKaminoOwner(state: KaminoCycleState | null): boolean {
+    if (!state?.ownerPoolId || !this.poolId) {
+      return true;
+    }
+    return state.ownerPoolId === this.poolId;
+  }
+
   private async reconcileKaminoState(): Promise<void> {
     if (this.isKaminoSimulated()) {
       return;
@@ -1898,6 +2061,9 @@ export class OrcaBot {
           const previous = this.kaminoState;
           const nextState: KaminoCycleState = {
             active: false,
+            ownerPoolId: previous?.ownerPoolId ?? this.poolId ?? null,
+            ownerPoolName: previous?.ownerPoolName ?? this.poolName ?? null,
+            marketAddress: previous?.marketAddress ?? this.getKaminoMarketAddress(),
             collateralMint: null,
             collateralAmount: 0,
             collateralUsd: null,
@@ -1912,6 +2078,7 @@ export class OrcaBot {
             lastError: null
           };
           this.kaminoState = this.normalizeKaminoState(nextState);
+          this.releaseKaminoLockIfOwned();
         }
         return;
       }
@@ -1928,8 +2095,13 @@ export class OrcaBot {
           });
         }
         const previous = this.kaminoState;
+        const ownerPoolId = this.poolId ?? previous?.ownerPoolId ?? null;
+        const ownerPoolName = this.poolName ?? previous?.ownerPoolName ?? null;
         const nextState: KaminoCycleState = {
           active: true,
+          ownerPoolId,
+          ownerPoolName,
+          marketAddress: this.getKaminoMarketAddress(),
           collateralMint: position?.collateralMint ?? null,
           collateralAmount: position?.collateralAmount ?? 0,
           collateralUsd: null,
@@ -2416,6 +2588,11 @@ export class OrcaBot {
     if (!state || !state.active) {
       return false;
     }
+    if (!this.isKaminoOwner(state)) {
+      const owner = state.ownerPoolName ?? state.ownerPoolId ?? "outra pool";
+      this.setKaminoState({ ...state, lastError: `Kamino pertence à pool ${owner}` });
+      return false;
+    }
     const rule = this.config.kaminoCloseRule ?? "avg-price";
     if (rule === "manual") {
       return false;
@@ -2426,7 +2603,15 @@ export class OrcaBot {
     }
     try {
       const stable = await this.getStableMintInfo();
+      const poolPnlNoFeesUsd = this.getPositionPnlNoFeesUsd();
+      const hasPosition = Boolean(this.currentPosition);
+      if (hasPosition && poolPnlNoFeesUsd == null) {
+        this.setKaminoState({ ...state, lastError: "PnL da pool indisponível; aguardando." });
+        return false;
+      }
       let ready = true;
+      let currentCollateralUsd = 0;
+      let debtUsd = 0;
       for (const entry of collaterals) {
         const target = rule === "breakeven"
           ? entry.avgPriceUsdc
@@ -2445,6 +2630,26 @@ export class OrcaBot {
         if (priceUsd == null || priceUsd < target) {
           ready = false;
           break;
+        }
+        currentCollateralUsd += priceUsd * (entry.amount ?? 0);
+        if (entry.debtUsd != null) {
+          debtUsd += entry.debtUsd;
+        }
+      }
+      if (debtUsd <= 0 && state.debtUsd != null) {
+        debtUsd = state.debtUsd;
+      }
+      if (ready && hasPosition) {
+        const kaminoNetUsd = currentCollateralUsd - debtUsd;
+        if (Number.isFinite(kaminoNetUsd) && poolPnlNoFeesUsd != null) {
+          const combinedNetUsd = kaminoNetUsd + poolPnlNoFeesUsd;
+          if (combinedNetUsd < 0) {
+            this.setKaminoState({
+              ...state,
+              lastError: `Fechamento Kamino bloqueado: PnL combinado negativo (${combinedNetUsd.toFixed(2)} USD)`
+            });
+            return false;
+          }
         }
       }
       if (ready) {
@@ -2468,6 +2673,10 @@ export class OrcaBot {
     if (!state || !state.active) {
       this.setError("Nenhum ciclo Kamino ativo");
       return;
+    }
+    if (!this.isKaminoOwner(state)) {
+      const owner = state.ownerPoolName ?? state.ownerPoolId ?? "outra pool";
+      throw new Error(`Kamino pertence à pool ${owner}`);
     }
     this.lastStatus.running = true;
     this.resetActionFee();
@@ -2548,6 +2757,9 @@ export class OrcaBot {
     }
     const nextState: KaminoCycleState = {
       active: false,
+      ownerPoolId: state.ownerPoolId ?? this.poolId ?? null,
+      ownerPoolName: state.ownerPoolName ?? this.poolName ?? null,
+      marketAddress: state.marketAddress ?? this.getKaminoMarketAddress(),
       collateralMint: null,
       collateralAmount: 0,
       collateralUsd: null,
@@ -2563,6 +2775,7 @@ export class OrcaBot {
     };
     this.setKaminoState(nextState);
     this.queueHistoryAction("kamino-close", { lastAction: "kamino-close" });
+    this.releaseKaminoLockIfOwned();
     logger.info({ mode }, "kamino cycle closed");
   }
 
@@ -2653,6 +2866,13 @@ export class OrcaBot {
       exitTokens = await resolveTokens(balances);
     } catch (err) {
       this.setError(err);
+      if (this.kaminoState?.active) {
+        this.setKaminoState({
+          ...this.kaminoState,
+          lastError: this.lastStatus.lastError ?? this.kaminoState.lastError ?? null,
+          updatedAt: new Date().toISOString()
+        });
+      }
       return "kamino-rebalance-failed";
     }
     if (!exitTokens || exitTokens.length === 0) {
@@ -2757,6 +2977,82 @@ export class OrcaBot {
     }
     try {
       await kamino.borrow({ mint: stable.mint, amount: borrowUsd });
+      const previous = this.kaminoState;
+      const existingCollaterals = Array.isArray(previous?.collaterals) && previous.collaterals.length
+        ? previous.collaterals.map((item) => ({ ...item }))
+        : (previous?.collateralMint
+          ? [{
+            mint: previous.collateralMint,
+            amount: previous.collateralAmount ?? 0,
+            usd: previous.collateralUsd ?? null,
+            debtUsd: previous.debtUsd ?? null,
+            avgPriceUsdc: previous.avgPriceUsdc ?? null,
+            targetPriceUsdc: previous.targetPriceUsdc ?? null
+          }]
+          : []);
+      const nextMap = new Map<string, KaminoCollateralEntry>();
+      for (const entry of existingCollaterals) {
+        if (entry.mint) {
+          nextMap.set(entry.mint, { ...entry });
+        }
+      }
+      const avgBasis = this.config.kaminoAvgPriceBasis ?? "deposit";
+      const avgMode = this.config.kaminoAvgMode ?? "cumulative";
+      for (const entry of deposits) {
+        const share = totalDepositUsd > 0 ? (entry.depositUsd ?? 0) / totalDepositUsd : 0;
+        const debtUsd = borrowUsd * share;
+        const prev = nextMap.get(entry.mint) ?? {
+          mint: entry.mint,
+          amount: 0,
+          usd: null,
+          debtUsd: null,
+          avgPriceUsdc: null,
+          targetPriceUsdc: null
+        };
+        const baseAmount = avgMode === "reset" ? 0 : (prev.amount ?? 0);
+        const baseUsd = avgMode === "reset" ? 0 : (prev.usd ?? 0);
+        const baseDebtUsd = avgMode === "reset" ? 0 : (prev.debtUsd ?? 0);
+        const nextAmount = baseAmount + entry.depositAmount;
+        const nextUsd = baseUsd + (entry.depositUsd ?? 0);
+        const nextDebtUsd = baseDebtUsd + debtUsd;
+        const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
+        const avgPriceUsdc = nextAmount > 0 ? avgNumerator / nextAmount : null;
+        const targetPriceUsdc = avgPriceUsdc != null
+          ? avgPriceUsdc * (1 + (this.config.kaminoPriceBufferPct ?? 0) / 100)
+          : null;
+        nextMap.set(entry.mint, {
+          mint: entry.mint,
+          amount: nextAmount,
+          usd: nextUsd > 0 ? nextUsd : null,
+          debtUsd: nextDebtUsd > 0 ? nextDebtUsd : null,
+          avgPriceUsdc,
+          targetPriceUsdc
+        });
+      }
+      const nextCollaterals = Array.from(nextMap.values());
+      const totalCollateralUsd = nextCollaterals.reduce((sum, item) => sum + (item.usd ?? 0), 0);
+      const totalDebtUsd = nextCollaterals.reduce((sum, item) => sum + (item.debtUsd ?? 0), 0);
+      const single = nextCollaterals.length === 1 ? nextCollaterals[0] : null;
+      const nextDebtAmount = (previous?.debtAmount ?? 0) + borrowUsd;
+      const nextState: KaminoCycleState = {
+        active: true,
+        ownerPoolId: this.poolId ?? previous?.ownerPoolId ?? null,
+        ownerPoolName: this.poolName ?? previous?.ownerPoolName ?? null,
+        marketAddress: this.getKaminoMarketAddress(),
+        collateralMint: single ? single.mint : null,
+        collateralAmount: single ? single.amount : 0,
+        collateralUsd: totalCollateralUsd > 0 ? totalCollateralUsd : null,
+        debtMint: stable.mint,
+        debtAmount: nextDebtAmount,
+        debtUsd: totalDebtUsd > 0 ? totalDebtUsd : null,
+        avgPriceUsdc: single ? single.avgPriceUsdc : null,
+        targetPriceUsdc: single ? single.targetPriceUsdc : null,
+        collaterals: nextCollaterals,
+        cycleCount: (previous?.cycleCount ?? 0) + 1,
+        updatedAt: new Date().toISOString(),
+        lastError: null
+      };
+      this.setKaminoState(nextState);
       this.queueHistoryAction("kamino-borrow");
     } catch (err) {
       this.setError(err);
@@ -2863,79 +3159,13 @@ export class OrcaBot {
       }
     }
 
-    const previous = this.kaminoState;
-    const existingCollaterals = Array.isArray(previous?.collaterals) && previous.collaterals.length
-      ? previous.collaterals.map((item) => ({ ...item }))
-      : (previous?.collateralMint
-        ? [{
-          mint: previous.collateralMint,
-          amount: previous.collateralAmount ?? 0,
-          usd: previous.collateralUsd ?? null,
-          debtUsd: previous.debtUsd ?? null,
-          avgPriceUsdc: previous.avgPriceUsdc ?? null,
-          targetPriceUsdc: previous.targetPriceUsdc ?? null
-        }]
-        : []);
-    const nextMap = new Map<string, KaminoCollateralEntry>();
-    for (const entry of existingCollaterals) {
-      if (entry.mint) {
-        nextMap.set(entry.mint, { ...entry });
-      }
-    }
-    const avgBasis = this.config.kaminoAvgPriceBasis ?? "deposit";
-    const avgMode = this.config.kaminoAvgMode ?? "cumulative";
-    for (const entry of deposits) {
-      const share = totalDepositUsd > 0 ? (entry.depositUsd ?? 0) / totalDepositUsd : 0;
-      const debtUsd = borrowUsd * share;
-      const prev = nextMap.get(entry.mint) ?? {
-        mint: entry.mint,
-        amount: 0,
-        usd: null,
-        debtUsd: null,
-        avgPriceUsdc: null,
-        targetPriceUsdc: null
-      };
-      const baseAmount = avgMode === "reset" ? 0 : (prev.amount ?? 0);
-      const baseUsd = avgMode === "reset" ? 0 : (prev.usd ?? 0);
-      const baseDebtUsd = avgMode === "reset" ? 0 : (prev.debtUsd ?? 0);
-      const nextAmount = baseAmount + entry.depositAmount;
-      const nextUsd = baseUsd + (entry.depositUsd ?? 0);
-      const nextDebtUsd = baseDebtUsd + debtUsd;
-      const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
-      const avgPriceUsdc = nextAmount > 0 ? avgNumerator / nextAmount : null;
-      const targetPriceUsdc = avgPriceUsdc != null
-        ? avgPriceUsdc * (1 + (this.config.kaminoPriceBufferPct ?? 0) / 100)
-        : null;
-      nextMap.set(entry.mint, {
-        mint: entry.mint,
-        amount: nextAmount,
-        usd: nextUsd > 0 ? nextUsd : null,
-        debtUsd: nextDebtUsd > 0 ? nextDebtUsd : null,
-        avgPriceUsdc,
-        targetPriceUsdc
+    if (openResult !== "open-position" && this.kaminoState?.active) {
+      this.setKaminoState({
+        ...this.kaminoState,
+        lastError: this.lastStatus.lastError ?? this.kaminoState.lastError ?? null,
+        updatedAt: new Date().toISOString()
       });
     }
-    const nextCollaterals = Array.from(nextMap.values());
-    const totalCollateralUsd = nextCollaterals.reduce((sum, item) => sum + (item.usd ?? 0), 0);
-    const totalDebtUsd = nextCollaterals.reduce((sum, item) => sum + (item.debtUsd ?? 0), 0);
-    const single = nextCollaterals.length === 1 ? nextCollaterals[0] : null;
-    const nextDebtAmount = (previous?.debtAmount ?? 0) + borrowUsd;
-    const nextState: KaminoCycleState = {
-      active: true,
-      collateralMint: single ? single.mint : null,
-      collateralAmount: single ? single.amount : 0,
-      collateralUsd: totalCollateralUsd > 0 ? totalCollateralUsd : null,
-      debtMint: stable.mint,
-      debtAmount: nextDebtAmount,
-      debtUsd: totalDebtUsd > 0 ? totalDebtUsd : null,
-      avgPriceUsdc: single ? single.avgPriceUsdc : null,
-      targetPriceUsdc: single ? single.targetPriceUsdc : null,
-      collaterals: nextCollaterals,
-      cycleCount: (previous?.cycleCount ?? 0) + 1,
-      updatedAt: new Date().toISOString(),
-      lastError: openResult === "open-position" ? null : (this.lastStatus.lastError ?? null)
-    };
-    this.setKaminoState(nextState);
 
     return openResult === "open-position" ? "kamino-rebalanced" : "kamino-rebalance-failed";
   }

@@ -38,6 +38,7 @@ const kaminoSimulatedEl = document.getElementById("kaminoSimulated");
 const kaminoLastErrorEl = document.getElementById("kaminoLastError");
 const kaminoCollateralsEl = document.getElementById("kaminoCollaterals");
 const kaminoPoolNameEl = document.getElementById("kaminoPoolName");
+const kaminoOwnerPoolEl = document.getElementById("kaminoOwnerPool");
 const kaminoAvgModeHintEl = document.getElementById("kaminoAvgModeHint");
 const kaminoTestTokenSelect = document.getElementById("kaminoTestToken");
 const kaminoTestMintInput = document.getElementById("kaminoTestMint");
@@ -1594,6 +1595,14 @@ async function updateUI() {
     poolNameLabel.textContent = config.poolName ?? "-";
     if (kaminoPoolNameEl) {
       kaminoPoolNameEl.textContent = config.poolName ?? "-";
+    }
+    if (kaminoOwnerPoolEl) {
+      const ownerName = status.kaminoOwnerPoolName ?? null;
+      if (ownerName && config.poolName && ownerName !== config.poolName) {
+        kaminoOwnerPoolEl.textContent = `${ownerName} (outro)`;
+      } else {
+        kaminoOwnerPoolEl.textContent = ownerName ?? "-";
+      }
     }
     rangePctEl.textContent = config.rangeWidthPct ?? "-";
     slippageEl.textContent = config.slippageBps ?? "-";

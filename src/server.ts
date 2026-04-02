@@ -136,7 +136,10 @@ export async function startServer(config: Config): Promise<void> {
         kaminoCycleCount: 0,
         kaminoLastError: null,
         kaminoCollaterals: [],
-        kaminoSimulated: Boolean(config.dryRun || process.env.KAMINO_NOOP === "true")
+        kaminoSimulated: Boolean(config.dryRun || process.env.KAMINO_NOOP === "true"),
+        kaminoOwnerPoolId: null,
+        kaminoOwnerPoolName: null,
+        kaminoMarketAddress: null
       });
       return;
     }
