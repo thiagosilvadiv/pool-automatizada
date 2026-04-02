@@ -26,6 +26,13 @@ const pollEl = document.getElementById("poll");
 const confirmSecEl = document.getElementById("confirmSec");
 const cooldownSecEl = document.getElementById("cooldownSec");
 const dryRunEl = document.getElementById("dryRun");
+const kaminoStatusEl = document.getElementById("kaminoStatus");
+const kaminoLtvEl = document.getElementById("kaminoLtv");
+const kaminoCollateralUsdEl = document.getElementById("kaminoCollateralUsd");
+const kaminoDebtUsdEl = document.getElementById("kaminoDebtUsd");
+const kaminoAvgPriceEl = document.getElementById("kaminoAvgPrice");
+const kaminoTargetPriceEl = document.getElementById("kaminoTargetPrice");
+const kaminoCycleCountEl = document.getElementById("kaminoCycleCount");
 const historyBody = document.getElementById("historyBody");
 const hedgeLogBody = document.getElementById("hedgeLogBody");
 const poolNameLabel = document.getElementById("poolNameLabel");
@@ -94,6 +101,7 @@ const closeBtn = document.getElementById("closeBtn");
 const topupBtn = document.getElementById("topupBtn");
 const closeEmptyAccountsBtn = document.getElementById("closeEmptyAccountsBtn");
 const swapToSolBtn = document.getElementById("swapToSolBtn");
+const kaminoCloseBtn = document.getElementById("kaminoCloseBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 const clearHedgeLogBtn = document.getElementById("clearHedgeLogBtn");
 const exportHistoryBtn = document.getElementById("exportHistoryBtn");
@@ -155,7 +163,15 @@ const actionLabels = {
   "cooldown-wait": "aguardando cooldown",
   "skip-low-sol": "SOL baixo",
   "skip-low-sol-position": "posição existente (SOL baixo)",
-  "swap": "swap"
+  "swap": "swap",
+  "kamino-rebalanced": "re-range (Kamino)",
+  "kamino-rebalance-failed": "falha Kamino",
+  "kamino-deposit": "Kamino: depositar colateral",
+  "kamino-borrow": "Kamino: empréstimo",
+  "kamino-reopen": "Kamino: reabrir pool",
+  "kamino-repay": "Kamino: pagar dívida",
+  "kamino-withdraw": "Kamino: retirar colateral",
+  "kamino-close": "Kamino: fechar ciclo"
 };
 
 const actionTypeLabels = {
@@ -1309,6 +1325,33 @@ async function updateUI() {
     cooldownSecEl.textContent = config.rebalanceCooldownSec ?? 0;
     dryRunEl.textContent = config.dryRun ? "Sim" : "Não";
 
+    if (kaminoStatusEl) {
+      kaminoStatusEl.textContent = status.kaminoActive ? "Ativo" : "Inativo";
+    }
+    if (kaminoLtvEl) {
+      kaminoLtvEl.textContent = status.kaminoLtv != null
+        ? `${formatNumber(status.kaminoLtv * 100, 2)}%`
+        : "-";
+    }
+    if (kaminoCollateralUsdEl) {
+      kaminoCollateralUsdEl.textContent = formatNumber(status.kaminoCollateralUsd, 2);
+    }
+    if (kaminoDebtUsdEl) {
+      kaminoDebtUsdEl.textContent = formatNumber(status.kaminoDebtUsd, 2);
+    }
+    if (kaminoAvgPriceEl) {
+      kaminoAvgPriceEl.textContent = formatNumber(status.kaminoAvgPriceUsdc, 6);
+    }
+    if (kaminoTargetPriceEl) {
+      kaminoTargetPriceEl.textContent = formatNumber(status.kaminoTargetPriceUsdc, 6);
+    }
+    if (kaminoCycleCountEl) {
+      kaminoCycleCountEl.textContent = status.kaminoCycleCount ?? "-";
+    }
+    if (kaminoCloseBtn) {
+      kaminoCloseBtn.disabled = !status.kaminoActive;
+    }
+
     statusBadge.textContent = status.running ? "Rodando" : "Parado";
     statusBadge.classList.toggle("running", status.running);
     statusBadge.classList.toggle("stopped", !status.running);
@@ -1378,6 +1421,20 @@ closeBtn.addEventListener("click", async () => {
   await fetch("/api/close-position", { method: "POST" });
   updateUI();
 });
+
+if (kaminoCloseBtn) {
+  kaminoCloseBtn.addEventListener("click", async () => {
+    const ok = window.confirm("Fechar ciclo Kamino e liquidar o empréstimo?");
+    if (!ok) return;
+    const res = await fetch("/api/kamino/close", { method: "POST" });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) {
+      const msg = data?.error ?? data?.reason ?? "Falha ao fechar ciclo Kamino.";
+      window.alert(msg);
+    }
+    updateUI();
+  });
+}
 
 topupBtn.addEventListener("click", async () => {
   const res = await fetch("/api/sol-topup", { method: "POST" });

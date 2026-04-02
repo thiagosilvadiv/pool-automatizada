@@ -198,7 +198,15 @@ export async function startServer(config: Config): Promise<void> {
         effectiveExitToken: null,
         effectiveExitDirection: config.preferredExitDirection,
         effectiveExitSide: null,
-        effectiveValueToken: null
+        effectiveValueToken: null,
+        kaminoActive: false,
+        kaminoCollateralUsd: null,
+        kaminoDebtUsd: null,
+        kaminoLtv: null,
+        kaminoAvgPriceUsdc: null,
+        kaminoTargetPriceUsdc: null,
+        kaminoCycleCount: 0,
+        kaminoLastError: null
       });
       return;
     }
@@ -227,6 +235,15 @@ export async function startServer(config: Config): Promise<void> {
     try {
       await poolManager.closeSelected();
       res.json({ ok: true, status: poolManager.getSelectedStatus() });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post("/api/kamino/close", async (_req: Request, res: Response) => {
+    try {
+      const result = await poolManager.closeKaminoCycleSelected();
+      res.json({ ok: result.ok, reason: result.reason, status: poolManager.getSelectedStatus() });
     } catch (err) {
       res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
     }
@@ -307,6 +324,12 @@ export async function startServer(config: Config): Promise<void> {
       trendStaleSec: config.trendStaleSec,
       trendNetworkId: config.trendNetworkId,
       autoAddLiquidityEnabled: config.autoAddLiquidityEnabled,
+      kaminoRebalanceEnabled: config.kaminoRebalanceEnabled,
+      kaminoDepositPct: config.kaminoDepositPct,
+      kaminoBorrowAsset: config.kaminoBorrowAsset,
+      kaminoMaxLtv: config.kaminoMaxLtv,
+      kaminoCloseRule: config.kaminoCloseRule,
+      kaminoPriceBufferPct: config.kaminoPriceBufferPct,
       hedgeEnabled: config.hedgeEnabled,
       hedgePct: config.hedgePct,
       hedgeSymbol: config.hedgeSymbol,

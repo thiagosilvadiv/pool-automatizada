@@ -1,5 +1,6 @@
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { OrcaBot, BotStatus } from "./orca.js";
+import type { KaminoCycleState } from "./kamino-types.js";
 import { Config } from "./config.js";
 import { withRetry } from "./retry.js";
 import { logger } from "./logger.js";
@@ -49,6 +50,8 @@ function resolveActionType(action: string | null): string | null {
     case "close-position":
       return "fechamento";
     case "rebalanced":
+    case "kamino-rebalanced":
+    case "kamino-close":
       return "fechamento";
     case "resume-position":
     case "skip-low-sol-position":
@@ -57,6 +60,12 @@ function resolveActionType(action: string | null): string | null {
     case "manual-sol-topup":
     case "auto-sol-topup":
     case "manual-swap-to-sol":
+    case "kamino-deposit":
+    case "kamino-borrow":
+    case "kamino-reopen":
+    case "kamino-repay":
+    case "kamino-withdraw":
+    case "kamino-rebalance-failed":
       return "operacional";
     default:
       return "operacional";
@@ -209,6 +218,26 @@ export class BotRunner {
       return this.getStatus();
     }
     return this.performClose("manual");
+  }
+
+  async closeKaminoCycleNow(): Promise<{ ok: boolean; reason?: string; status: RunnerStatus }> {
+    if (this.inFlight) {
+      return { ok: false, reason: "busy", status: this.getStatus() };
+    }
+    this.inFlight = true;
+    try {
+      const result = await this.bot.closeKaminoCycleNow();
+      this.lastTickAt = new Date().toISOString();
+      this.recordEvent(this.bot.getStatus());
+      this.flushQueuedHistory();
+      return { ok: result.ok, reason: result.reason, status: this.getStatus() };
+    } catch (err) {
+      logger.error({ err }, "close-kamino failed");
+      this.bot.setError(err);
+      return { ok: false, reason: err instanceof Error ? err.message : String(err), status: this.getStatus() };
+    } finally {
+      this.inFlight = false;
+    }
   }
 
   async topUpSolNow(): Promise<{ ok: boolean; reason?: string; status: RunnerStatus }> {
@@ -536,7 +565,7 @@ export class BotRunner {
       await withRetry(() => this.bot.tick(), { retries: 3, baseDelayMs: 1000 });
       this.lastTickAt = new Date().toISOString();
       const status = this.bot.getStatus();
-      const isRebalanced = status.lastAction === "rebalanced";
+      const isRebalanced = status.lastAction === "rebalanced" || status.lastAction === "kamino-rebalanced";
       const currentMint = status.positionMint ?? null;
       if (this.config.hedgeEnabled) {
         const hedgeState = this.hedgeManager.getState();
@@ -682,6 +711,7 @@ export class BotRunner {
         }
       }
       this.recordEvent(status, { hedgeClose: hedgeCloseForClosePosition ?? hedgeCloseForRebalance });
+      this.flushQueuedHistory();
       this.maybeRequestAutoAdd(status);
     } catch (err) {
       logger.error({ err }, "tick failed");
@@ -891,7 +921,7 @@ export class BotRunner {
       if (mergedPositionExitUsd != null && mergedPositionEntryUsd != null) {
         mergedPositionPnlUsd = mergedPositionExitUsd - mergedPositionEntryUsd;
       }
-    } else if (action === "rebalanced") {
+    } else if (action === "rebalanced" || action === "kamino-rebalanced") {
       mergedPositionExitUsd = eventPositionExitUsd ?? null;
     }
     const txFeeLamports = status.lastActionFeeLamports ?? null;
@@ -979,7 +1009,7 @@ export class BotRunner {
     if (skipped.includes(status.lastAction)) {
       return;
     }
-    if (action === "rebalanced") {
+    if (action === "rebalanced" || action === "kamino-rebalanced") {
       const timestamp = new Date().toISOString();
       const closeMint = eventPositionMint ?? null;
       const closeOpenedAt = closeMint ? this.openedAtByMint.get(closeMint) ?? null : null;
@@ -1115,7 +1145,7 @@ export class BotRunner {
 
     const timestamp = new Date().toISOString();
     let positionOpenedAt = mergedPositionMint ? this.openedAtByMint.get(mergedPositionMint) ?? null : null;
-    if ((action === "open-position" || action === "rebalanced") && mergedPositionMint) {
+    if ((action === "open-position" || action === "rebalanced" || action === "kamino-rebalanced") && mergedPositionMint) {
       this.openedAtByMint.set(mergedPositionMint, timestamp);
       positionOpenedAt = timestamp;
     }
@@ -1180,6 +1210,16 @@ export class BotRunner {
     if (action === "close-position") {
       this.lastHedgeClose = null;
     }
+  }
+
+  private flushQueuedHistory(): void {
+    const queued = this.bot.drainHistoryActions();
+    if (!queued.length) {
+      return;
+    }
+    queued.forEach((snapshot) => {
+      this.recordEvent(snapshot);
+    });
   }
 
   private maybeRequestAutoAdd(status: BotStatus): void {
@@ -1270,6 +1310,10 @@ export class BotRunner {
         if (storedHedgeState) {
           this.hedgeManager.hydrate(storedHedgeState);
         }
+        const storedKaminoState = (parsed as { kaminoState?: KaminoCycleState | null } | null)?.kaminoState ?? null;
+        if (storedKaminoState) {
+          this.bot.setKaminoState(storedKaminoState);
+        }
         if (Array.isArray(parsed?.history)) {
           let mutated = false;
           const normalized: HistoryEvent[] = [];
@@ -1325,7 +1369,7 @@ export class BotRunner {
           for (let i = 0; i < normalized.length; i += 1) {
             let next = normalized[i];
             let rebalanceTrusted = true;
-            if (next.action === "rebalanced") {
+            if (next.action === "rebalanced" || next.action === "kamino-rebalanced") {
               const currentMint = next.positionMint ?? null;
               const suspicious = !currentMint || (previousMint && currentMint === previousMint);
               if (suspicious) {
@@ -1355,7 +1399,7 @@ export class BotRunner {
 
             const mint = next.positionMint ?? null;
             if (mint) {
-              if (next.action === "open-position" || (next.action === "rebalanced" && rebalanceTrusted)) {
+              if (next.action === "open-position" || ((next.action === "rebalanced" || next.action === "kamino-rebalanced") && rebalanceTrusted)) {
                 openedByMint.set(mint, next.timestamp);
                 if (!next.positionOpenedAt || next.positionOpenedAt !== next.timestamp) {
                   next = { ...next, positionOpenedAt: next.timestamp };
@@ -1469,7 +1513,8 @@ export class BotRunner {
         history: this.history,
         lastEventPortfolioValue: this.lastEventPortfolioValue,
         lastEventPortfolioUsd: this.lastEventPortfolioUsd,
-        hedgeState: this.hedgeManager.getState()
+        hedgeState: this.hedgeManager.getState(),
+        kaminoState: this.bot.getKaminoState()
       };
       await this.historyStore.save(payload);
     } catch (err) {

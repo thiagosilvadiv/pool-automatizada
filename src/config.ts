@@ -35,6 +35,12 @@ export type Config = {
   autoSwapFeesToUsdcEnabled: boolean;
   autoSwapFeesToUsdcTargetMint: string;
   autoAddLiquidityEnabled: boolean;
+  kaminoRebalanceEnabled: boolean;
+  kaminoDepositPct: number;
+  kaminoBorrowAsset: "usdc" | "usdt" | "auto";
+  kaminoMaxLtv: number;
+  kaminoCloseRule: "avg-price" | "breakeven" | "manual";
+  kaminoPriceBufferPct: number;
   autoResumeEnabled: boolean;
   autoResumeMaxAttempts: number;
   autoResumeBaseDelayMs: number;
@@ -195,6 +201,28 @@ function parseHedgeEntryMode(value: unknown): HedgeEntryMode | undefined {
   return undefined;
 }
 
+function parseKaminoBorrowAsset(value: unknown): "usdc" | "usdt" | "auto" | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "usdc") return "usdc";
+  if (trimmed === "usdt") return "usdt";
+  if (trimmed === "auto") return "auto";
+  return undefined;
+}
+
+function parseKaminoCloseRule(value: unknown): "avg-price" | "breakeven" | "manual" | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "avg-price") return "avg-price";
+  if (trimmed === "breakeven") return "breakeven";
+  if (trimmed === "manual") return "manual";
+  return undefined;
+}
+
 function timeframeToSeconds(timeframe: TrendTimeframe): number {
   switch (timeframe) {
     case "1m":
@@ -261,6 +289,28 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const dataExitDirection = parseExitDirection(dataExitDirectionRaw);
   if (dataExitDirectionRaw != null && dataExitDirection === undefined) {
     throw new Error("preferredExitDirection must be down or up");
+  }
+
+  const envKaminoBorrowAssetRaw = process.env.KAMINO_BORROW_ASSET ?? "";
+  const envKaminoBorrowAsset = parseKaminoBorrowAsset(envKaminoBorrowAssetRaw);
+  if (envKaminoBorrowAssetRaw && !envKaminoBorrowAsset) {
+    throw new Error("KAMINO_BORROW_ASSET must be usdc, usdt, or auto");
+  }
+  const dataKaminoBorrowAssetRaw = (data as any).kaminoBorrowAsset;
+  const dataKaminoBorrowAsset = parseKaminoBorrowAsset(dataKaminoBorrowAssetRaw);
+  if (dataKaminoBorrowAssetRaw != null && dataKaminoBorrowAsset === undefined) {
+    throw new Error("kaminoBorrowAsset must be usdc, usdt, or auto");
+  }
+
+  const envKaminoCloseRuleRaw = process.env.KAMINO_CLOSE_RULE ?? "";
+  const envKaminoCloseRule = parseKaminoCloseRule(envKaminoCloseRuleRaw);
+  if (envKaminoCloseRuleRaw && !envKaminoCloseRule) {
+    throw new Error("KAMINO_CLOSE_RULE must be avg-price, breakeven, or manual");
+  }
+  const dataKaminoCloseRuleRaw = (data as any).kaminoCloseRule;
+  const dataKaminoCloseRule = parseKaminoCloseRule(dataKaminoCloseRuleRaw);
+  if (dataKaminoCloseRuleRaw != null && dataKaminoCloseRule === undefined) {
+    throw new Error("kaminoCloseRule must be avg-price, breakeven, or manual");
   }
 
   const envTrendTimeframeRaw = process.env.TREND_TIMEFRAME ?? "";
@@ -410,6 +460,20 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? "",
     autoAddLiquidityEnabled: parseEnvBool(process.env.AUTO_ADD_LIQUIDITY_ENABLED)
       ?? Boolean((data as any).autoAddLiquidityEnabled ?? false),
+    kaminoRebalanceEnabled: parseEnvBool(process.env.KAMINO_REBALANCE_ENABLED)
+      ?? Boolean((data as any).kaminoRebalanceEnabled ?? false),
+    kaminoDepositPct: parseEnvNumber(process.env.KAMINO_DEPOSIT_PCT)
+      ?? Number((data as any).kaminoDepositPct ?? 100),
+    kaminoBorrowAsset: envKaminoBorrowAsset
+      ?? dataKaminoBorrowAsset
+      ?? "usdc",
+    kaminoMaxLtv: parseEnvNumber(process.env.KAMINO_MAX_LTV)
+      ?? Number((data as any).kaminoMaxLtv ?? 0.4),
+    kaminoCloseRule: envKaminoCloseRule
+      ?? dataKaminoCloseRule
+      ?? "avg-price",
+    kaminoPriceBufferPct: parseEnvNumber(process.env.KAMINO_PRICE_BUFFER_PCT)
+      ?? Number((data as any).kaminoPriceBufferPct ?? 0.5),
     autoResumeEnabled,
     autoResumeMaxAttempts: Number(autoResumeMaxAttempts),
     autoResumeBaseDelayMs: Number(autoResumeBaseDelayMs),
@@ -539,6 +603,21 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!config.autoSwapFeesToUsdcTargetMint || !config.autoSwapFeesToUsdcTargetMint.trim()) {
     config.autoSwapFeesToUsdcTargetMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  }
+  if (!Number.isFinite(config.kaminoDepositPct) || config.kaminoDepositPct < 0 || config.kaminoDepositPct > 100) {
+    throw new Error("kaminoDepositPct must be between 0 and 100");
+  }
+  if (!parseKaminoBorrowAsset(config.kaminoBorrowAsset)) {
+    throw new Error("kaminoBorrowAsset must be usdc, usdt, or auto");
+  }
+  if (!Number.isFinite(config.kaminoMaxLtv) || config.kaminoMaxLtv < 0 || config.kaminoMaxLtv > 1) {
+    throw new Error("kaminoMaxLtv must be between 0 and 1");
+  }
+  if (!parseKaminoCloseRule(config.kaminoCloseRule)) {
+    throw new Error("kaminoCloseRule must be avg-price, breakeven, or manual");
+  }
+  if (!Number.isFinite(config.kaminoPriceBufferPct) || config.kaminoPriceBufferPct < 0) {
+    throw new Error("kaminoPriceBufferPct must be >= 0");
   }
   if (!Number.isFinite(config.minSolBalance) || config.minSolBalance < 0) {
     throw new Error("minSolBalance must be >= 0");

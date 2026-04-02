@@ -39,6 +39,12 @@ export type PoolOverrides = {
   trendTargetUp?: "sol" | "other" | "tokenA" | "tokenB";
   trendTargetDown?: "sol" | "other" | "tokenA" | "tokenB";
   autoAddLiquidityEnabled?: boolean;
+  kaminoRebalanceEnabled?: boolean;
+  kaminoDepositPct?: number;
+  kaminoBorrowAsset?: "usdc" | "usdt" | "auto";
+  kaminoMaxLtv?: number;
+  kaminoCloseRule?: "avg-price" | "breakeven" | "manual";
+  kaminoPriceBufferPct?: number;
   hedgeEnabled?: boolean;
   hedgePct?: number;
   hedgeSymbol?: string;
@@ -428,6 +434,15 @@ export class PoolManager {
       throw new Error("No pool selected");
     }
     await this.closePool(this.selectedPoolId);
+  }
+
+  async closeKaminoCycleSelected(): Promise<{ ok: boolean; reason?: string }> {
+    if (!this.selectedPoolId) {
+      throw new Error("No pool selected");
+    }
+    const record = this.getRecord(this.selectedPoolId);
+    const result = await record.runner.closeKaminoCycleNow();
+    return { ok: result.ok, reason: result.reason };
   }
 
   async topUpSolSelected(): Promise<{ ok: boolean; reason?: string }> {
@@ -1084,6 +1099,65 @@ export class PoolManager {
       normalized.autoAddLiquidityEnabled = value;
     }
 
+    if (overrides.kaminoRebalanceEnabled != null) {
+      const raw = overrides.kaminoRebalanceEnabled as unknown;
+      let value: boolean | null = null;
+      if (typeof raw === "boolean") {
+        value = raw;
+      } else if (typeof raw === "string") {
+        const normalizedValue = String(raw).trim().toLowerCase();
+        if (["1", "true", "yes", "on", "sim"].includes(normalizedValue)) {
+          value = true;
+        } else if (["0", "false", "no", "off", "nao"].includes(normalizedValue)) {
+          value = false;
+        }
+      }
+      if (value === null) {
+        throw new Error("kaminoRebalanceEnabled override must be boolean");
+      }
+      normalized.kaminoRebalanceEnabled = value;
+    }
+
+    if (overrides.kaminoDepositPct != null) {
+      const value = Number(overrides.kaminoDepositPct);
+      if (!Number.isFinite(value) || value < 0 || value > 100) {
+        throw new Error("kaminoDepositPct override must be between 0 and 100");
+      }
+      normalized.kaminoDepositPct = value;
+    }
+
+    if (overrides.kaminoBorrowAsset != null) {
+      const value = String(overrides.kaminoBorrowAsset).trim().toLowerCase();
+      if (!["usdc", "usdt", "auto"].includes(value)) {
+        throw new Error("kaminoBorrowAsset override must be usdc, usdt, or auto");
+      }
+      normalized.kaminoBorrowAsset = value as PoolOverrides["kaminoBorrowAsset"];
+    }
+
+    if (overrides.kaminoMaxLtv != null) {
+      const value = Number(overrides.kaminoMaxLtv);
+      if (!Number.isFinite(value) || value < 0 || value > 1) {
+        throw new Error("kaminoMaxLtv override must be between 0 and 1");
+      }
+      normalized.kaminoMaxLtv = value;
+    }
+
+    if (overrides.kaminoCloseRule != null) {
+      const value = String(overrides.kaminoCloseRule).trim().toLowerCase();
+      if (!["avg-price", "breakeven", "manual"].includes(value)) {
+        throw new Error("kaminoCloseRule override must be avg-price, breakeven, or manual");
+      }
+      normalized.kaminoCloseRule = value as PoolOverrides["kaminoCloseRule"];
+    }
+
+    if (overrides.kaminoPriceBufferPct != null) {
+      const value = Number(overrides.kaminoPriceBufferPct);
+      if (!Number.isFinite(value) || value < 0) {
+        throw new Error("kaminoPriceBufferPct override must be >= 0");
+      }
+      normalized.kaminoPriceBufferPct = value;
+    }
+
     if (overrides.hedgeEnabled != null) {
       const raw = overrides.hedgeEnabled as unknown;
       let value: boolean | null = null;
@@ -1317,6 +1391,89 @@ export class PoolManager {
           throw new Error("autoAddLiquidityEnabled override must be boolean");
         }
         next.autoAddLiquidityEnabled = value;
+      }
+    }
+
+    if ("kaminoRebalanceEnabled" in updates) {
+      if (updates.kaminoRebalanceEnabled == null) {
+        delete next.kaminoRebalanceEnabled;
+      } else {
+        const raw = updates.kaminoRebalanceEnabled as unknown;
+        let value: boolean | null = null;
+        if (typeof raw === "boolean") {
+          value = raw;
+        } else if (typeof raw === "string") {
+          const normalizedValue = String(raw).trim().toLowerCase();
+          if (["1", "true", "yes", "on", "sim"].includes(normalizedValue)) {
+            value = true;
+          } else if (["0", "false", "no", "off", "nao"].includes(normalizedValue)) {
+            value = false;
+          }
+        }
+        if (value === null) {
+          throw new Error("kaminoRebalanceEnabled override must be boolean");
+        }
+        next.kaminoRebalanceEnabled = value;
+      }
+    }
+
+    if ("kaminoDepositPct" in updates) {
+      if (updates.kaminoDepositPct == null) {
+        delete next.kaminoDepositPct;
+      } else {
+        const value = Number(updates.kaminoDepositPct);
+        if (!Number.isFinite(value) || value < 0 || value > 100) {
+          throw new Error("kaminoDepositPct override must be between 0 and 100");
+        }
+        next.kaminoDepositPct = value;
+      }
+    }
+
+    if ("kaminoBorrowAsset" in updates) {
+      if (updates.kaminoBorrowAsset == null) {
+        delete next.kaminoBorrowAsset;
+      } else {
+        const value = String(updates.kaminoBorrowAsset).trim().toLowerCase();
+        if (!["usdc", "usdt", "auto"].includes(value)) {
+          throw new Error("kaminoBorrowAsset override must be usdc, usdt, or auto");
+        }
+        next.kaminoBorrowAsset = value as PoolOverrides["kaminoBorrowAsset"];
+      }
+    }
+
+    if ("kaminoMaxLtv" in updates) {
+      if (updates.kaminoMaxLtv == null) {
+        delete next.kaminoMaxLtv;
+      } else {
+        const value = Number(updates.kaminoMaxLtv);
+        if (!Number.isFinite(value) || value < 0 || value > 1) {
+          throw new Error("kaminoMaxLtv override must be between 0 and 1");
+        }
+        next.kaminoMaxLtv = value;
+      }
+    }
+
+    if ("kaminoCloseRule" in updates) {
+      if (updates.kaminoCloseRule == null) {
+        delete next.kaminoCloseRule;
+      } else {
+        const value = String(updates.kaminoCloseRule).trim().toLowerCase();
+        if (!["avg-price", "breakeven", "manual"].includes(value)) {
+          throw new Error("kaminoCloseRule override must be avg-price, breakeven, or manual");
+        }
+        next.kaminoCloseRule = value as PoolOverrides["kaminoCloseRule"];
+      }
+    }
+
+    if ("kaminoPriceBufferPct" in updates) {
+      if (updates.kaminoPriceBufferPct == null) {
+        delete next.kaminoPriceBufferPct;
+      } else {
+        const value = Number(updates.kaminoPriceBufferPct);
+        if (!Number.isFinite(value) || value < 0) {
+          throw new Error("kaminoPriceBufferPct override must be >= 0");
+        }
+        next.kaminoPriceBufferPct = value;
       }
     }
 

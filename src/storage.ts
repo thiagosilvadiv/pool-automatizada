@@ -12,6 +12,7 @@ export type HistoryState = {
   lastEventPortfolioValue: number | null;
   lastEventPortfolioUsd: number | null;
   hedgeState?: unknown;
+  kaminoState?: unknown;
 };
 
 export type HistoryStore = {

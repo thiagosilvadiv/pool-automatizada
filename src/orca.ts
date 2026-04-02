@@ -5,6 +5,8 @@ import * as whirlpoolsSdk from "@orca-so/whirlpools-sdk";
 import * as commonSdk from "@orca-so/common-sdk";
 
 import { Config } from "./config.js";
+import { createKaminoClient } from "./kamino-client.js";
+import type { KaminoClient } from "./kamino-client.js";
 import { logger } from "./logger.js";
 import { calculateRange, isPriceOutOfRange, resolveDirectionalExitPreference, Range } from "./strategy.js";
 import { alignTickRangeToSpacing } from "./tick-range.js";
@@ -12,11 +14,13 @@ import { WalletLike } from "./solana.js";
 import { getSolUsdPrice } from "./pyth.js";
 import { getTrendSnapshot } from "./trend.js";
 import type { TrendDirection, TrendTarget, TrendTimeframe } from "./trend.js";
+import type { KaminoCycleState } from "./kamino-types.js";
 
 const whirlpools = whirlpoolsSdk as any;
 const common = commonSdk as any;
 const Decimal: any = DecimalJs;
 const MIN_ENTRY_BUDGET_FACTOR = 0.25;
+const DEFAULT_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 export type BotContext = {
   connection: Connection;
@@ -86,6 +90,14 @@ export type BotStatus = {
   effectiveExitSide: "lower" | "upper" | null;
   effectiveValueToken: "tokenA" | "tokenB" | null;
   trendStale: boolean | null;
+  kaminoActive: boolean;
+  kaminoCollateralUsd: number | null;
+  kaminoDebtUsd: number | null;
+  kaminoLtv: number | null;
+  kaminoAvgPriceUsdc: number | null;
+  kaminoTargetPriceUsdc: number | null;
+  kaminoCycleCount: number;
+  kaminoLastError: string | null;
 };
 
 type SwapWalletToSolDetail = {
@@ -136,6 +148,10 @@ export class OrcaBot {
   private onLowSol?: () => Promise<void>;
   private lastTrendPreferredExitToken: "tokenA" | "tokenB" | null = null;
   private swapAllowlist: Set<string> | null = null;
+  private kaminoState: KaminoCycleState | null = null;
+  private kaminoClient: KaminoClient | null = null;
+  private pendingHistoryActions: BotStatus[] = [];
+  private stableMintCache = new Map<string, { mint: string; decimals: number }>();
   private lastStatus: BotStatus = {
     running: false,
     lastAction: null,
@@ -184,7 +200,15 @@ export class OrcaBot {
     effectiveExitDirection: "down",
     effectiveExitSide: null,
     effectiveValueToken: null,
-    trendStale: null
+    trendStale: null,
+    kaminoActive: false,
+    kaminoCollateralUsd: null,
+    kaminoDebtUsd: null,
+    kaminoLtv: null,
+    kaminoAvgPriceUsdc: null,
+    kaminoTargetPriceUsdc: null,
+    kaminoCycleCount: 0,
+    kaminoLastError: null
   };
 
   private constructor(ctx: any, client: any, botCtx: BotContext) {
@@ -281,6 +305,7 @@ export class OrcaBot {
     this.lastStatus.eventPositionFeesUsd = null;
     this.lastStatus.eventPositionExitUsd = null;
     this.resetActionFee();
+    this.syncKaminoStatus();
     await this.refreshPoolState();
     const trendSnapshot = await this.updateTrendStatus();
     const preferredExitToken = this.resolvePreferredExitToken(trendSnapshot.direction, trendSnapshot.stale);
@@ -364,6 +389,15 @@ export class OrcaBot {
       ? this.config.budgetUsd / solUsdPrice
       : null;
     await this.updatePortfolioSnapshot(price, solUsdPrice);
+
+    if (this.kaminoState?.active && this.config.kaminoCloseRule !== "manual") {
+      const closed = await this.maybeCloseKaminoCycle(price);
+      if (closed) {
+        this.lastStatus.positionRange = null;
+        this.lastStatus.positionMint = this.currentPositionMint;
+        return this.getStatus();
+      }
+    }
 
     if (!this.currentPosition) {
       await this.loadExistingPosition();
@@ -458,6 +492,19 @@ export class OrcaBot {
       }
     }
 
+    if (this.config.kaminoRebalanceEnabled) {
+      const result = await this.rebalanceWithKamino({
+        price,
+        solUsdPrice,
+        executionRange,
+        positionRange
+      });
+      this.lastStatus.lastAction = result;
+      this.lastStatus.positionRange = null;
+      this.lastStatus.positionMint = this.currentPositionMint;
+      return this.getStatus();
+    }
+
     logger.info({ price, positionRange }, "price out of range; rebalancing");
     this.outOfRangeSince = null;
     await this.updatePortfolioSnapshot(price, solUsdPrice);
@@ -541,6 +588,19 @@ export class OrcaBot {
     this.lastStatus.positionMint = null;
     this.lastStatus.positionRange = null;
     return this.getStatus();
+  }
+
+  async closeKaminoCycleNow(): Promise<{ ok: boolean; reason?: string; status: BotStatus }> {
+    this.lastStatus.running = true;
+    this.resetActionFee();
+    try {
+      await this.closeKaminoCycle("manual");
+      this.lastStatus.lastAction = "kamino-close";
+      return { ok: true, status: this.getStatus() };
+    } catch (err) {
+      this.setError(err);
+      return { ok: false, reason: err instanceof Error ? err.message : String(err), status: this.getStatus() };
+    }
   }
 
   async addLiquidityFromWallet(options: { share?: number; maxTokenA?: number; maxTokenB?: number }): Promise<{ ok: boolean; reason?: string }> {
@@ -1503,6 +1563,30 @@ export class OrcaBot {
     return { ...this.lastStatus };
   }
 
+  getKaminoState(): KaminoCycleState | null {
+    return this.kaminoState ? { ...this.kaminoState } : null;
+  }
+
+  setKaminoState(state: KaminoCycleState | null): void {
+    this.kaminoState = state ? { ...state } : null;
+    this.syncKaminoStatus();
+  }
+
+  queueHistoryAction(action: string, overrides?: Partial<BotStatus>): void {
+    const snapshot: BotStatus = {
+      ...this.lastStatus,
+      ...overrides,
+      lastAction: action
+    };
+    this.pendingHistoryActions.push(snapshot);
+  }
+
+  drainHistoryActions(): BotStatus[] {
+    const items = [...this.pendingHistoryActions];
+    this.pendingHistoryActions = [];
+    return items;
+  }
+
   async getWalletBalances(): Promise<{ tokenA: number; tokenB: number }> {
     if (!this.poolState) {
       await this.refreshPoolState();
@@ -1519,6 +1603,22 @@ export class OrcaBot {
     this.lastStatus.lastError = stringifyError(err);
   }
 
+  private syncKaminoStatus(): void {
+    const state = this.kaminoState;
+    this.lastStatus.kaminoActive = Boolean(state?.active);
+    this.lastStatus.kaminoCollateralUsd = state?.collateralUsd ?? null;
+    this.lastStatus.kaminoDebtUsd = state?.debtUsd ?? null;
+    if (state?.collateralUsd != null && state.collateralUsd > 0 && state?.debtUsd != null) {
+      this.lastStatus.kaminoLtv = state.debtUsd / state.collateralUsd;
+    } else {
+      this.lastStatus.kaminoLtv = null;
+    }
+    this.lastStatus.kaminoAvgPriceUsdc = state?.avgPriceUsdc ?? null;
+    this.lastStatus.kaminoTargetPriceUsdc = state?.targetPriceUsdc ?? null;
+    this.lastStatus.kaminoCycleCount = state?.cycleCount ?? 0;
+    this.lastStatus.kaminoLastError = state?.lastError ?? null;
+  }
+
   setSwapAllowlist(mints: string[]): void {
     const normalized = Array.isArray(mints)
       ? mints.map((mint) => String(mint).trim()).filter((mint) => mint.length > 0)
@@ -1529,6 +1629,602 @@ export class OrcaBot {
   updateConfig(config: Config): void {
     this.config = config;
     this.outOfRangeSince = null;
+  }
+
+  private async ensureKaminoClient(): Promise<KaminoClient> {
+    if (!this.kaminoClient) {
+      this.kaminoClient = await createKaminoClient({
+        connection: this.connection,
+        wallet: this.wallet,
+        config: this.config
+      });
+    }
+    return this.kaminoClient;
+  }
+
+  private resolveKaminoBorrowMint(): { mint: string; label: string } {
+    const usdcMint = (this.config.autoSwapFeesToUsdcTargetMint || DEFAULT_USDC_MINT).trim() || DEFAULT_USDC_MINT;
+    const usdtMint = String(process.env.KAMINO_USDT_MINT ?? "").trim();
+    const asset = this.config.kaminoBorrowAsset ?? "usdc";
+    const poolMintA = this.poolState?.tokenMintA?.toBase58?.() ?? "";
+    const poolMintB = this.poolState?.tokenMintB?.toBase58?.() ?? "";
+    const poolHasUsdc = Boolean(usdcMint && (poolMintA === usdcMint || poolMintB === usdcMint));
+    const poolHasUsdt = Boolean(usdtMint && (poolMintA === usdtMint || poolMintB === usdtMint));
+
+    if (asset === "auto") {
+      if (poolHasUsdc) return { mint: usdcMint, label: "USDC" };
+      if (poolHasUsdt) return { mint: usdtMint, label: "USDT" };
+      return { mint: usdcMint, label: "USDC" };
+    }
+    if (asset === "usdt") {
+      if (!usdtMint) {
+        throw new Error("KAMINO_USDT_MINT requerido quando kaminoBorrowAsset=usdt");
+      }
+      return { mint: usdtMint, label: "USDT" };
+    }
+    return { mint: usdcMint, label: "USDC" };
+  }
+
+  private async getStableMintInfo(): Promise<{ mint: string; decimals: number; label: string }> {
+    const resolved = this.resolveKaminoBorrowMint();
+    const cached = this.stableMintCache.get(resolved.mint);
+    if (cached) {
+      return { mint: cached.mint, decimals: cached.decimals, label: resolved.label };
+    }
+    let decimals = 6;
+    try {
+      const mintInfo = await getMint(this.connection, new PublicKey(resolved.mint));
+      decimals = Number(mintInfo.decimals ?? decimals);
+    } catch (err) {
+      logger.warn({ err, mint: resolved.mint }, "falha ao buscar decimais do stable");
+    }
+    const entry = { mint: resolved.mint, decimals };
+    this.stableMintCache.set(resolved.mint, entry);
+    return { ...entry, label: resolved.label };
+  }
+
+  private async getTokenUsdValue(input: {
+    mint: string;
+    amountUi: number;
+    decimals: number;
+    stableMint: string;
+    stableDecimals: number;
+  }): Promise<number | null> {
+    if (!this.config.jupiterApiKey) {
+      throw new Error("Jupiter API key ausente");
+    }
+    const amountRaw = toRawAmount(input.amountUi, input.decimals);
+    if (!isValidU64(amountRaw)) {
+      return null;
+    }
+    const quote = await this.fetchJupiterQuoteExactInDetailed(
+      input.mint,
+      input.stableMint,
+      amountRaw.toString(),
+      this.config.slippageBps ?? 50
+    );
+    if (!quote.quote) {
+      return null;
+    }
+    const outAmount = parseU64(quote.quote.outAmount ?? "0");
+    if (!outAmount) {
+      return null;
+    }
+    const outNumber = toSafeNumber(outAmount);
+    if (outNumber == null) {
+      return null;
+    }
+    return outNumber / Math.pow(10, input.stableDecimals);
+  }
+
+  private async getTokenUsdPrice(input: {
+    mint: string;
+    decimals: number;
+    stableMint: string;
+    stableDecimals: number;
+  }): Promise<number | null> {
+    return this.getTokenUsdValue({ ...input, amountUi: 1 });
+  }
+
+  private async swapStableToToken(input: {
+    stableMint: string;
+    stableDecimals: number;
+    outputMint: string;
+    outputDecimals: number;
+    amountStableRaw: bigint;
+    label?: string;
+  }): Promise<number | null> {
+    if (!this.config.jupiterApiKey) {
+      throw new Error("Jupiter API key ausente");
+    }
+    if (!isValidU64(input.amountStableRaw)) {
+      throw new Error("amountStable fora do range");
+    }
+    const quote = await this.fetchJupiterQuoteExactInDetailed(
+      input.stableMint,
+      input.outputMint,
+      input.amountStableRaw.toString(),
+      this.config.slippageBps ?? 50
+    );
+    if (!quote.quote) {
+      throw new Error(`Sem rota Jupiter para ${input.label ?? "swap"}`);
+    }
+    const result = await this.executeJupiterSwapDetailed(quote.quote);
+    if (!result.sig) {
+      throw new Error(result.error ?? "Falha na swap Jupiter");
+    }
+    const outAmount = parseU64(quote.quote.outAmount ?? "0");
+    if (!outAmount) {
+      return null;
+    }
+    const outNumber = toSafeNumber(outAmount);
+    if (outNumber == null) {
+      return null;
+    }
+    return outNumber / Math.pow(10, input.outputDecimals);
+  }
+
+  private async swapTokenToStable(input: {
+    inputMint: string;
+    inputDecimals: number;
+    amountUi: number;
+    stableMint: string;
+    stableDecimals: number;
+    label?: string;
+  }): Promise<number | null> {
+    if (!this.config.jupiterApiKey) {
+      throw new Error("Jupiter API key ausente");
+    }
+    const amountRaw = toRawAmount(input.amountUi, input.inputDecimals);
+    if (!isValidU64(amountRaw)) {
+      throw new Error("amountIn fora do range");
+    }
+    const quote = await this.fetchJupiterQuoteExactInDetailed(
+      input.inputMint,
+      input.stableMint,
+      amountRaw.toString(),
+      this.config.slippageBps ?? 50
+    );
+    if (!quote.quote) {
+      throw new Error(`Sem rota Jupiter para ${input.label ?? "swap"}`);
+    }
+    const result = await this.executeJupiterSwapDetailed(quote.quote);
+    if (!result.sig) {
+      throw new Error(result.error ?? "Falha na swap Jupiter");
+    }
+    const outAmount = parseU64(quote.quote.outAmount ?? "0");
+    if (!outAmount) {
+      return null;
+    }
+    const outNumber = toSafeNumber(outAmount);
+    if (outNumber == null) {
+      return null;
+    }
+    return outNumber / Math.pow(10, input.stableDecimals);
+  }
+
+  private async pickExitTokenByUsd(input: {
+    tokenAAmount: number;
+    tokenBAmount: number;
+    solUsdPrice: number | null;
+  }): Promise<{ side: "tokenA" | "tokenB"; mint: string; amount: number; usdValue: number; decimals: number } | null> {
+    if (!this.poolState) {
+      return null;
+    }
+    let stable: { mint: string; decimals: number; label: string };
+    try {
+      stable = await this.getStableMintInfo();
+    } catch (err) {
+      this.setError(err);
+      return null;
+    }
+    const tokenAMint = this.poolState.tokenMintA.toBase58();
+    const tokenBMint = this.poolState.tokenMintB.toBase58();
+    const tokenADecimals = this.poolState.decimalsA;
+    const tokenBDecimals = this.poolState.decimalsB;
+    let usdA: number | null = null;
+    let usdB: number | null = null;
+    if (input.tokenAAmount > 0) {
+      if (this.poolState.isTokenASol && input.solUsdPrice) {
+        usdA = input.tokenAAmount * input.solUsdPrice;
+      } else if (!this.isSwapAllowlistActive() || this.isSwapAllowed(tokenAMint)) {
+        usdA = await this.getTokenUsdValue({
+          mint: tokenAMint,
+          amountUi: input.tokenAAmount,
+          decimals: tokenADecimals,
+          stableMint: stable.mint,
+          stableDecimals: stable.decimals
+        });
+      }
+    }
+    if (input.tokenBAmount > 0) {
+      if (this.poolState.isTokenBSol && input.solUsdPrice) {
+        usdB = input.tokenBAmount * input.solUsdPrice;
+      } else if (!this.isSwapAllowlistActive() || this.isSwapAllowed(tokenBMint)) {
+        usdB = await this.getTokenUsdValue({
+          mint: tokenBMint,
+          amountUi: input.tokenBAmount,
+          decimals: tokenBDecimals,
+          stableMint: stable.mint,
+          stableDecimals: stable.decimals
+        });
+      }
+    }
+    if (usdA == null && usdB == null) {
+      return null;
+    }
+    if (usdB == null || (usdA != null && usdA >= usdB)) {
+      return { side: "tokenA", mint: tokenAMint, amount: input.tokenAAmount, usdValue: usdA ?? 0, decimals: tokenADecimals };
+    }
+    return { side: "tokenB", mint: tokenBMint, amount: input.tokenBAmount, usdValue: usdB ?? 0, decimals: tokenBDecimals };
+  }
+
+  private async maybeCloseKaminoCycle(currentPrice: number): Promise<boolean> {
+    const state = this.kaminoState;
+    if (!state || !state.active) {
+      return false;
+    }
+    if (!state.collateralMint || !state.avgPriceUsdc) {
+      return false;
+    }
+    const rule = this.config.kaminoCloseRule ?? "avg-price";
+    const target = rule === "breakeven"
+      ? state.avgPriceUsdc
+      : (state.targetPriceUsdc ?? null);
+    if (!target || target <= 0) {
+      return false;
+    }
+    try {
+      const stable = await this.getStableMintInfo();
+      const decimals = await this.getTokenDecimals(state.collateralMint);
+      const priceUsd = await this.getTokenUsdPrice({
+        mint: state.collateralMint,
+        decimals,
+        stableMint: stable.mint,
+        stableDecimals: stable.decimals
+      });
+      if (priceUsd == null) {
+        return false;
+      }
+      if (priceUsd >= target) {
+        logger.info(
+          { priceUsd, target, rule, collateralMint: state.collateralMint },
+          "kamino target atingido; fechando ciclo"
+        );
+        await this.closeKaminoCycle("target");
+        this.lastStatus.lastAction = "kamino-close";
+        return true;
+      }
+    } catch (err) {
+      logger.warn({ err }, "falha ao avaliar fechamento kamino");
+      this.setKaminoState({ ...state, lastError: stringifyError(err) });
+    }
+    return false;
+  }
+
+  private async closeKaminoCycle(mode: "manual" | "target"): Promise<void> {
+    const state = this.kaminoState;
+    if (!state || !state.active) {
+      this.setError("Nenhum ciclo Kamino ativo");
+      return;
+    }
+    this.lastStatus.running = true;
+    this.resetActionFee();
+    await this.refreshPoolState();
+    if (this.currentPosition) {
+      this.captureCloseSnapshot();
+      await this.closePosition(this.currentPosition);
+      this.currentPosition = null;
+      this.currentPositionMint = null;
+      this.missingPositionSince = null;
+    }
+    await this.loadExistingPosition();
+    if (this.currentPosition) {
+      throw new Error("Fechamento falhou: posição ainda aberta");
+    }
+
+    const stable = await this.getStableMintInfo();
+    const kamino = await this.ensureKaminoClient();
+    const debtAmount = Number(state.debtAmount ?? 0);
+    if (debtAmount > 0) {
+      const stableBalance = await this.getWalletTokenBalance(stable.mint);
+      if (stableBalance < debtAmount) {
+        if (this.poolState) {
+          const tokenA = this.poolState.tokenMintA.toBase58();
+          const tokenB = this.poolState.tokenMintB.toBase58();
+          if (!this.isSwapAllowlistActive() || this.isSwapAllowed(tokenA)) {
+            const balanceA = (await this.getTokenBalances()).tokenA;
+            if (balanceA > 0) {
+              await this.swapTokenToStable({
+                inputMint: tokenA,
+                inputDecimals: this.poolState.decimalsA,
+                amountUi: balanceA,
+                stableMint: stable.mint,
+                stableDecimals: stable.decimals,
+                label: "tokenA->stable"
+              });
+            }
+          }
+          if (!this.isSwapAllowlistActive() || this.isSwapAllowed(tokenB)) {
+            const balanceB = (await this.getTokenBalances()).tokenB;
+            if (balanceB > 0) {
+              await this.swapTokenToStable({
+                inputMint: tokenB,
+                inputDecimals: this.poolState.decimalsB,
+                amountUi: balanceB,
+                stableMint: stable.mint,
+                stableDecimals: stable.decimals,
+                label: "tokenB->stable"
+              });
+            }
+          }
+        }
+      }
+      await kamino.repay({ mint: stable.mint, amount: debtAmount });
+      this.queueHistoryAction("kamino-repay");
+    }
+    if (state.collateralMint && state.collateralAmount > 0) {
+      await kamino.withdraw({ mint: state.collateralMint, amount: state.collateralAmount });
+      this.queueHistoryAction("kamino-withdraw");
+    }
+    const nextState: KaminoCycleState = {
+      active: false,
+      collateralMint: null,
+      collateralAmount: 0,
+      collateralUsd: null,
+      debtMint: null,
+      debtAmount: 0,
+      debtUsd: null,
+      avgPriceUsdc: null,
+      targetPriceUsdc: null,
+      cycleCount: state.cycleCount ?? 0,
+      updatedAt: new Date().toISOString(),
+      lastError: null
+    };
+    this.setKaminoState(nextState);
+    this.queueHistoryAction("kamino-close", { lastAction: "kamino-close" });
+    logger.info({ mode }, "kamino cycle closed");
+  }
+
+  private async rebalanceWithKamino(input: {
+    price: number;
+    solUsdPrice: number | null;
+    executionRange: Range;
+    positionRange: Range;
+  }): Promise<string> {
+    if (!this.currentPosition || !this.poolState) {
+      return "close-no-position";
+    }
+    if (!this.config.jupiterApiKey) {
+      this.setError("Jupiter API key ausente");
+      return "kamino-rebalance-failed";
+    }
+    const kamino = await this.ensureKaminoClient();
+    let deposited = false;
+    this.outOfRangeSince = null;
+
+    this.captureCloseSnapshot();
+    await this.closePosition(this.currentPosition);
+    this.currentPosition = null;
+    this.currentPositionMint = null;
+    this.missingPositionSince = null;
+    await this.loadExistingPosition();
+    if (this.currentPosition) {
+      this.setError("Fechamento falhou: posição ainda aberta");
+      return "close-failed";
+    }
+
+    const balances = await this.getTokenBalances();
+    let exitToken: Awaited<ReturnType<typeof this.pickExitTokenByUsd>>;
+    try {
+      exitToken = await this.pickExitTokenByUsd({
+        tokenAAmount: balances.tokenA,
+        tokenBAmount: balances.tokenB,
+        solUsdPrice: input.solUsdPrice
+      });
+    } catch (err) {
+      this.setError(err);
+      return "kamino-rebalance-failed";
+    }
+    if (!exitToken) {
+      this.setError("Não foi possível determinar token de saída para Kamino");
+      return "kamino-rebalance-failed";
+    }
+
+    if (this.kaminoState?.active
+      && this.kaminoState.collateralMint
+      && this.kaminoState.collateralMint !== exitToken.mint) {
+      this.setError("Token de colateral mudou; feche o ciclo Kamino antes de continuar");
+      return "kamino-rebalance-failed";
+    }
+
+    const supported = await kamino.supportsCollateral(exitToken.mint);
+    if (!supported) {
+      this.setError("Token de saída não suportado como colateral no Kamino");
+      return "kamino-rebalance-failed";
+    }
+
+    const depositPct = Math.max(0, Math.min(100, Number(this.config.kaminoDepositPct ?? 100)));
+    const depositAmount = exitToken.amount * (depositPct / 100);
+    if (depositAmount <= 0) {
+      this.setError("Saldo insuficiente para depositar no Kamino");
+      return "kamino-rebalance-failed";
+    }
+
+    try {
+      await kamino.ensureObligation();
+      await kamino.depositCollateral({ mint: exitToken.mint, amount: depositAmount });
+      deposited = true;
+      this.queueHistoryAction("kamino-deposit");
+    } catch (err) {
+      this.setError(err);
+      return "kamino-rebalance-failed";
+    }
+
+    const collateralUsd = exitToken.usdValue ?? null;
+    const depositUsd = collateralUsd != null ? collateralUsd * (depositPct / 100) : null;
+    const maxBorrowUsd = depositUsd != null
+      ? depositUsd * Math.max(0, Math.min(1, this.config.kaminoMaxLtv ?? 0))
+      : 0;
+    const desiredBorrowUsd = this.config.budgetUsd != null
+      ? Math.min(maxBorrowUsd, this.config.budgetUsd)
+      : maxBorrowUsd;
+    const borrowUsd = Math.max(0, desiredBorrowUsd);
+    if (borrowUsd <= 0) {
+      this.setError("Borrow USD insuficiente para reabrir a pool");
+      return "kamino-rebalance-failed";
+    }
+
+    const stable = await this.getStableMintInfo();
+    try {
+      await kamino.borrow({ mint: stable.mint, amount: borrowUsd });
+      this.queueHistoryAction("kamino-borrow");
+    } catch (err) {
+      this.setError(err);
+      if (deposited) {
+        try {
+          await kamino.withdraw({ mint: exitToken.mint, amount: depositAmount });
+          this.queueHistoryAction("kamino-withdraw");
+        } catch (withdrawErr) {
+          logger.warn({ err: withdrawErr }, "rollback kamino withdraw failed");
+        }
+      }
+      return "kamino-rebalance-failed";
+    }
+
+    let shareA = 0.5;
+    try {
+      const ticks = this.getTicksForRange(input.executionRange, input.price);
+      const tokenExtensionCtx = await whirlpools.TokenExtensionUtil.buildTokenExtensionContext(
+        this.ctx.fetcher,
+        this.poolState.pool.getTokenAInfo(),
+        this.poolState.pool.getTokenBInfo()
+      );
+      const ratio = await this.getRangeRatio(
+        ticks.lowerTick,
+        ticks.upperTick,
+        input.price,
+        tokenExtensionCtx
+      );
+      if (input.price + ratio > 0) {
+        shareA = input.price / (input.price + ratio);
+      }
+    } catch (err) {
+      logger.warn({ err }, "falha ao calcular ratio para swap kamino");
+      shareA = 0.5;
+    }
+    const shareB = 1 - shareA;
+    const totalStableRaw = toRawAmount(borrowUsd, stable.decimals);
+    let stableForA = BigInt(0);
+    let stableForB = BigInt(0);
+    if (isValidU64(totalStableRaw) && totalStableRaw > 0n) {
+      if (totalStableRaw <= BigInt(Number.MAX_SAFE_INTEGER)) {
+        stableForA = BigInt(Math.floor(Number(totalStableRaw) * shareA));
+      } else {
+        const scale = BigInt(Math.floor(shareA * 1_000_000));
+        stableForA = (totalStableRaw * scale) / 1_000_000n;
+      }
+      stableForB = totalStableRaw - stableForA;
+    }
+
+    const tokenAMint = this.poolState.tokenMintA.toBase58();
+    const tokenBMint = this.poolState.tokenMintB.toBase58();
+    try {
+      const skipSwapA = tokenAMint === stable.mint;
+      const skipSwapB = tokenBMint === stable.mint;
+      if (!skipSwapA && stableForA > 0n && (!this.isSwapAllowlistActive() || this.isSwapAllowed(tokenAMint))) {
+        await this.swapStableToToken({
+          stableMint: stable.mint,
+          stableDecimals: stable.decimals,
+          outputMint: tokenAMint,
+          outputDecimals: this.poolState.decimalsA,
+          amountStableRaw: stableForA,
+          label: "stable->tokenA"
+        });
+      }
+      if (!skipSwapB && stableForB > 0n && (!this.isSwapAllowlistActive() || this.isSwapAllowed(tokenBMint))) {
+        await this.swapStableToToken({
+          stableMint: stable.mint,
+          stableDecimals: stable.decimals,
+          outputMint: tokenBMint,
+          outputDecimals: this.poolState.decimalsB,
+          amountStableRaw: stableForB,
+          label: "stable->tokenB"
+        });
+      }
+    } catch (err) {
+      this.setError(err);
+      return "kamino-rebalance-failed";
+    }
+
+    let openResult: string;
+    try {
+      openResult = await this.openPosition(input.executionRange, input.price, input.solUsdPrice);
+    } catch (err) {
+      this.setError(err);
+      return "kamino-rebalance-failed";
+    }
+    if (openResult === "open-position") {
+      this.lastRebalanceAt = Date.now();
+      this.queueHistoryAction("kamino-reopen");
+      if (this.config.autoSwapToSolEnabled) {
+        try {
+          await this.swapWalletToSol("auto");
+        } catch (err) {
+          logger.warn({ err }, "auto swap-to-sol failed after kamino re-range");
+        }
+      }
+      await this.updatePortfolioSnapshot(input.price, input.solUsdPrice);
+    } else {
+      this.setError(`Falha ao reabrir a pool (${openResult})`);
+    }
+
+    const previous = this.kaminoState;
+    const nextCollateralAmount = (previous?.collateralAmount ?? 0) + depositAmount;
+    const nextDebtAmount = (previous?.debtAmount ?? 0) + borrowUsd;
+    const avgPriceUsdc = nextCollateralAmount > 0 ? nextDebtAmount / nextCollateralAmount : null;
+    const targetPriceUsdc = avgPriceUsdc != null
+      ? avgPriceUsdc * (1 + (this.config.kaminoPriceBufferPct ?? 0) / 100)
+      : null;
+    const nextCollateralUsd = (previous?.collateralUsd ?? 0) + (depositUsd ?? 0);
+    const nextState: KaminoCycleState = {
+      active: true,
+      collateralMint: exitToken.mint,
+      collateralAmount: nextCollateralAmount,
+      collateralUsd: Number.isFinite(nextCollateralUsd) && nextCollateralUsd > 0 ? nextCollateralUsd : null,
+      debtMint: stable.mint,
+      debtAmount: nextDebtAmount,
+      debtUsd: nextDebtAmount,
+      avgPriceUsdc,
+      targetPriceUsdc,
+      cycleCount: (previous?.cycleCount ?? 0) + 1,
+      updatedAt: new Date().toISOString(),
+      lastError: null
+    };
+    this.setKaminoState(nextState);
+
+    return openResult === "open-position" ? "kamino-rebalanced" : "kamino-rebalance-failed";
+  }
+
+  private async getWalletTokenBalance(mint: string): Promise<number> {
+    const tokens = await this.getWalletTokens();
+    const match = tokens.find((token) => token.mint === mint);
+    return match?.uiAmount ?? 0;
+  }
+
+  private async getTokenDecimals(mint: string): Promise<number> {
+    if (this.poolState) {
+      const tokenA = this.poolState.tokenMintA.toBase58();
+      const tokenB = this.poolState.tokenMintB.toBase58();
+      if (mint === tokenA) return this.poolState.decimalsA;
+      if (mint === tokenB) return this.poolState.decimalsB;
+    }
+    try {
+      const info = await getMint(this.connection, new PublicKey(mint));
+      return Number(info.decimals ?? 6);
+    } catch {
+      return 6;
+    }
   }
 
   private async waitForJupiterSlot(): Promise<() => void> {
@@ -2788,6 +3484,14 @@ function toSafeNumber(value: bigint): number | null {
     return null;
   }
   return Number(value);
+}
+
+function toRawAmount(amount: number, decimals: number): bigint {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return 0n;
+  }
+  const factor = Math.pow(10, Math.max(0, decimals));
+  return BigInt(Math.floor(amount * factor));
 }
 
 function summarizeJupiterRoutePlan(quote: any): Array<{ label: string | null; ammKey: string | null; inMint: string | null; outMint: string | null }> {

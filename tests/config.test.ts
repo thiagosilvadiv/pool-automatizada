@@ -149,4 +149,24 @@ describe("config", () => {
   it("rejects invalid openaiTimeoutMs", () => {
     expect(() => loadWith({ openaiTimeoutMs: 500 })).toThrow();
   });
+
+  it("accepts valid kamino settings", () => {
+    expect(() => loadWith({
+      kaminoRebalanceEnabled: true,
+      kaminoDepositPct: 50,
+      kaminoBorrowAsset: "usdc",
+      kaminoMaxLtv: 0.4,
+      kaminoCloseRule: "avg-price",
+      kaminoPriceBufferPct: 0.5
+    })).not.toThrow();
+  });
+
+  it("rejects invalid kamino settings", () => {
+    expect(() => loadWith({ kaminoDepositPct: -1 })).toThrow();
+    expect(() => loadWith({ kaminoDepositPct: 120 })).toThrow();
+    expect(() => loadWith({ kaminoBorrowAsset: "brl" })).toThrow();
+    expect(() => loadWith({ kaminoMaxLtv: 2 })).toThrow();
+    expect(() => loadWith({ kaminoCloseRule: "later" })).toThrow();
+    expect(() => loadWith({ kaminoPriceBufferPct: -0.1 })).toThrow();
+  });
 });
