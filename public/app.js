@@ -27,6 +27,7 @@ const confirmSecEl = document.getElementById("confirmSec");
 const cooldownSecEl = document.getElementById("cooldownSec");
 const dryRunEl = document.getElementById("dryRun");
 const kaminoStatusEl = document.getElementById("kaminoStatus");
+const kaminoEnabledEl = document.getElementById("kaminoEnabled");
 const kaminoLtvEl = document.getElementById("kaminoLtv");
 const kaminoCollateralUsdEl = document.getElementById("kaminoCollateralUsd");
 const kaminoDebtUsdEl = document.getElementById("kaminoDebtUsd");
@@ -34,6 +35,7 @@ const kaminoAvgPriceEl = document.getElementById("kaminoAvgPrice");
 const kaminoTargetPriceEl = document.getElementById("kaminoTargetPrice");
 const kaminoCycleCountEl = document.getElementById("kaminoCycleCount");
 const kaminoSimulatedEl = document.getElementById("kaminoSimulated");
+const kaminoLastErrorEl = document.getElementById("kaminoLastError");
 const kaminoCollateralsEl = document.getElementById("kaminoCollaterals");
 const historyBody = document.getElementById("historyBody");
 const hedgeLogBody = document.getElementById("hedgeLogBody");
@@ -1435,6 +1437,10 @@ async function updateUI() {
     if (kaminoStatusEl) {
       kaminoStatusEl.textContent = status.kaminoActive ? "Ativo" : "Inativo";
     }
+    if (kaminoEnabledEl) {
+      const enabled = status.kaminoEnabled ?? config.kaminoRebalanceEnabled;
+      kaminoEnabledEl.textContent = enabled ? "Sim" : "Não";
+    }
     if (kaminoSimulatedEl) {
       kaminoSimulatedEl.textContent = status.kaminoSimulated ? "Sim" : "Não";
     }
@@ -1457,6 +1463,9 @@ async function updateUI() {
     }
     if (kaminoCycleCountEl) {
       kaminoCycleCountEl.textContent = status.kaminoCycleCount ?? "-";
+    }
+    if (kaminoLastErrorEl) {
+      kaminoLastErrorEl.textContent = status.kaminoLastError ? String(status.kaminoLastError) : "-";
     }
     renderKaminoCollaterals(status.kaminoCollaterals);
     if (kaminoCloseBtn) {

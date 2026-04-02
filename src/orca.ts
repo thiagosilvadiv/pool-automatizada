@@ -91,6 +91,7 @@ export type BotStatus = {
   effectiveValueToken: "tokenA" | "tokenB" | null;
   trendStale: boolean | null;
   kaminoActive: boolean;
+  kaminoEnabled: boolean;
   kaminoCollateralUsd: number | null;
   kaminoDebtUsd: number | null;
   kaminoLtv: number | null;
@@ -203,10 +204,11 @@ export class OrcaBot {
     effectiveExitSide: null,
     effectiveValueToken: null,
     trendStale: null,
-    kaminoActive: false,
-    kaminoCollateralUsd: null,
-    kaminoDebtUsd: null,
-    kaminoLtv: null,
+  kaminoActive: false,
+  kaminoEnabled: false,
+  kaminoCollateralUsd: null,
+  kaminoDebtUsd: null,
+  kaminoLtv: null,
     kaminoAvgPriceUsdc: null,
     kaminoTargetPriceUsdc: null,
     kaminoCycleCount: 0,
@@ -532,6 +534,7 @@ export class OrcaBot {
     await this.updatePortfolioSnapshot(price, solUsdPrice);
     this.captureCloseSnapshot();
     await this.closePosition(this.currentPosition);
+    this.queueHistoryAction("close-position", { lastAction: "close-position" });
     this.currentPosition = null;
     this.currentPositionMint = null;
     this.missingPositionSince = null;
@@ -1694,6 +1697,7 @@ export class OrcaBot {
   private syncKaminoStatus(): void {
     const state = this.kaminoState;
     this.lastStatus.kaminoActive = Boolean(state?.active);
+    this.lastStatus.kaminoEnabled = Boolean(this.config.kaminoRebalanceEnabled);
     const collaterals = Array.isArray(state?.collaterals)
       ? state.collaterals.map((item) => ({ ...item }))
       : [];
@@ -1719,7 +1723,11 @@ export class OrcaBot {
       this.lastStatus.kaminoTargetPriceUsdc = null;
     }
     this.lastStatus.kaminoCycleCount = state?.cycleCount ?? 0;
-    this.lastStatus.kaminoLastError = state?.lastError ?? null;
+    const stateError = state?.lastError ?? null;
+    const fallbackError = (!stateError && this.lastStatus.lastError && /kamino/i.test(this.lastStatus.lastError))
+      ? this.lastStatus.lastError
+      : null;
+    this.lastStatus.kaminoLastError = stateError ?? fallbackError;
     this.lastStatus.kaminoSimulated = this.isKaminoSimulated();
   }
 
@@ -2215,6 +2223,7 @@ export class OrcaBot {
     if (this.currentPosition) {
       this.captureCloseSnapshot();
       await this.closePosition(this.currentPosition);
+      this.queueHistoryAction("close-position", { lastAction: "close-position" });
       this.currentPosition = null;
       this.currentPositionMint = null;
       this.missingPositionSince = null;
@@ -2321,6 +2330,7 @@ export class OrcaBot {
 
     this.captureCloseSnapshot();
     await this.closePosition(this.currentPosition);
+    this.queueHistoryAction("close-position", { lastAction: "close-position" });
     this.currentPosition = null;
     this.currentPositionMint = null;
     this.missingPositionSince = null;

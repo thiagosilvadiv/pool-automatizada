@@ -114,6 +114,7 @@ export async function startServer(config: Config): Promise<void> {
         effectiveExitSide: null,
         effectiveValueToken: null,
         kaminoActive: false,
+        kaminoEnabled: Boolean(config.kaminoRebalanceEnabled),
         kaminoCollateralUsd: null,
         kaminoDebtUsd: null,
         kaminoLtv: null,
