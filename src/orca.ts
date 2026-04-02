@@ -429,6 +429,7 @@ export class OrcaBot {
       const result = await this.openPosition(executionRange, price, solUsdPrice);
       this.lastStatus.lastAction = result;
       if (result === "open-position") {
+        this.lastRebalanceAt = Date.now();
         if (this.config.autoSwapToSolEnabled) {
           try {
             await this.swapWalletToSol("auto");
