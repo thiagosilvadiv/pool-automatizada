@@ -1,4 +1,4 @@
-import { Connection, LAMPORTS_PER_SOL, PublicKey, VersionedTransaction } from "@solana/web3.js";
+﻿import { Connection, LAMPORTS_PER_SOL, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, getMint, TOKEN_PROGRAM_ID, NATIVE_MINT } from "@solana/spl-token";
 import DecimalJs from "decimal.js";
 import * as whirlpoolsSdk from "@orca-so/whirlpools-sdk";
@@ -107,6 +107,14 @@ export type BotStatus = {
   kaminoMarketAddress: string | null;
 };
 
+export type KaminoLogItem = {
+  level: "info" | "warn" | "error";
+  action: string;
+  message: string;
+  marketAddress: string | null;
+  timestamp?: string;
+};
+
 type SwapWalletToSolDetail = {
   mint: string;
   amountInRaw: string;
@@ -160,6 +168,7 @@ export class OrcaBot {
   private poolId: string | null = null;
   private poolName: string | null = null;
   private pendingHistoryActions: BotStatus[] = [];
+  private pendingKaminoLogs: KaminoLogItem[] = [];
   private stableMintCache = new Map<string, { mint: string; decimals: number }>();
   private lastStatus: BotStatus = {
     running: false,
@@ -533,7 +542,7 @@ export class OrcaBot {
     if (this.config.kaminoRebalanceEnabled && !shouldUseKamino) {
       logger.info(
         { pnlNoFeesUsd },
-        "Kamino ignorado: PnL sem taxas não negativo ou indisponível"
+        "Kamino ignorado: PnL sem taxas nÃ£o negativo ou indisponÃ­vel"
       );
     }
     let lockOk = true;
@@ -572,7 +581,7 @@ export class OrcaBot {
     await this.loadExistingPosition();
     if (this.currentPosition) {
       logger.error({ price, positionRange }, "position still open after rebalance close; aborting open");
-      this.setError("Fechamento falhou: posição ainda aberta");
+      this.setError("Fechamento falhou: posiÃ§Ã£o ainda aberta");
       this.lastStatus.lastAction = "close-failed";
       this.lastStatus.positionRange = await this.getPositionRange(this.currentPosition);
       this.lastStatus.positionMint = this.currentPositionMint;
@@ -632,7 +641,7 @@ export class OrcaBot {
     await this.loadExistingPosition();
     if (this.currentPosition) {
       logger.error("position still open after manual close; retry required");
-      this.setError("Fechamento falhou: posição ainda aberta");
+      this.setError("Fechamento falhou: posiÃ§Ã£o ainda aberta");
       this.lastStatus.lastAction = "close-failed";
       this.lastStatus.positionRange = await this.getPositionRange(this.currentPosition);
       this.lastStatus.positionMint = this.currentPositionMint;
@@ -677,25 +686,25 @@ export class OrcaBot {
     const borrowUsd = input.borrowUsd != null ? Number(input.borrowUsd) : 0;
 
     if (!mint) {
-      const message = "Mint do colateral Ã© obrigatÃ³rio";
+      const message = "Mint do colateral ÃƒÂ© obrigatÃƒÂ³rio";
       this.setError(message);
       return { ok: false, reason: message, status: this.getStatus() };
     }
     if (!Number.isFinite(amount) || amount <= 0) {
-      const message = "Quantidade de colateral invÃ¡lida";
+      const message = "Quantidade de colateral invÃƒÂ¡lida";
       this.setError(message);
       return { ok: false, reason: message, status: this.getStatus() };
     }
 
     const solBalance = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
     if (solBalance < this.config.minSolBalance) {
-      const message = `Saldo de SOL abaixo do mÃ­nimo (${this.config.minSolBalance}).`;
+      const message = `Saldo de SOL abaixo do mÃƒÂ­nimo (${this.config.minSolBalance}).`;
       this.setError(message);
       return { ok: false, reason: message, status: this.getStatus() };
     }
 
     if (this.isKaminoSimulated()) {
-      const message = "Kamino estÃ¡ em modo simulado (DRY_RUN ou KAMINO_NOOP).";
+      const message = "Kamino estÃƒÂ¡ em modo simulado (DRY_RUN ou KAMINO_NOOP).";
       this.setError(message);
       return { ok: false, reason: message, status: this.getStatus() };
     }
@@ -711,7 +720,7 @@ export class OrcaBot {
       const kamino = await this.ensureKaminoClient();
       const supported = await kamino.supportsCollateral(mint);
       if (!supported) {
-        const message = `Token nÃ£o suportado como colateral no Kamino${this.getKaminoMarketHint()}`;
+        const message = `Token nÃƒÂ£o suportado como colateral no Kamino${this.getKaminoMarketHint()}`;
         this.setError(message);
         return { ok: false, reason: message, status: this.getStatus() };
       }
@@ -720,7 +729,7 @@ export class OrcaBot {
       if (Number.isFinite(borrowUsd) && borrowUsd > 0) {
         const resolved = await this.resolveKaminoBorrowStable(kamino);
         if (!resolved.stable) {
-          const message = `Borrow indisponÃ­vel: ${resolved.reason ?? "reserve nÃ£o encontrada"}${this.getKaminoMarketHint()}`;
+          const message = `Borrow indisponÃƒÂ­vel: ${resolved.reason ?? "reserve nÃƒÂ£o encontrada"}${this.getKaminoMarketHint()}`;
           this.setError(message);
           return { ok: false, reason: message, status: this.getStatus() };
         }
@@ -1803,13 +1812,16 @@ export class OrcaBot {
         marketAddress: state.marketAddress ?? this.getKaminoMarketAddress()
       };
     }
+    if (state?.active) {
+      state = { ...state, lastSeenAt: new Date().toISOString() };
+    }
     const normalized = this.normalizeKaminoState(state);
     if (normalized?.active && this.poolId) {
       const poolName = this.poolName ?? this.poolId;
       const lock = tryAcquireKaminoLock({
         poolId: this.poolId,
         poolName,
-        marketAddress: this.getKaminoMarketAddress()
+        marketAddress: normalized.marketAddress ?? this.getKaminoMarketAddress()
       });
       if (!lock.ok) {
         const owner = lock.owner?.poolName ?? lock.owner?.poolId ?? "outra pool";
@@ -1860,6 +1872,7 @@ export class OrcaBot {
       ownerPoolId: state.ownerPoolId ?? null,
       ownerPoolName: state.ownerPoolName ?? null,
       marketAddress: state.marketAddress ?? null,
+      lastSeenAt: state.lastSeenAt ?? null,
       collateralMint: single ? single.mint : state.collateralMint ?? null,
       collateralAmount: single ? Number(single.amount ?? 0) : Number(state.collateralAmount ?? 0),
       collateralUsd: typeof collateralUsd === "number" && Number.isFinite(collateralUsd) && collateralUsd > 0
@@ -1887,6 +1900,26 @@ export class OrcaBot {
       lastAction: action
     };
     this.pendingHistoryActions.push(snapshot);
+  }
+
+  queueKaminoLog(action: string, message: string, level: "info" | "warn" | "error" = "info"): void {
+    const entry: KaminoLogItem = {
+      action,
+      message,
+      level,
+      marketAddress: this.kaminoState?.marketAddress ?? this.getKaminoMarketAddress(),
+      timestamp: new Date().toISOString()
+    };
+    this.pendingKaminoLogs.push(entry);
+  }
+
+  drainKaminoLogs(): KaminoLogItem[] {
+    if (this.pendingKaminoLogs.length === 0) {
+      return [];
+    }
+    const logs = this.pendingKaminoLogs;
+    this.pendingKaminoLogs = [];
+    return logs;
   }
 
   drainHistoryActions(): BotStatus[] {
@@ -2036,7 +2069,8 @@ export class OrcaBot {
 
   private releaseKaminoLockIfOwned(): void {
     if (this.poolId) {
-      releaseKaminoLock(this.poolId);
+      const market = this.kaminoState?.marketAddress ?? this.getKaminoMarketAddress();
+      releaseKaminoLock(this.poolId, market);
     }
   }
 
@@ -2058,27 +2092,15 @@ export class OrcaBot {
       const hasCollateral = (position?.collateralAmount ?? 0) > 0;
       if (!position || (!hasDebt && !hasCollateral)) {
         if (this.kaminoState?.active) {
-          const previous = this.kaminoState;
-          const nextState: KaminoCycleState = {
-            active: false,
-            ownerPoolId: previous?.ownerPoolId ?? this.poolId ?? null,
-            ownerPoolName: previous?.ownerPoolName ?? this.poolName ?? null,
-            marketAddress: previous?.marketAddress ?? this.getKaminoMarketAddress(),
-            collateralMint: null,
-            collateralAmount: 0,
-            collateralUsd: null,
-            debtMint: null,
-            debtAmount: 0,
-            debtUsd: null,
-            avgPriceUsdc: null,
-            targetPriceUsdc: null,
-            collaterals: [],
-            cycleCount: previous?.cycleCount ?? 0,
-            updatedAt: new Date().toISOString(),
-            lastError: null
-          };
-          this.kaminoState = this.normalizeKaminoState(nextState);
-          this.releaseKaminoLockIfOwned();
+          this.setKaminoState({
+            ...this.kaminoState,
+            lastError: "PosiÃ§Ã£o Kamino nÃ£o encontrada no market; mantendo ciclo salvo."
+          });
+          this.queueKaminoLog(
+            "not-found",
+            "PosiÃ§Ã£o Kamino nÃ£o encontrada no market; mantendo ciclo salvo.",
+            "warn"
+          );
         }
         return;
       }
@@ -2113,9 +2135,14 @@ export class OrcaBot {
           collaterals: recoveredCollaterals,
           cycleCount: Math.max(previous?.cycleCount ?? 0, 1),
           updatedAt: new Date().toISOString(),
-          lastError: "Ciclo Kamino recuperado do market (sem histórico)."
+          lastError: "Ciclo Kamino recuperado do market (sem histÃ³rico)."
         };
         this.kaminoState = this.normalizeKaminoState(nextState);
+        this.queueKaminoLog(
+          "recover",
+          "EmprÃ©stimo Kamino recuperado do market; ciclo reconstruÃ­do automaticamente.",
+          "warn"
+        );
       }
     } catch (err) {
       logger.warn({ err }, "falha ao reconciliar estado Kamino");
@@ -2221,7 +2248,7 @@ export class OrcaBot {
         const stable = await this.getStableMintInfoByMint(candidate.mint, candidate.label);
         return { stable };
       }
-      lastReason = support.reason ?? `Borrow indisponÃ­vel em ${candidate.label}`;
+      lastReason = support.reason ?? `Borrow indisponÃƒÂ­vel em ${candidate.label}`;
     }
     return { stable: null, reason: lastReason };
   }
@@ -2590,7 +2617,7 @@ export class OrcaBot {
     }
     if (!this.isKaminoOwner(state)) {
       const owner = state.ownerPoolName ?? state.ownerPoolId ?? "outra pool";
-      this.setKaminoState({ ...state, lastError: `Kamino pertence à pool ${owner}` });
+      this.setKaminoState({ ...state, lastError: `Kamino pertence Ã  pool ${owner}` });
       return false;
     }
     const rule = this.config.kaminoCloseRule ?? "avg-price";
@@ -2606,7 +2633,7 @@ export class OrcaBot {
       const poolPnlNoFeesUsd = this.getPositionPnlNoFeesUsd();
       const hasPosition = Boolean(this.currentPosition);
       if (hasPosition && poolPnlNoFeesUsd == null) {
-        this.setKaminoState({ ...state, lastError: "PnL da pool indisponível; aguardando." });
+        this.setKaminoState({ ...state, lastError: "PnL da pool indisponÃ­vel; aguardando." });
         return false;
       }
       let ready = true;
@@ -2648,6 +2675,11 @@ export class OrcaBot {
               ...state,
               lastError: `Fechamento Kamino bloqueado: PnL combinado negativo (${combinedNetUsd.toFixed(2)} USD)`
             });
+            this.queueKaminoLog(
+              "close-blocked",
+              `Fechamento Kamino bloqueado: PnL combinado negativo (${combinedNetUsd.toFixed(2)} USD)`,
+              "warn"
+            );
             return false;
           }
         }
@@ -2676,10 +2708,82 @@ export class OrcaBot {
     }
     if (!this.isKaminoOwner(state)) {
       const owner = state.ownerPoolName ?? state.ownerPoolId ?? "outra pool";
-      throw new Error(`Kamino pertence à pool ${owner}`);
+      throw new Error(`Kamino pertence Ã  pool ${owner}`);
     }
     this.lastStatus.running = true;
     this.resetActionFee();
+
+    const kamino = await this.ensureKaminoClient();
+    const position = await kamino.getPositionState();
+    if (!position) {
+      const message = "PosiÃ§Ã£o Kamino nÃ£o encontrada no market; fechamento cancelado.";
+      this.setKaminoState({ ...state, lastError: message });
+      this.queueKaminoLog("mismatch", message, "error");
+      return;
+    }
+
+    const collaterals = Array.isArray(state.collaterals) && state.collaterals.length
+      ? state.collaterals
+      : (state.collateralMint
+        ? [{
+          mint: state.collateralMint,
+          amount: state.collateralAmount ?? 0,
+          usd: state.collateralUsd ?? null,
+          debtUsd: state.debtUsd ?? null,
+          avgPriceUsdc: state.avgPriceUsdc ?? null,
+          targetPriceUsdc: state.targetPriceUsdc ?? null
+        }]
+        : []);
+
+    const onChainDeposits = new Map<string, number>();
+    (position.deposits ?? []).forEach((item) => {
+      if (!item?.mint) return;
+      const current = onChainDeposits.get(item.mint) ?? 0;
+      onChainDeposits.set(item.mint, current + (Number(item.amount) || 0));
+    });
+    const onChainBorrows = new Map<string, number>();
+    (position.borrows ?? []).forEach((item) => {
+      if (!item?.mint) return;
+      const current = onChainBorrows.get(item.mint) ?? 0;
+      onChainBorrows.set(item.mint, current + (Number(item.amount) || 0));
+    });
+
+    const debtMint = state.debtMint ?? position.debtMint ?? null;
+    const recordedDebtAmount = Number(state.debtAmount ?? 0);
+    const onChainDebtAmount = debtMint ? (onChainBorrows.get(debtMint) ?? 0) : 0;
+    const borrowMints = Array.from(onChainBorrows.keys()).filter((mint) => mint && mint !== debtMint);
+
+    const mismatchReasons: string[] = [];
+    const epsilon = 1e-8;
+    if (collaterals.length === 0 && onChainDeposits.size > 0) {
+      mismatchReasons.push("colateral on-chain nÃ£o registrado");
+    }
+    for (const entry of collaterals) {
+      if (!entry.mint || entry.amount <= 0) continue;
+      const onChainAmount = onChainDeposits.get(entry.mint) ?? 0;
+      if (onChainAmount + epsilon < entry.amount) {
+        mismatchReasons.push(`colateral ${entry.mint} menor que o registrado`);
+        break;
+      }
+    }
+    if (recordedDebtAmount > 0 && onChainDebtAmount + epsilon < recordedDebtAmount) {
+      mismatchReasons.push("dÃ­vida on-chain menor que o registrado");
+    }
+    if ((recordedDebtAmount <= 0 || !debtMint) && onChainBorrows.size > 0) {
+      mismatchReasons.push("dÃ­vida on-chain nÃ£o registrada");
+    }
+    if (borrowMints.length > 0) {
+      mismatchReasons.push("dÃ­vidas em outros ativos detectadas");
+    }
+    if (mismatchReasons.length > 0) {
+      const message = `Mismatch Kamino on-chain: ${mismatchReasons.join("; ")}`;
+      this.setKaminoState({ ...state, lastError: message });
+      this.queueKaminoLog("mismatch", message, mode === "manual" ? "warn" : "error");
+      if (mode !== "manual") {
+        return;
+      }
+    }
+
     await this.refreshPoolState();
     if (this.currentPosition) {
       this.captureCloseSnapshot();
@@ -2691,15 +2795,14 @@ export class OrcaBot {
     }
     await this.loadExistingPosition();
     if (this.currentPosition) {
-      throw new Error("Fechamento falhou: posição ainda aberta");
+      throw new Error("Fechamento falhou: posiÃ§Ã£o ainda aberta");
     }
 
-    const debtMint = state.debtMint ?? null;
     const stable = debtMint
       ? await this.getStableMintInfoByMint(debtMint, this.getStableLabelForMint(debtMint))
       : await this.getStableMintInfo();
-    const kamino = await this.ensureKaminoClient();
-    const debtAmount = Number(state.debtAmount ?? 0);
+
+    const debtAmount = Math.min(recordedDebtAmount, onChainDebtAmount);
     if (debtAmount > 0) {
       const stableBalance = await this.getWalletTokenBalance(stable.mint);
       if (stableBalance < debtAmount) {
@@ -2734,26 +2837,72 @@ export class OrcaBot {
           }
         }
       }
-      await kamino.repay({ mint: stable.mint, amount: debtAmount });
-      this.queueHistoryAction("kamino-repay");
-    }
-    const collaterals = Array.isArray(state.collaterals) && state.collaterals.length
-      ? state.collaterals
-      : (state.collateralMint
-        ? [{
-          mint: state.collateralMint,
-          amount: state.collateralAmount ?? 0,
-          usd: state.collateralUsd ?? null,
-          debtUsd: state.debtUsd ?? null,
-          avgPriceUsdc: state.avgPriceUsdc ?? null,
-          targetPriceUsdc: state.targetPriceUsdc ?? null
-        }]
-        : []);
-    for (const entry of collaterals) {
-      if (entry.mint && entry.amount > 0) {
-        await kamino.withdraw({ mint: entry.mint, amount: entry.amount });
-        this.queueHistoryAction("kamino-withdraw");
+      try {
+        await kamino.repay({ mint: stable.mint, amount: debtAmount });
+        this.queueHistoryAction("kamino-repay");
+      } catch (err) {
+        this.queueKaminoLog("repay-failed", stringifyError(err), "error");
+        throw err;
       }
+    }
+
+    const withdrawTargets = collaterals.length > 0
+      ? collaterals.map((entry) => {
+        const onChainAmount = onChainDeposits.get(entry.mint) ?? 0;
+        return { ...entry, amount: Math.min(entry.amount ?? 0, onChainAmount) };
+      })
+      : Array.from(onChainDeposits.entries()).map(([mint, amount]) => ({
+        mint,
+        amount,
+        usd: null,
+        debtUsd: null,
+        avgPriceUsdc: null,
+        targetPriceUsdc: null
+      }));
+
+    for (const entry of withdrawTargets) {
+      if (entry.mint && entry.amount > 0) {
+        try {
+          await kamino.withdraw({ mint: entry.mint, amount: entry.amount });
+          this.queueHistoryAction("kamino-withdraw");
+        } catch (err) {
+          this.queueKaminoLog("withdraw-failed", stringifyError(err), "error");
+          throw err;
+        }
+      }
+    }
+
+    let kaminoNetUsd: number | null = null;
+    try {
+      let collateralUsd = 0;
+      let priced = false;
+      for (const entry of withdrawTargets) {
+        if (!entry.mint || entry.amount <= 0) continue;
+        if (entry.mint === stable.mint) {
+          collateralUsd += entry.amount;
+          priced = true;
+          continue;
+        }
+        if (!this.config.jupiterApiKey) {
+          continue;
+        }
+        const decimals = await this.getTokenDecimals(entry.mint);
+        const priceUsd = await this.getTokenUsdPrice({
+          mint: entry.mint,
+          decimals,
+          stableMint: stable.mint,
+          stableDecimals: stable.decimals
+        });
+        if (priceUsd != null) {
+          collateralUsd += priceUsd * entry.amount;
+          priced = true;
+        }
+      }
+      if (priced) {
+        kaminoNetUsd = collateralUsd - debtAmount;
+      }
+    } catch (err) {
+      logger.warn({ err }, "falha ao calcular pnl Kamino no fechamento");
     }
     const nextState: KaminoCycleState = {
       active: false,
@@ -2774,8 +2923,14 @@ export class OrcaBot {
       lastError: null
     };
     this.setKaminoState(nextState);
-    this.queueHistoryAction("kamino-close", { lastAction: "kamino-close" });
+    this.queueHistoryAction("kamino-close", {
+      lastAction: "kamino-close",
+      positionPnlUsd: kaminoNetUsd,
+      positionFeesUsd: 0,
+      lastActionFeeLamports: null
+    });
     this.releaseKaminoLockIfOwned();
+    this.queueKaminoLog("close", "Ciclo Kamino fechado (repay + withdraw).", "info");
     logger.info({ mode }, "kamino cycle closed");
   }
 
@@ -2795,7 +2950,8 @@ export class OrcaBot {
     const kamino = await this.ensureKaminoClient();
     const borrowStableResult = await this.resolveKaminoBorrowStable(kamino);
     if (!borrowStableResult.stable) {
-      this.setError(`Borrow indisponÃ­vel: ${borrowStableResult.reason ?? "reserve nÃ£o encontrada"}${this.getKaminoMarketHint()}`);
+      this.setError(`Borrow indisponÃƒÂ­vel: ${borrowStableResult.reason ?? "reserve nÃƒÂ£o encontrada"}${this.getKaminoMarketHint()}`);
+      this.queueKaminoLog("borrow-unavailable", this.lastStatus.lastError ?? "Borrow indisponível", "error");
       return "kamino-rebalance-failed";
     }
     const stable = borrowStableResult.stable;
@@ -2810,7 +2966,7 @@ export class OrcaBot {
     this.missingPositionSince = null;
     await this.loadExistingPosition();
     if (this.currentPosition) {
-      this.setError("Fechamento falhou: posição ainda aberta");
+      this.setError("Fechamento falhou: posiÃ§Ã£o ainda aberta");
       return "close-failed";
     }
 
@@ -2876,7 +3032,7 @@ export class OrcaBot {
       return "kamino-rebalance-failed";
     }
     if (!exitTokens || exitTokens.length === 0) {
-      this.setError("Não foi possível determinar token de saída para Kamino");
+      this.setError("NÃ£o foi possÃ­vel determinar token de saÃ­da para Kamino");
       return "kamino-rebalance-failed";
     }
     const isDual = (this.config.kaminoCollateralMode ?? "max-value") === "both";
@@ -2900,7 +3056,7 @@ export class OrcaBot {
           const refreshedBalances = await this.getTokenBalances();
           exitTokens = await resolveTokens(refreshedBalances);
           if (!exitTokens || exitTokens.length === 0) {
-            this.setError("Não foi possível determinar token de saída após fechar ciclo Kamino");
+            this.setError("NÃ£o foi possÃ­vel determinar token de saÃ­da apÃ³s fechar ciclo Kamino");
             return "kamino-rebalance-failed";
           }
         } else {
@@ -2924,7 +3080,7 @@ export class OrcaBot {
 
     for (const entry of deposits) {
       if (entry.depositUsd == null || !Number.isFinite(entry.depositUsd)) {
-        this.setError("Não foi possível precificar o colateral para Kamino");
+        this.setError("NÃ£o foi possÃ­vel precificar o colateral para Kamino");
         return "kamino-rebalance-failed";
       }
       const supported = await kamino.supportsCollateral(entry.mint);
@@ -3056,6 +3212,7 @@ export class OrcaBot {
       this.queueHistoryAction("kamino-borrow");
     } catch (err) {
       this.setError(err);
+      this.queueKaminoLog("rebalance-failed", stringifyError(err), "error");
       if (deposited) {
         for (const entry of depositedEntries) {
           try {
@@ -4542,6 +4699,8 @@ function truncateJupiterError(value: string, max = 160): string {
   const text = String(value ?? "").trim();
   if (!text) return "";
   if (text.length <= max) return text;
-  return `${text.slice(0, max - 1)}…`;
+  return `${text.slice(0, max - 1)}â€¦`;
 }
+
+
 

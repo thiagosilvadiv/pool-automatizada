@@ -33,6 +33,8 @@ export type KaminoPositionState = {
   debtMint: string | null;
   debtAmount: number | null;
   ltv: number | null;
+  deposits?: { mint: string; amount: number }[];
+  borrows?: { mint: string; amount: number }[];
 };
 
 export type KaminoClient = {
@@ -388,26 +390,41 @@ class RealKaminoClient implements KaminoClient {
       const deposit = obligation.getDeposits()[0];
       const borrow = obligation.getBorrows()[0];
       const ltv = obligation.refreshedStats?.loanToValue?.toNumber?.();
-      const collateralMint = deposit?.mintAddress ?? null;
-      const debtMint = borrow?.mintAddress ?? null;
-      const [collateralDecimals, debtDecimals] = await Promise.all([
-        collateralMint ? this.resolveDecimals(collateralMint) : Promise.resolve(null),
-        debtMint ? this.resolveDecimals(debtMint) : Promise.resolve(null)
-      ]);
-      const collateralRaw = deposit?.amount ? BigInt(deposit.amount.toString()) : null;
-      const debtRaw = borrow?.amount ? BigInt(borrow.amount.toString()) : null;
-      const collateralAmount = (collateralRaw != null && collateralDecimals != null)
-        ? Number(collateralRaw) / Math.pow(10, Math.max(0, collateralDecimals))
+      const depositsRaw = obligation.getDeposits() ?? [];
+      const borrowsRaw = obligation.getBorrows() ?? [];
+      const deposits = await Promise.all(depositsRaw.map(async (item) => {
+        const mint = item?.mintAddress ?? "";
+        if (!mint) return null;
+        const decimals = await this.resolveDecimals(mint);
+        const raw = item?.amount ? BigInt(item.amount.toString()) : 0n;
+        const amount = Number(raw) / Math.pow(10, Math.max(0, decimals));
+        return { mint, amount };
+      })).then((items) => items.filter(Boolean) as { mint: string; amount: number }[]);
+      const borrows = await Promise.all(borrowsRaw.map(async (item) => {
+        const mint = item?.mintAddress ?? "";
+        if (!mint) return null;
+        const decimals = await this.resolveDecimals(mint);
+        const raw = item?.amount ? BigInt(item.amount.toString()) : 0n;
+        const amount = Number(raw) / Math.pow(10, Math.max(0, decimals));
+        return { mint, amount };
+      })).then((items) => items.filter(Boolean) as { mint: string; amount: number }[]);
+
+      const collateralMint = deposits[0]?.mint ?? null;
+      const debtMint = borrows[0]?.mint ?? null;
+      const collateralAmount = deposits.length
+        ? deposits.reduce((sum, item) => sum + (item.amount ?? 0), 0)
         : null;
-      const debtAmount = (debtRaw != null && debtDecimals != null)
-        ? Number(debtRaw) / Math.pow(10, Math.max(0, debtDecimals))
+      const debtAmount = borrows.length
+        ? borrows.reduce((sum, item) => sum + (item.amount ?? 0), 0)
         : null;
       return {
         collateralMint,
         collateralAmount,
         debtMint,
         debtAmount,
-        ltv: Number.isFinite(ltv) ? Number(ltv) : null
+        ltv: Number.isFinite(ltv) ? Number(ltv) : null,
+        deposits,
+        borrows
       };
     } catch (err) {
       logger.warn({ err }, "falha ao ler posiÃ§Ã£o Kamino");
@@ -496,7 +513,10 @@ class NoopKaminoClient implements KaminoClient {
   }
 }
 
-export async function createKaminoClient(ctx: KaminoClientContext): Promise<KaminoClient> {
+export async function createKaminoClient(
+  ctx: KaminoClientContext,
+  marketAddressOverride?: string | null
+): Promise<KaminoClient> {
   const allowNoop = Boolean(ctx.config.dryRun || process.env.KAMINO_NOOP === "true");
   if (allowNoop) {
     logger.info("Kamino client em modo simulado (dry-run)");
@@ -510,7 +530,9 @@ export async function createKaminoClient(ctx: KaminoClientContext): Promise<Kami
     process.env.KAMINO_WS_URL ||
     process.env.RPC_WS_URL ||
     deriveWsUrl(rpcUrl);
-  const marketRaw = ctx.config.kaminoMarketAddress
+  const override = typeof marketAddressOverride === "string" ? marketAddressOverride.trim() : "";
+  const marketRaw = override
+    || ctx.config.kaminoMarketAddress
     || process.env.KAMINO_MARKET
     || DEFAULT_KAMINO_MARKET;
   let marketAddress: Address;

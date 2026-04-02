@@ -485,6 +485,34 @@
           </div>
         </div>
       </section>
+
+      <section class="panel">
+        <div class="row row-between tight">
+          <h2>Log do Kamino</h2>
+          <div class="row tight">
+            <button id="clearKaminoLogBtn" class="ghost danger">Limpar log</button>
+          </div>
+        </div>
+        <p class="subtitle">Limite: 20 eventos (mais recentes).</p>
+        <div class="table-wrap">
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Data/Hora</th>
+                  <th>Nível</th>
+                  <th>Ação</th>
+                  <th>Market</th>
+                  <th>Mensagem</th>
+                </tr>
+              </thead>
+              <tbody id="kaminoLogBody">
+                <tr><td colspan="5">Sem eventos ainda</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </main>
     <div id="editPoolModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editPoolTitle">
       <div class="modal-backdrop" data-close="edit"></div>

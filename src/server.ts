@@ -102,10 +102,12 @@ export async function startServer(config: Config): Promise<void> {
     markets: [],
     updatedAt: null
   };
+  poolManager.setKaminoMarkets(kaminoMarketsState.markets);
 
   const saveKaminoMarketsState = async (next: KaminoMarketsState) => {
     kaminoMarketsState = next;
     await kaminoMarketsStore.save(kaminoMarketsState);
+    poolManager.setKaminoMarkets(kaminoMarketsState.markets);
   };
 
   app.get("/api/status", (_req: Request, res: Response) => {
@@ -266,6 +268,10 @@ export async function startServer(config: Config): Promise<void> {
 
   app.get("/api/kamino/markets", (_req: Request, res: Response) => {
     res.json(kaminoMarketsState);
+  });
+
+  app.get("/api/kamino/loans", (_req: Request, res: Response) => {
+    res.json({ loans: poolManager.getKaminoLoans() });
   });
 
   app.post("/api/kamino/markets", async (req: Request, res: Response) => {
@@ -551,6 +557,15 @@ export async function startServer(config: Config): Promise<void> {
 
   app.post("/api/hedge-logs/clear", (_req: Request, res: Response) => {
     poolManager.clearSelectedHedgeLogs();
+    res.json({ ok: true });
+  });
+
+  app.get("/api/kamino-logs", (_req: Request, res: Response) => {
+    res.json(poolManager.getSelectedKaminoLogs());
+  });
+
+  app.post("/api/kamino-logs/clear", (_req: Request, res: Response) => {
+    poolManager.clearSelectedKaminoLogs();
     res.json({ ok: true });
   });
 

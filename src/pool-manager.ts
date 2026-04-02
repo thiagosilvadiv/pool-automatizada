@@ -1,9 +1,10 @@
 import path from "path";
 import { fileURLToPath } from "url";
 import { PublicKey, Transaction } from "@solana/web3.js";
-import { createCloseAccountInstruction, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { createCloseAccountInstruction, TOKEN_PROGRAM_ID, NATIVE_MINT } from "@solana/spl-token";
 
 import { Config } from "./config.js";
+import { createKaminoClient } from "./kamino-client.js";
 import { OrcaBot } from "./orca.js";
 import { BotRunner } from "./runner.js";
 import type { HistoryEvent } from "./runner.js";
@@ -11,15 +12,30 @@ import { logger } from "./logger.js";
 import {
   createHistoryStore,
   createPoolsStore,
+  createKaminoLoansStore,
   createSwapAllowlistStore,
+  KaminoLoanEntry,
+  KaminoLoansState,
+  KaminoLoansStore,
+  KaminoMarketEntry,
   PoolsStore,
   PoolsState,
   SwapAllowlistStore
 } from "./storage.js";
 import { getTrendSnapshot } from "./trend.js";
+import { getSolUsdPrice } from "./pyth.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const DEFAULT_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const DEFAULT_USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
+
+function stringifyError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return String(err);
+}
 export type PoolEntry = {
   id: string;
   name: string;
@@ -131,6 +147,11 @@ export class PoolManager {
   private resumeAttempts = new Map<string, number>();
   private resumeInFlight = new Set<string>();
   private resumeLastError = new Map<string, string>();
+  private kaminoLoansStore!: KaminoLoansStore;
+  private kaminoLoansState: KaminoLoansState = { loans: [], updatedAt: null };
+  private kaminoMarkets: KaminoMarketEntry[] = [];
+  private kaminoScanTimer: NodeJS.Timeout | null = null;
+  private kaminoScanInFlight = false;
 
   constructor(baseConfig: Config, connection: any, wallet: any) {
     this.baseConfig = baseConfig;
@@ -141,15 +162,29 @@ export class PoolManager {
   async init(): Promise<void> {
     this.poolsStore = await createPoolsStore<PoolEntry>();
     this.swapAllowlistStore = await createSwapAllowlistStore();
+    this.kaminoLoansStore = await createKaminoLoansStore();
+    this.kaminoLoansState = (await this.kaminoLoansStore.load()) ?? { loans: [], updatedAt: null };
     await this.loadSwapAllowlist();
     await this.loadPools();
     if (this.baseConfig.autoResumeEnabled) {
       await this.resumeActivePools();
     }
+    this.startKaminoLoansScan();
   }
 
   getSwapAllowlist(): { mints: string[]; updatedAt: string | null } {
     return { mints: [...this.swapAllowlist], updatedAt: this.swapAllowlistUpdatedAt };
+  }
+
+  setKaminoMarkets(markets: KaminoMarketEntry[]): void {
+    this.kaminoMarkets = Array.isArray(markets) ? markets.map((item) => ({ ...item })) : [];
+    void this.scanKaminoLoans();
+  }
+
+  getKaminoLoans(): KaminoLoanEntry[] {
+    return Array.isArray(this.kaminoLoansState.loans)
+      ? this.kaminoLoansState.loans.map((loan) => ({ ...loan }))
+      : [];
   }
 
   async setSwapAllowlist(mints: string[]): Promise<{ mints: string[]; updatedAt: string }> {
@@ -637,9 +672,26 @@ export class PoolManager {
     return this.getHedgeLogs(this.selectedPoolId);
   }
 
+  getKaminoLogs(id: string): ReturnType<BotRunner["getKaminoLogs"]> {
+    const record = this.getRecord(id);
+    return record.runner.getKaminoLogs();
+  }
+
+  getSelectedKaminoLogs(): ReturnType<BotRunner["getKaminoLogs"]> {
+    if (!this.selectedPoolId) {
+      return [];
+    }
+    return this.getKaminoLogs(this.selectedPoolId);
+  }
+
   clearHedgeLogs(id: string): void {
     const record = this.getRecord(id);
     record.runner.clearHedgeLogs();
+  }
+
+  clearKaminoLogs(id: string): void {
+    const record = this.getRecord(id);
+    record.runner.clearKaminoLogs();
   }
 
   clearSelectedHedgeLogs(): void {
@@ -647,6 +699,13 @@ export class PoolManager {
       return;
     }
     this.clearHedgeLogs(this.selectedPoolId);
+  }
+
+  clearSelectedKaminoLogs(): void {
+    if (!this.selectedPoolId) {
+      return;
+    }
+    this.clearKaminoLogs(this.selectedPoolId);
   }
 
   async clearSelectedHistory(): Promise<void> {
@@ -672,6 +731,189 @@ export class PoolManager {
       throw new Error("No pool selected");
     }
     await this.updateHistoryEvent(this.selectedPoolId, eventId, field, value);
+  }
+
+  private startKaminoLoansScan(): void {
+    if (this.kaminoScanTimer) {
+      clearInterval(this.kaminoScanTimer);
+    }
+    const intervalMs = 30_000;
+    this.kaminoScanTimer = setInterval(() => {
+      void this.scanKaminoLoans();
+    }, intervalMs);
+    void this.scanKaminoLoans();
+  }
+
+  private collectKaminoMarketAddresses(): string[] {
+    const markets = new Set<string>();
+    const baseMarket = this.baseConfig.kaminoMarketAddress ?? process.env.KAMINO_MARKET ?? null;
+    if (baseMarket) markets.add(baseMarket.trim());
+    for (const entry of this.entries) {
+      const overrideMarket = entry.overrides?.kaminoMarketAddress ?? null;
+      if (overrideMarket) markets.add(String(overrideMarket).trim());
+    }
+    for (const entry of this.kaminoMarkets) {
+      if (entry.address) markets.add(String(entry.address).trim());
+    }
+    for (const loan of this.kaminoLoansState.loans ?? []) {
+      if (loan.marketAddress) markets.add(String(loan.marketAddress).trim());
+    }
+    return Array.from(markets).filter((addr) => addr);
+  }
+
+  private resolveKaminoLoanOwner(marketAddress: string, existing?: KaminoLoanEntry): { id: string | null; name: string | null } {
+    if (existing?.ownerPoolId) {
+      return { id: existing.ownerPoolId, name: existing.ownerPoolName ?? null };
+    }
+    for (const record of this.pools.values()) {
+      const status = record.runner.getStatus();
+      if (status?.kaminoMarketAddress && status.kaminoMarketAddress === marketAddress && status.kaminoOwnerPoolId) {
+        return { id: status.kaminoOwnerPoolId, name: status.kaminoOwnerPoolName ?? null };
+      }
+    }
+    const candidates = this.entries.filter((entry) => {
+      const market = entry.overrides?.kaminoMarketAddress
+        ?? this.baseConfig.kaminoMarketAddress
+        ?? process.env.KAMINO_MARKET
+        ?? null;
+      return market && marketAddress && market === marketAddress;
+    });
+    if (candidates.length === 1) {
+      return { id: candidates[0].id, name: candidates[0].name };
+    }
+    return { id: null, name: null };
+  }
+
+  private async computeKaminoUsd(
+    deposits: { mint: string; amount: number }[],
+    borrows: { mint: string; amount: number }[]
+  ): Promise<{ collateralUsd: number | null; debtUsd: number | null }> {
+    const usdcMint = (this.baseConfig.autoSwapFeesToUsdcTargetMint || DEFAULT_USDC_MINT).trim() || DEFAULT_USDC_MINT;
+    const usdtMint = String(process.env.KAMINO_USDT_MINT ?? DEFAULT_USDT_MINT).trim() || DEFAULT_USDT_MINT;
+    let solUsdPrice: number | null = null;
+    const needsSol = deposits.some((item) => item.mint === NATIVE_MINT.toBase58())
+      || borrows.some((item) => item.mint === NATIVE_MINT.toBase58());
+    if (needsSol) {
+      try {
+        solUsdPrice = await getSolUsdPrice();
+      } catch (err) {
+        logger.warn({ err }, "falha ao ler SOL/USD para Kamino loans");
+      }
+    }
+    let collateralUsd = 0;
+    let collateralPriced = false;
+    for (const dep of deposits) {
+      if (!dep.mint || !Number.isFinite(dep.amount)) continue;
+      if (dep.mint === usdcMint || dep.mint === usdtMint) {
+        collateralUsd += dep.amount;
+        collateralPriced = true;
+      } else if (dep.mint === NATIVE_MINT.toBase58() && solUsdPrice != null) {
+        collateralUsd += dep.amount * solUsdPrice;
+        collateralPriced = true;
+      }
+    }
+    let debtUsd = 0;
+    let debtPriced = false;
+    for (const bor of borrows) {
+      if (!bor.mint || !Number.isFinite(bor.amount)) continue;
+      if (bor.mint === usdcMint || bor.mint === usdtMint) {
+        debtUsd += bor.amount;
+        debtPriced = true;
+      } else if (bor.mint === NATIVE_MINT.toBase58() && solUsdPrice != null) {
+        debtUsd += bor.amount * solUsdPrice;
+        debtPriced = true;
+      }
+    }
+    return {
+      collateralUsd: collateralPriced ? collateralUsd : null,
+      debtUsd: debtPriced ? debtUsd : null
+    };
+  }
+
+  private async scanKaminoLoans(): Promise<void> {
+    if (this.kaminoScanInFlight) {
+      return;
+    }
+    if (this.baseConfig.dryRun || process.env.KAMINO_NOOP === "true") {
+      return;
+    }
+    this.kaminoScanInFlight = true;
+    try {
+      const markets = this.collectKaminoMarketAddresses();
+      if (!markets.length) {
+        return;
+      }
+      const now = new Date().toISOString();
+      const existingByMarket = new Map<string, KaminoLoanEntry>(
+        (this.kaminoLoansState.loans ?? []).map((loan) => [loan.marketAddress, loan])
+      );
+      const nextByMarket = new Map<string, KaminoLoanEntry>();
+      for (const [market, loan] of existingByMarket.entries()) {
+        nextByMarket.set(market, loan);
+      }
+      for (const marketAddress of markets) {
+        const existing = existingByMarket.get(marketAddress);
+        try {
+          const kamino = await createKaminoClient(
+            { connection: this.connection, wallet: this.wallet, config: this.baseConfig },
+            marketAddress
+          );
+          const position = await kamino.getPositionState();
+          const hasDebt = (position?.debtAmount ?? 0) > 0;
+          const hasCollateral = (position?.collateralAmount ?? 0) > 0;
+          if (!position || (!hasDebt && !hasCollateral)) {
+            if (existing) {
+              nextByMarket.set(marketAddress, {
+                ...existing,
+                lastError: "Sem posição ativa no market",
+                lastSeenAt: existing.lastSeenAt ?? now
+              });
+            }
+            continue;
+          }
+
+          const deposits = Array.isArray(position.deposits) ? position.deposits : [];
+          const borrows = Array.isArray(position.borrows) ? position.borrows : [];
+          const owner = this.resolveKaminoLoanOwner(marketAddress, existing);
+          const usd = await this.computeKaminoUsd(deposits, borrows);
+          const updated: KaminoLoanEntry = {
+            id: existing?.id ?? marketAddress,
+            marketAddress,
+            ownerPoolId: owner.id ?? null,
+            ownerPoolName: owner.name ?? null,
+            collateralUsd: usd.collateralUsd,
+            debtUsd: usd.debtUsd,
+            deposits,
+            borrows,
+            lastSeenAt: now,
+            lastError: null
+          };
+          nextByMarket.set(marketAddress, updated);
+
+          if (owner.id && this.pools.has(owner.id)) {
+            const record = this.pools.get(owner.id);
+            record?.runner.recoverKaminoFromLoan(updated);
+          }
+        } catch (err) {
+          if (existing) {
+            nextByMarket.set(marketAddress, {
+              ...existing,
+              lastError: stringifyError(err),
+              lastSeenAt: existing.lastSeenAt ?? now
+            });
+          }
+        }
+      }
+      this.kaminoLoansState = {
+        loans: Array.from(nextByMarket.values()),
+        updatedAt: now
+      };
+      await this.kaminoLoansStore.save(this.kaminoLoansState);
+    } catch (err) {
+      logger.warn({ err }, "kamino loans scan failed");
+    } finally {
+      this.kaminoScanInFlight = false;
+    }
   }
 
   private async resumeActivePools(): Promise<void> {

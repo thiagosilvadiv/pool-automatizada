@@ -1,10 +1,10 @@
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { OrcaBot, BotStatus } from "./orca.js";
+import { OrcaBot, BotStatus, KaminoLogItem } from "./orca.js";
 import type { KaminoCycleState } from "./kamino-types.js";
 import { Config } from "./config.js";
 import { withRetry } from "./retry.js";
 import { logger } from "./logger.js";
-import { HistoryStore } from "./storage.js";
+import { HistoryStore, type KaminoLoanEntry } from "./storage.js";
 import { HedgeManager, HedgeCloseResult, HedgeState } from "./hedge.js";
 
 const MIN_ENTRY_BUDGET_FACTOR = 0.25;
@@ -142,10 +142,24 @@ export type HedgeLogEntry = {
 
 const MAX_HEDGE_LOGS = 80;
 
+export type KaminoLogEntry = {
+  id: string;
+  timestamp: string;
+  level: "info" | "warn" | "error";
+  action: string;
+  message: string;
+  marketAddress: string | null;
+  poolId: string | null;
+  poolName: string | null;
+};
+
+const MAX_KAMINO_LOGS = 80;
+
 export class BotRunner {
   private bot: OrcaBot;
   private config: Config;
   private poolId: string;
+  private poolName: string;
   private historyStore: HistoryStore;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
@@ -156,8 +170,10 @@ export class BotRunner {
   private lastEventPortfolioUsd: number | null = null;
   private historyLoaded = false;
   private hedgeLogs: HedgeLogEntry[] = [];
+  private kaminoLogs: KaminoLogEntry[] = [];
   private eventIdSeed = Math.floor(Math.random() * 1_000_000);
   private logIdSeed = Math.floor(Math.random() * 1_000_000);
+  private kaminoLogIdSeed = Math.floor(Math.random() * 1_000_000);
   private openedAtByMint = new Map<string, string>();
   private entryByMint = new Map<string, number>();
   private trendByMint = new Map<string, "up" | "down">();
@@ -180,6 +196,7 @@ export class BotRunner {
     this.historyStore = options.historyStore;
     this.hedgeManager = new HedgeManager(config);
     this.poolId = options.poolId;
+    this.poolName = options.poolName;
     this.onAutoAddRequest = options.onAutoAddRequest;
     this.bot.setPoolMeta({ id: options.poolId, name: options.poolName });
   }
@@ -231,6 +248,7 @@ export class BotRunner {
       this.lastTickAt = new Date().toISOString();
       this.recordEvent(this.bot.getStatus());
       this.flushQueuedHistory();
+      this.flushKaminoLogs();
       return { ok: result.ok, reason: result.reason, status: this.getStatus() };
     } catch (err) {
       logger.error({ err }, "close-kamino failed");
@@ -255,6 +273,7 @@ export class BotRunner {
       this.lastTickAt = new Date().toISOString();
       this.recordEvent(this.bot.getStatus());
       this.flushQueuedHistory();
+      this.flushKaminoLogs();
       return { ...result, status: this.getStatus() };
     } catch (err) {
       logger.error({ err }, "kamino-test failed");
@@ -274,6 +293,7 @@ export class BotRunner {
       const result = await this.bot.topUpSolNow();
       this.lastTickAt = new Date().toISOString();
       this.recordEvent(this.bot.getStatus());
+      this.flushKaminoLogs();
       return { ok: result.ok, reason: result.reason, status: this.getStatus() };
     } catch (err) {
       logger.error({ err }, "topup-sol failed");
@@ -295,6 +315,7 @@ export class BotRunner {
       if (result.swaps > 0) {
         this.recordEvent(this.bot.getStatus());
       }
+      this.flushKaminoLogs();
       return {
         ok: result.ok,
         reason: result.reason,
@@ -363,6 +384,54 @@ export class BotRunner {
     this.bot.setSwapAllowlist(mints);
   }
 
+  recoverKaminoFromLoan(loan: KaminoLoanEntry): void {
+    if (!loan || (loan.ownerPoolId && loan.ownerPoolId !== this.poolId)) {
+      return;
+    }
+    const current = this.bot.getKaminoState();
+    if (current?.active) {
+      return;
+    }
+    const deposits = Array.isArray(loan.deposits) ? loan.deposits : [];
+    const borrows = Array.isArray(loan.borrows) ? loan.borrows : [];
+    const collaterals = deposits.map((dep) => ({
+      mint: dep.mint,
+      amount: dep.amount,
+      usd: null,
+      debtUsd: null,
+      avgPriceUsdc: null,
+      targetPriceUsdc: null
+    }));
+    const borrowMints = Array.from(new Set(borrows.map((bor) => bor.mint).filter(Boolean)));
+    const debtMint = borrowMints.length === 1 ? borrowMints[0] : null;
+    const debtAmount = borrows.reduce((sum, bor) => sum + (Number(bor.amount) || 0), 0);
+    const single = collaterals.length === 1 ? collaterals[0] : null;
+    this.bot.setKaminoState({
+      active: true,
+      ownerPoolId: loan.ownerPoolId ?? this.poolId,
+      ownerPoolName: loan.ownerPoolName ?? this.poolName,
+      marketAddress: loan.marketAddress,
+      collateralMint: single ? single.mint : null,
+      collateralAmount: single ? single.amount : 0,
+      collateralUsd: loan.collateralUsd ?? null,
+      debtMint,
+      debtAmount: debtMint ? debtAmount : 0,
+      debtUsd: loan.debtUsd ?? null,
+      avgPriceUsdc: null,
+      targetPriceUsdc: null,
+      collaterals,
+      cycleCount: Math.max(current?.cycleCount ?? 0, 1),
+      updatedAt: new Date().toISOString(),
+      lastError: "Ciclo Kamino recuperado do registro global."
+    });
+    this.addKaminoLog({
+      level: "warn",
+      action: "recover",
+      message: "Empréstimo Kamino recuperado do registro global.",
+      marketAddress: loan.marketAddress ?? null
+    });
+  }
+
   isBusy(): boolean {
     return this.inFlight || this.pendingClose;
   }
@@ -384,6 +453,7 @@ export class BotRunner {
       const result = await this.bot.addLiquidityFromWallet(limits);
       this.lastTickAt = new Date().toISOString();
       this.recordEvent(this.bot.getStatus());
+      this.flushKaminoLogs();
       return result;
     } catch (err) {
       logger.error({ err }, "auto-add liquidity failed");
@@ -402,8 +472,16 @@ export class BotRunner {
     return [...this.hedgeLogs].reverse();
   }
 
+  getKaminoLogs(): KaminoLogEntry[] {
+    return [...this.kaminoLogs].reverse();
+  }
+
   clearHedgeLogs(): void {
     this.hedgeLogs = [];
+  }
+
+  clearKaminoLogs(): void {
+    this.kaminoLogs = [];
   }
 
   async clearHistory(): Promise<void> {
@@ -590,6 +668,7 @@ export class BotRunner {
       await withRetry(() => this.bot.tick(), { retries: 3, baseDelayMs: 1000 });
       this.lastTickAt = new Date().toISOString();
       const status = this.bot.getStatus();
+      this.flushKaminoLogs();
       const isRebalanced = status.lastAction === "rebalanced" || status.lastAction === "kamino-rebalanced";
       const currentMint = status.positionMint ?? null;
       if (this.config.hedgeEnabled) {
@@ -737,6 +816,7 @@ export class BotRunner {
       }
       this.recordEvent(status, { hedgeClose: hedgeCloseForClosePosition ?? hedgeCloseForRebalance });
       this.flushQueuedHistory();
+      this.flushKaminoLogs();
       this.maybeRequestAutoAdd(status);
     } catch (err) {
       logger.error({ err }, "tick failed");
@@ -1584,6 +1664,32 @@ export class BotRunner {
     }
   }
 
+  private addKaminoLog(entry: KaminoLogItem): void {
+    const timestamp = entry.timestamp ?? new Date().toISOString();
+    const log: KaminoLogEntry = {
+      id: this.createKaminoLogId(timestamp),
+      timestamp,
+      level: entry.level,
+      action: entry.action,
+      message: entry.message,
+      marketAddress: entry.marketAddress ?? null,
+      poolId: this.poolId ?? null,
+      poolName: this.poolName ?? null
+    };
+    this.kaminoLogs.push(log);
+    if (this.kaminoLogs.length > MAX_KAMINO_LOGS) {
+      this.kaminoLogs.splice(0, this.kaminoLogs.length - MAX_KAMINO_LOGS);
+    }
+  }
+
+  private flushKaminoLogs(): void {
+    const logs = this.bot.drainKaminoLogs();
+    if (!logs.length) {
+      return;
+    }
+    logs.forEach((item) => this.addKaminoLog(item));
+  }
+
   private logHedgeOpen(message: string): void {
     const state = this.hedgeManager.getState();
     this.addHedgeLog({
@@ -1643,6 +1749,13 @@ export class BotRunner {
     const timePart = Number.isFinite(parsed) ? parsed.toString(36) : Date.now().toString(36);
     const rand = (this.logIdSeed++ % 1_000_000).toString(36);
     return `log_${timePart}_${rand}`;
+  }
+
+  private createKaminoLogId(timestamp: string): string {
+    const parsed = Date.parse(timestamp);
+    const timePart = Number.isFinite(parsed) ? parsed.toString(36) : Date.now().toString(36);
+    const rand = (this.kaminoLogIdSeed++ % 1_000_000).toString(36);
+    return `klog_${timePart}_${rand}`;
   }
 
   private createEventId(timestamp: string): string {

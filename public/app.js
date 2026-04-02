@@ -48,6 +48,7 @@ const kaminoTestBtn = document.getElementById("kaminoTestBtn");
 const kaminoTestResult = document.getElementById("kaminoTestResult");
 const historyBody = document.getElementById("historyBody");
 const hedgeLogBody = document.getElementById("hedgeLogBody");
+const kaminoLogBody = document.getElementById("kaminoLogBody");
 const poolNameLabel = document.getElementById("poolNameLabel");
 const hedgeSymbolsList = document.getElementById("hedgeSymbolsList");
 
@@ -145,6 +146,7 @@ const kaminoCloseTopBtn = document.getElementById("kaminoCloseTopBtn");
 const kaminoCloseBtn = document.getElementById("kaminoCloseBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 const clearHedgeLogBtn = document.getElementById("clearHedgeLogBtn");
+const clearKaminoLogBtn = document.getElementById("clearKaminoLogBtn");
 const exportHistoryBtn = document.getElementById("exportHistoryBtn");
 const deleteHistoryBtn = document.getElementById("deleteHistoryBtn");
 const selectAllHistory = document.getElementById("selectAllHistory");
@@ -212,7 +214,7 @@ const actionLabels = {
   "kamino-reopen": "Kamino: reabrir pool",
   "kamino-repay": "Kamino: pagar dívida",
   "kamino-withdraw": "Kamino: retirar colateral",
-  "kamino-close": "Kamino: fechar ciclo"
+  "kamino-close": "Pago Emprestimo"
 };
 
 const actionTypeLabels = {
@@ -246,6 +248,7 @@ const hedgeEntryModeLabels = {
 };
 
 const MAX_HEDGE_LOG_ROWS = 20;
+const MAX_KAMINO_LOG_ROWS = 20;
 
 const hedgeLogActionLabels = {
   "open": "Abertura",
@@ -256,6 +259,12 @@ const hedgeLogActionLabels = {
 };
 
 const hedgeLogLevelLabels = {
+  "info": "Info",
+  "warn": "Aviso",
+  "error": "Erro"
+};
+
+const kaminoLogLevelLabels = {
   "info": "Info",
   "warn": "Aviso",
   "error": "Erro"
@@ -644,6 +653,11 @@ async function fetchHistory() {
 
 async function fetchHedgeLogs() {
   const res = await fetch("/api/hedge-logs");
+  return res.json();
+}
+
+async function fetchKaminoLogs() {
+  const res = await fetch("/api/kamino-logs");
   return res.json();
 }
 
@@ -1439,6 +1453,31 @@ function renderHedgeLogs(items) {
   hedgeLogBody.innerHTML = rows.join("");
 }
 
+function renderKaminoLogs(items) {
+  if (!kaminoLogBody) {
+    return;
+  }
+  const list = Array.isArray(items) ? items.slice(0, MAX_KAMINO_LOG_ROWS) : [];
+  if (list.length === 0) {
+    kaminoLogBody.innerHTML = "<tr><td colspan=\"5\">Sem eventos ainda</td></tr>";
+    return;
+  }
+  const rows = list.map((entry) => {
+    const level = kaminoLogLevelLabels[entry.level] ?? entry.level ?? "-";
+    const market = entry.marketAddress ? shortMint(entry.marketAddress) : "-";
+    return `
+      <tr>
+        <td>${formatTimestamp(entry.timestamp)}</td>
+        <td>${escapeHtml(level)}</td>
+        <td>${escapeHtml(entry.action ?? "-")}</td>
+        <td>${escapeHtml(market)}</td>
+        <td>${escapeHtml(entry.message ?? "-")}</td>
+      </tr>
+    `;
+  });
+  kaminoLogBody.innerHTML = rows.join("");
+}
+
 function renderPools(data, config) {
   closeActiveActionMenu();
   const pools = data?.pools ?? [];
@@ -1550,12 +1589,13 @@ function renderPools(data, config) {
 
 async function updateUI() {
   try {
-    const [status, config, history, pools, hedgeLogs] = await Promise.all([
+    const [status, config, history, pools, hedgeLogs, kaminoLogs] = await Promise.all([
       fetchStatus(),
       fetchConfig(),
       fetchHistory(),
       fetchPools(),
-      fetchHedgeLogs()
+      fetchHedgeLogs(),
+      fetchKaminoLogs()
     ]);
     cachedHistory = Array.isArray(history) ? history : [];
 
@@ -1751,6 +1791,7 @@ async function updateUI() {
       renderHistory(cachedHistory);
     }
     renderHedgeLogs(hedgeLogs);
+    renderKaminoLogs(kaminoLogs);
     renderPools(pools, config);
   } catch (err) {
     statusBadge.textContent = "Erro";
@@ -2972,6 +3013,15 @@ if (clearHedgeLogBtn) {
     const ok = window.confirm("Limpar o log do hedge? Essa ação não pode ser desfeita.");
     if (!ok) return;
     await fetch("/api/hedge-logs/clear", { method: "POST" });
+    updateUI();
+  });
+}
+
+if (clearKaminoLogBtn) {
+  clearKaminoLogBtn.addEventListener("click", async () => {
+    const ok = window.confirm("Limpar o log do Kamino? Essa ação não pode ser desfeita.");
+    if (!ok) return;
+    await fetch("/api/kamino-logs/clear", { method: "POST" });
     updateUI();
   });
 }

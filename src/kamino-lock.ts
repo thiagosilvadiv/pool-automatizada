@@ -5,10 +5,17 @@ export type KaminoLockState = {
   updatedAt: string;
 };
 
-let currentLock: KaminoLockState | null = null;
+const locksByMarket = new Map<string, KaminoLockState>();
 
-export function getKaminoLock(): KaminoLockState | null {
-  return currentLock ? { ...currentLock } : null;
+function resolveMarketKey(marketAddress: string | null): string {
+  const trimmed = String(marketAddress ?? "").trim();
+  return trimmed || "default";
+}
+
+export function getKaminoLock(marketAddress: string | null): KaminoLockState | null {
+  const key = resolveMarketKey(marketAddress);
+  const lock = locksByMarket.get(key);
+  return lock ? { ...lock } : null;
 }
 
 export function tryAcquireKaminoLock(input: {
@@ -16,20 +23,25 @@ export function tryAcquireKaminoLock(input: {
   poolName: string;
   marketAddress: string | null;
 }): { ok: boolean; owner?: KaminoLockState } {
-  if (!currentLock || currentLock.poolId === input.poolId) {
-    currentLock = {
+  const key = resolveMarketKey(input.marketAddress);
+  const current = locksByMarket.get(key) ?? null;
+  if (!current || current.poolId === input.poolId) {
+    const next = {
       poolId: input.poolId,
       poolName: input.poolName,
       marketAddress: input.marketAddress ?? null,
       updatedAt: new Date().toISOString()
     };
-    return { ok: true, owner: { ...currentLock } };
+    locksByMarket.set(key, next);
+    return { ok: true, owner: { ...next } };
   }
-  return { ok: false, owner: { ...currentLock } };
+  return { ok: false, owner: { ...current } };
 }
 
-export function releaseKaminoLock(poolId: string): void {
-  if (currentLock?.poolId === poolId) {
-    currentLock = null;
+export function releaseKaminoLock(poolId: string, marketAddress: string | null): void {
+  const key = resolveMarketKey(marketAddress);
+  const current = locksByMarket.get(key);
+  if (current?.poolId === poolId) {
+    locksByMarket.delete(key);
   }
 }

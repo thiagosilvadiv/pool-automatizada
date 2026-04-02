@@ -465,3 +465,138 @@ export async function createKaminoMarketsStore(): Promise<KaminoMarketsStore> {
   const filePath = defaultKaminoMarketsFile();
   return new FileKaminoMarketsStore(filePath);
 }
+
+export type KaminoLoanEntry = {
+  id: string;
+  marketAddress: string;
+  ownerPoolId: string | null;
+  ownerPoolName: string | null;
+  collateralUsd: number | null;
+  debtUsd: number | null;
+  deposits: { mint: string; amount: number }[];
+  borrows: { mint: string; amount: number }[];
+  lastSeenAt: string;
+  lastError: string | null;
+};
+
+export type KaminoLoansState = {
+  loans: KaminoLoanEntry[];
+  updatedAt: string | null;
+};
+
+export type KaminoLoansStore = {
+  load(): Promise<KaminoLoansState | null>;
+  save(state: KaminoLoansState): Promise<void>;
+};
+
+export function defaultKaminoLoansFile(name = "kamino-loans.json"): string {
+  return path.join(__dirname, "..", "data", name);
+}
+
+function normalizeKaminoLoansState(input: unknown): KaminoLoansState {
+  if (!input || typeof input !== "object") {
+    return { loans: [], updatedAt: null };
+  }
+  const rawLoans = Array.isArray((input as any).loans)
+    ? (input as any).loans
+    : (Array.isArray(input) ? input : []);
+  const loans = rawLoans.map((item: any) => {
+    const marketAddress = String(item?.marketAddress ?? item?.market ?? "").trim();
+    if (!marketAddress) return null;
+    const id = String(item?.id ?? marketAddress).trim() || marketAddress;
+    const ownerPoolId = item?.ownerPoolId ? String(item.ownerPoolId) : null;
+    const ownerPoolName = item?.ownerPoolName ? String(item.ownerPoolName) : null;
+    const collateralUsd = item?.collateralUsd == null ? null : Number(item.collateralUsd);
+    const debtUsd = item?.debtUsd == null ? null : Number(item.debtUsd);
+    const deposits = Array.isArray(item?.deposits)
+      ? item.deposits.map((dep: any) => ({
+        mint: String(dep?.mint ?? "").trim(),
+        amount: Number(dep?.amount ?? 0)
+      })).filter((dep: any) => dep.mint)
+      : [];
+    const borrows = Array.isArray(item?.borrows)
+      ? item.borrows.map((bor: any) => ({
+        mint: String(bor?.mint ?? "").trim(),
+        amount: Number(bor?.amount ?? 0)
+      })).filter((bor: any) => bor.mint)
+      : [];
+    const lastSeenAt = typeof item?.lastSeenAt === "string"
+      ? item.lastSeenAt
+      : new Date().toISOString();
+    const lastError = item?.lastError ? String(item.lastError) : null;
+    return {
+      id,
+      marketAddress,
+      ownerPoolId,
+      ownerPoolName,
+      collateralUsd,
+      debtUsd,
+      deposits,
+      borrows,
+      lastSeenAt,
+      lastError
+    };
+  }).filter(Boolean) as KaminoLoanEntry[];
+  const updatedAt = typeof (input as any).updatedAt === "string" ? (input as any).updatedAt : null;
+  return { loans, updatedAt };
+}
+
+class FileKaminoLoansStore implements KaminoLoansStore {
+  private filePath: string;
+
+  constructor(filePath: string) {
+    this.filePath = filePath;
+  }
+
+  async load(): Promise<KaminoLoansState | null> {
+    try {
+      const raw = await fs.readFile(this.filePath, "utf8");
+      const parsed = JSON.parse(raw);
+      return normalizeKaminoLoansState(parsed);
+    } catch {
+      return null;
+    }
+  }
+
+  async save(state: KaminoLoansState): Promise<void> {
+    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    await fs.writeFile(this.filePath, JSON.stringify(state, null, 2), "utf8");
+  }
+}
+
+class RedisKaminoLoansStore implements KaminoLoansStore {
+  private key: string;
+
+  constructor(key: string) {
+    this.key = key;
+  }
+
+  async load(): Promise<KaminoLoansState | null> {
+    const client = await getRedisClient();
+    if (!client) {
+      return null;
+    }
+    const raw = await client.get(this.key);
+    if (!raw) {
+      return null;
+    }
+    return normalizeKaminoLoansState(JSON.parse(raw));
+  }
+
+  async save(state: KaminoLoansState): Promise<void> {
+    const client = await getRedisClient();
+    if (!client) {
+      throw new Error("Redis not configured");
+    }
+    await client.set(this.key, JSON.stringify(state));
+  }
+}
+
+export async function createKaminoLoansStore(): Promise<KaminoLoansStore> {
+  const client = await getRedisClient();
+  if (client) {
+    return new RedisKaminoLoansStore(getRedisKey("kamino-loans"));
+  }
+  const filePath = defaultKaminoLoansFile();
+  return new FileKaminoLoansStore(filePath);
+}
