@@ -132,6 +132,7 @@ const closeBtn = document.getElementById("closeBtn");
 const topupBtn = document.getElementById("topupBtn");
 const closeEmptyAccountsBtn = document.getElementById("closeEmptyAccountsBtn");
 const swapToSolBtn = document.getElementById("swapToSolBtn");
+const kaminoCloseTopBtn = document.getElementById("kaminoCloseTopBtn");
 const kaminoCloseBtn = document.getElementById("kaminoCloseBtn");
 const clearHistoryBtn = document.getElementById("clearHistoryBtn");
 const clearHedgeLogBtn = document.getElementById("clearHedgeLogBtn");
@@ -1579,6 +1580,9 @@ async function updateUI() {
     if (kaminoCloseBtn) {
       kaminoCloseBtn.disabled = !status.kaminoActive;
     }
+    if (kaminoCloseTopBtn) {
+      kaminoCloseTopBtn.disabled = !status.kaminoActive;
+    }
     updateKaminoTestTokenHints(tokenInfo);
     syncKaminoTestMint(tokenInfo);
 
@@ -1686,6 +1690,20 @@ closeBtn.addEventListener("click", async () => {
 
 if (kaminoCloseBtn) {
   kaminoCloseBtn.addEventListener("click", async () => {
+    const ok = window.confirm("Fechar ciclo Kamino e liquidar o empréstimo?");
+    if (!ok) return;
+    const res = await fetch("/api/kamino/close", { method: "POST" });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) {
+      const msg = data?.error ?? data?.reason ?? "Falha ao fechar ciclo Kamino.";
+      window.alert(msg);
+    }
+    updateUI();
+  });
+}
+
+if (kaminoCloseTopBtn) {
+  kaminoCloseTopBtn.addEventListener("click", async () => {
     const ok = window.confirm("Fechar ciclo Kamino e liquidar o empréstimo?");
     if (!ok) return;
     const res = await fetch("/api/kamino/close", { method: "POST" });
