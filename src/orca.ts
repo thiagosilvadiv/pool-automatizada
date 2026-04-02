@@ -309,6 +309,7 @@ export class OrcaBot {
     this.lastStatus.eventPositionFeesUsd = null;
     this.lastStatus.eventPositionExitUsd = null;
     this.resetActionFee();
+    await this.reconcileKaminoState();
     this.syncKaminoStatus();
     await this.refreshPoolState();
     const trendSnapshot = await this.updateTrendStatus();
@@ -423,6 +424,22 @@ export class OrcaBot {
         }
         this.currentPositionMint = null;
         this.missingPositionSince = null;
+      }
+
+      if (this.config.rebalanceCooldownSec > 0 && this.lastRebalanceAt != null) {
+        const now = Date.now();
+        const elapsedSec = (now - this.lastRebalanceAt) / 1000;
+        if (elapsedSec < this.config.rebalanceCooldownSec) {
+          const remainingSec = Math.max(0, this.config.rebalanceCooldownSec - elapsedSec);
+          logger.info(
+            { elapsedSec, remainingSec },
+            "recent open/rebalance; waiting cooldown before opening new position"
+          );
+          this.lastStatus.lastAction = "cooldown-wait";
+          this.lastStatus.positionRange = null;
+          this.lastStatus.positionMint = this.currentPositionMint;
+          return this.getStatus();
+        }
       }
 
       logger.info({ price, range: executionRange }, "no active position found; opening new position");
@@ -1704,6 +1721,42 @@ export class OrcaBot {
     this.lastStatus.kaminoCycleCount = state?.cycleCount ?? 0;
     this.lastStatus.kaminoLastError = state?.lastError ?? null;
     this.lastStatus.kaminoSimulated = this.isKaminoSimulated();
+  }
+
+  private async reconcileKaminoState(): Promise<void> {
+    if (!this.kaminoState?.active) {
+      return;
+    }
+    if (this.isKaminoSimulated()) {
+      return;
+    }
+    try {
+      const kamino = await this.ensureKaminoClient();
+      const position = await kamino.getPositionState();
+      const hasDebt = (position?.debtAmount ?? 0) > 0;
+      const hasCollateral = (position?.collateralAmount ?? 0) > 0;
+      if (!position || (!hasDebt && !hasCollateral)) {
+        const previous = this.kaminoState;
+        const nextState: KaminoCycleState = {
+          active: false,
+          collateralMint: null,
+          collateralAmount: 0,
+          collateralUsd: null,
+          debtMint: null,
+          debtAmount: 0,
+          debtUsd: null,
+          avgPriceUsdc: null,
+          targetPriceUsdc: null,
+          collaterals: [],
+          cycleCount: previous?.cycleCount ?? 0,
+          updatedAt: new Date().toISOString(),
+          lastError: null
+        };
+        this.kaminoState = this.normalizeKaminoState(nextState);
+      }
+    } catch (err) {
+      logger.warn({ err }, "falha ao reconciliar estado Kamino");
+    }
   }
 
   setSwapAllowlist(mints: string[]): void {
