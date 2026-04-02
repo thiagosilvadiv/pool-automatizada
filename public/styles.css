@@ -854,8 +854,9 @@ button.danger:not(.ghost):hover {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px;
+  margin-top: 12px;
 }
 
 .card {
@@ -870,6 +871,32 @@ button.danger:not(.ghost):hover {
   font-size: 16px;
   color: var(--muted);
   letter-spacing: 0.04em;
+}
+
+.card.compact {
+  padding: 14px 16px;
+}
+
+.card.compact h3 {
+  margin-bottom: 10px;
+}
+
+.kv-grid {
+  display: grid;
+  gap: 6px 12px;
+}
+
+.kv-grid.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.kv-grid.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.kv-grid .kv {
+  margin-bottom: 0;
+  gap: 8px;
 }
 
 .ai-grid .card {
@@ -899,7 +926,7 @@ button.danger:not(.ghost):hover {
 .kv span:last-child {
   color: var(--text);
   font-weight: 600;
-  max-width: 120px;
+  max-width: 140px;
   text-align: right;
   word-break: break-all;
 }
@@ -919,6 +946,47 @@ button.danger:not(.ghost):hover {
   max-width: none;
   font-weight: 500;
   color: var(--muted);
+}
+
+.kamino-collaterals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin-bottom: 8px;
+}
+
+.kamino-test.compact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.kamino-test.compact-grid .field {
+  margin-bottom: 0;
+}
+
+.kamino-test.compact-grid button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+@media (max-width: 1100px) {
+  .kv-grid.cols-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .kv-grid.cols-2,
+  .kv-grid.cols-3 {
+    grid-template-columns: 1fr;
+  }
+  .kamino-collaterals {
+    grid-template-columns: 1fr;
+  }
+  .kamino-test.compact-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .kamino-test {
