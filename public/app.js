@@ -9,6 +9,7 @@ const effectiveExitTokenEl = document.getElementById("effectiveExitToken");
 const effectiveExitDirectionEl = document.getElementById("effectiveExitDirection");
 const effectiveExitSideEl = document.getElementById("effectiveExitSide");
 const priceEl = document.getElementById("price");
+const priceTopEl = document.getElementById("priceTop");
 const targetRangeEl = document.getElementById("targetRange");
 const positionRangeEl = document.getElementById("positionRange");
 const positionMintEl = document.getElementById("positionMint");
@@ -49,6 +50,7 @@ const kaminoTestResult = document.getElementById("kaminoTestResult");
 const historyBody = document.getElementById("historyBody");
 const kaminoLogBody = document.getElementById("kaminoLogBody");
 const poolNameLabel = document.getElementById("poolNameLabel");
+const poolNameLabelTop = document.getElementById("poolNameLabelTop");
 const hedgeSymbolsList = document.getElementById("hedgeSymbolsList");
 
 const poolNameInput = document.getElementById("poolName");
@@ -310,6 +312,24 @@ function formatNumber(value, digits = 6) {
     numberFormatters[key] = formatter;
   }
   return formatter.format(num);
+}
+
+function applyStatusTone(el, value) {
+  if (!el) return;
+  el.classList.remove("status-ok", "status-warn", "status-bad");
+  const text = String(value ?? "").toLowerCase();
+  if (!text || text === "-" || text === "na") return;
+  if (text.includes("sim") || text.includes("ativo") || text.includes("rodando")) {
+    el.classList.add("status-ok");
+    return;
+  }
+  if (text.includes("parado") || text.includes("erro") || text.includes("falha") || text.includes("inativo") || text.includes("nao")) {
+    el.classList.add("status-bad");
+    return;
+  }
+  if (text.includes("aguardando") || text.includes("nao encontrada") || text.includes("nao encontrado") || text.includes("cooldown")) {
+    el.classList.add("status-warn");
+  }
 }
 
 const KNOWN_MINT_LABELS = {
@@ -1555,14 +1575,18 @@ async function updateUI() {
     lastTickEl.textContent = formatTimestamp(status.lastTickAt);
     lastActionEl.textContent = status.lastAction ?? "-";
     lastErrorEl.textContent = status.lastError ?? "-";
+    applyStatusTone(runningEl, runningEl.textContent);
+    applyStatusTone(lastErrorEl, lastErrorEl.textContent);
     if (hedgeStatusEl) {
       const hedgeLabel = status.hedgeActive
         ? `Ativo${status.hedgeSymbol ? " (" + status.hedgeSymbol + ")" : ""}`
         : "Parado";
       hedgeStatusEl.textContent = hedgeLabel;
+      applyStatusTone(hedgeStatusEl, hedgeLabel);
     }
     if (hedgeErrorEl) {
       hedgeErrorEl.textContent = status.hedgeLastError ?? "-";
+      applyStatusTone(hedgeErrorEl, hedgeErrorEl.textContent);
     }
     const tokenInfo = getTokenInfo(config);
     const selectedPool = Array.isArray(pools)
@@ -1570,11 +1594,16 @@ async function updateUI() {
       : null;
     const selectedOverrides = selectedPool?.overrides ?? {};
 
-    priceEl.textContent = formatNumber(normalizeDisplayPrice(status.lastPrice, tokenInfo), 8);
+    const priceText = formatNumber(normalizeDisplayPrice(status.lastPrice, tokenInfo), 8);
+    priceEl.textContent = priceText;
+    if (priceTopEl) {
+      priceTopEl.textContent = priceText;
+    }
     targetRangeEl.textContent = formatRange(status.targetRange, tokenInfo);
     positionRangeEl.textContent = formatRange(status.positionRange, tokenInfo);
     positionMintEl.textContent = status.positionMint ?? "-";
-    solBalanceEl.textContent = formatNumber(status.solBalance, 4);
+    const solBalanceText = formatNumber(status.solBalance, 4);
+    solBalanceEl.textContent = solBalanceText;
 
     solUsdEl.textContent = formatNumber(status.solUsdPrice, 4);
     budgetUsdEl.textContent = formatNumber(status.budgetUsd, 2);
@@ -1585,6 +1614,9 @@ async function updateUI() {
     networkEl.textContent = config.network ?? "-";
     whirlpoolEl.textContent = config.whirlpoolAddress ?? "-";
     poolNameLabel.textContent = config.poolName ?? "-";
+    if (poolNameLabelTop) {
+      poolNameLabelTop.textContent = config.poolName ?? "-";
+    }
     if (kaminoPoolNameEl) {
       kaminoPoolNameEl.textContent = config.poolName ?? "-";
     }
@@ -1605,10 +1637,12 @@ async function updateUI() {
 
     if (kaminoStatusEl) {
       kaminoStatusEl.textContent = status.kaminoActive ? "Ativo" : "Inativo";
+      applyStatusTone(kaminoStatusEl, kaminoStatusEl.textContent);
     }
     if (kaminoEnabledEl) {
       const enabled = status.kaminoEnabled ?? config.kaminoRebalanceEnabled;
       kaminoEnabledEl.textContent = enabled ? "Sim" : "Nao";
+      applyStatusTone(kaminoEnabledEl, kaminoEnabledEl.textContent);
     }
     if (kaminoSimulatedEl) {
       kaminoSimulatedEl.textContent = status.kaminoSimulated ? "Sim" : "Nao";

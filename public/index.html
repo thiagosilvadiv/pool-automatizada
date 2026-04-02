@@ -265,118 +265,136 @@
         </div>
       </section>
 
-      <section class="panel">
-        <div class="row">
-          <button id="startBtn" class="primary">Iniciar</button>
-          <button id="stopBtn" class="ghost">Parar</button>
-          <button id="closeBtn" class="danger">Fechar posição</button>
-          <button id="kaminoCloseTopBtn" class="ghost">Fechar Kamino</button>
-          <button id="topupBtn" class="ghost">Top-up SOL</button>
-          <button id="swapToSolBtn" class="ghost">Converter tokens para SOL</button>
-          <button id="closeEmptyAccountsBtn" class="ghost">Recolher SOL (contas vazias)</button>
+      <section class="panel dashboard">
+        <div class="dashboard-topbar">
+          <div class="topbar-stat">
+            <span class="label">Rodando</span>
+            <span id="running" class="value">-</span>
+          </div>
+          <div class="topbar-stat">
+            <span class="label">Preço atual</span>
+            <span id="priceTop" class="value value-strong">-</span>
+          </div>
+          <div class="topbar-stat">
+            <span class="label">Saldo SOL</span>
+            <span id="solBalance" class="value">-</span>
+          </div>
+          <div class="topbar-stat">
+            <span class="label">Pool</span>
+            <span id="poolNameLabelTop" class="value">-</span>
+          </div>
           <span id="statusBadge" class="badge">Desconhecido</span>
         </div>
-        <div class="grid">
-          <div class="card compact">
-            <h3>Status</h3>
-            <div class="kv-grid cols-2">
-              <div class="kv"><span>Rodando</span><span id="running">-</span></div>
-              <div class="kv"><span>Última execução</span><span id="lastTick">-</span></div>
-              <div class="kv"><span>Ação</span><span id="lastAction">-</span></div>
-              <div class="kv"><span>Erro</span><span id="lastError">-</span></div>
-              <div class="kv"><span>Hedge</span><span id="hedgeStatus">-</span></div>
-              <div class="kv"><span>Hedge erro</span><span id="hedgeError">-</span></div>
-              <div class="kv"><span>Saída efetiva (token)</span><span id="effectiveExitToken">-</span></div>
-              <div class="kv"><span>Saída efetiva (direção)</span><span id="effectiveExitDirection">-</span></div>
-              <div class="kv"><span>Saída efetiva (lado)</span><span id="effectiveExitSide">-</span></div>
-            </div>
-          </div>
-          <div class="card compact">
-            <h3>Preço & Faixa</h3>
-            <div class="kv-grid cols-2">
-              <div class="kv"><span>Preço atual</span><span id="price">-</span></div>
-              <div class="kv"><span>Faixa alvo</span><span id="targetRange">-</span></div>
-              <div class="kv"><span>Faixa posição</span><span id="positionRange">-</span></div>
-            </div>
-          </div>
-          <div class="card compact">
-            <h3>Conta</h3>
-            <div class="kv-grid cols-2">
-              <div class="kv"><span>Mint posição</span><span id="positionMint">-</span></div>
-              <div class="kv"><span>SOL</span><span id="solBalance">-</span></div>
-            </div>
-          </div>
-          <div class="card compact" id="usdCard" style="display: none;">
-            <h3>USD</h3>
-            <div class="kv-grid cols-2">
-              <div class="kv"><span>Preço SOL/USD</span><span id="solUsd">-</span></div>
-              <div class="kv"><span>Budget USD</span><span id="budgetUsd">-</span></div>
-              <div class="kv"><span>Budget SOL</span><span id="budgetSol">-</span></div>
-              <div class="kv"><span>Valor total (USD)</span><span id="portfolioUsd">-</span></div>
-              <div class="kv"><span>PnL (USD)</span><span id="pnlUsd">-</span></div>
-            </div>
-          </div>
-          <div class="card compact">
-            <h3>Config</h3>
-            <div class="kv-grid cols-3">
-              <div class="kv"><span>Pool selecionada</span><span id="poolNameLabel">-</span></div>
-              <div class="kv"><span>Network</span><span id="network">-</span></div>
-              <div class="kv"><span>Whirlpool</span><span id="whirlpool">-</span></div>
-              <div class="kv"><span>Range %</span><span id="rangePct">-</span></div>
-              <div class="kv"><span>Slippage bps</span><span id="slippage">-</span></div>
-              <div class="kv"><span>Polling ms</span><span id="poll">-</span></div>
-              <div class="kv"><span>Confirmação fora da faixa (s)</span><span id="confirmSec">-</span></div>
-              <div class="kv"><span>Cooldown re-range (s)</span><span id="cooldownSec">-</span></div>
-              <div class="kv"><span>Dry-run</span><span id="dryRun">-</span></div>
-            </div>
-          </div>
-          <div class="card compact">
-            <h3>Kamino Rebalance</h3>
-            <div class="kv-grid cols-2">
-              <div class="kv"><span>Pool</span><span id="kaminoPoolName">-</span></div>
-              <div class="kv"><span>Pool do ciclo</span><span id="kaminoOwnerPool">-</span></div>
-              <div class="kv"><span>Status</span><span id="kaminoStatus">-</span></div>
-              <div class="kv"><span>Habilitado</span><span id="kaminoEnabled">-</span></div>
-              <div class="kv"><span>Simulado</span><span id="kaminoSimulated">-</span></div>
-              <div class="kv"><span>LTV</span><span id="kaminoLtv">-</span></div>
-              <div class="kv"><span>Colateral (USD)</span><span id="kaminoCollateralUsd">-</span></div>
-              <div class="kv"><span>Dívida (USD)</span><span id="kaminoDebtUsd">-</span></div>
-              <div class="kv"><span>Preço médio</span><span id="kaminoAvgPrice">-</span></div>
-              <div class="kv"><span>Preço alvo</span><span id="kaminoTargetPrice">-</span></div>
-            </div>
-            <div id="kaminoAvgModeHint" class="hint">Preço médio (cumulativo desde o início do ciclo)</div>
-            <div class="kv-grid cols-2">
-              <div class="kv"><span>Ciclos</span><span id="kaminoCycleCount">-</span></div>
-              <div class="kv"><span>Erro Kamino</span><span id="kaminoLastError">-</span></div>
-            </div>
-            <div class="kamino-collaterals" id="kaminoCollaterals"></div>
-            <div class="row tight">
-              <button id="kaminoCloseBtn" class="ghost">Fechar ciclo Kamino</button>
-              <button id="kaminoResetBtn" class="ghost danger">Resetar ciclo (local)</button>
-            </div>
-            <div class="kamino-test compact-grid">
-              <div class="field">
-                <label>Colateral</label>
-                <select id="kaminoTestToken">
-                  <option value="tokenA">Token A</option>
-                  <option value="tokenB">Token B</option>
-                  <option value="manual">Mint manual</option>
-                </select>
+        <div class="dashboard-layout">
+          <aside class="dashboard-sidebar">
+            <div class="card compact">
+              <h3>Acoes</h3>
+              <div class="actions-grid">
+                <button id="startBtn" class="primary">Iniciar</button>
+                <button id="stopBtn" class="ghost">Parar</button>
+                <button id="closeBtn" class="danger">Fechar posicao</button>
+                <button id="kaminoCloseTopBtn" class="ghost">Fechar Kamino</button>
+                <button id="topupBtn" class="ghost">Top-up SOL</button>
+                <button id="swapToSolBtn" class="ghost">Converter tokens para SOL</button>
+                <button id="closeEmptyAccountsBtn" class="ghost">Recolher SOL (contas vazias)</button>
               </div>
-              <div class="field">
-                <label>Mint manual</label>
-                <input id="kaminoTestMint" placeholder="Mint SPL" />
+            </div>
+            <div class="card compact">
+              <h3>Config</h3>
+              <div class="kv-grid cols-2">
+                <div class="kv"><span>Pool selecionada</span><span id="poolNameLabel">-</span></div>
+                <div class="kv"><span>Network</span><span id="network">-</span></div>
+                <div class="kv"><span>Whirlpool</span><span id="whirlpool">-</span></div>
+                <div class="kv"><span>Range %</span><span id="rangePct">-</span></div>
+                <div class="kv"><span>Slippage bps</span><span id="slippage">-</span></div>
+                <div class="kv"><span>Polling ms</span><span id="poll">-</span></div>
+                <div class="kv"><span>Confirmacao fora da faixa (s)</span><span id="confirmSec">-</span></div>
+                <div class="kv"><span>Cooldown re-range (s)</span><span id="cooldownSec">-</span></div>
+                <div class="kv"><span>Dry-run</span><span id="dryRun">-</span></div>
               </div>
-              <div class="field">
-                <label>Qtd colateral</label>
-                <input id="kaminoTestAmount" type="number" step="any" placeholder="0.0" />
+            </div>
+            <div class="card compact" id="usdCard" style="display: none;">
+              <h3>USD</h3>
+              <div class="kv-grid cols-2">
+                <div class="kv"><span>Preço SOL/USD</span><span id="solUsd">-</span></div>
+                <div class="kv"><span>Budget USD</span><span id="budgetUsd">-</span></div>
+                <div class="kv"><span>Budget SOL</span><span id="budgetSol">-</span></div>
+                <div class="kv"><span>Valor total (USD)</span><span id="portfolioUsd">-</span></div>
+                <div class="kv"><span>PnL (USD)</span><span id="pnlUsd">-</span></div>
               </div>
-              <div class="field">
-                <label>Borrow USD</label>
-                <input id="kaminoTestBorrow" type="number" step="any" placeholder="0.0" />
+            </div>
+          </aside>
+          <div class="dashboard-monitor">
+            <div class="card compact monitor-card market-card">
+              <h3>Market Stats</h3>
+              <div class="kv-grid cols-2">
+                <div class="kv"><span>Preço atual</span><span id="price">-</span></div>
+                <div class="kv"><span>Faixa alvo</span><span id="targetRange">-</span></div>
+                <div class="kv"><span>Faixa posição</span><span id="positionRange">-</span></div>
+                <div class="kv"><span>Saída efetiva (token)</span><span id="effectiveExitToken">-</span></div>
+                <div class="kv"><span>Saída efetiva (direcao)</span><span id="effectiveExitDirection">-</span></div>
+                <div class="kv"><span>Saída efetiva (lado)</span><span id="effectiveExitSide">-</span></div>
               </div>
-              <button id="kaminoTestBtn" class="ghost">Depositar + Borrow</button>
-              <div id="kaminoTestResult" class="kamino-test-result"></div>
+            </div>
+            <div class="card compact monitor-card log-card">
+              <h3>Execution Log</h3>
+              <div class="kv-grid cols-2">
+                <div class="kv"><span>Última execução</span><span id="lastTick">-</span></div>
+                <div class="kv"><span>Ação</span><span id="lastAction">-</span></div>
+                <div class="kv"><span>Erro</span><span id="lastError">-</span></div>
+                <div class="kv"><span>Hedge</span><span id="hedgeStatus">-</span></div>
+                <div class="kv"><span>Hedge erro</span><span id="hedgeError">-</span></div>
+                <div class="kv"><span>Mint posição</span><span id="positionMint">-</span></div>
+              </div>
+            </div>
+            <div class="card compact monitor-card kamino-card">
+              <h3>Kamino Rebalance</h3>
+              <div class="kv-grid cols-2">
+                <div class="kv"><span>Pool</span><span id="kaminoPoolName">-</span></div>
+                <div class="kv"><span>Pool do ciclo</span><span id="kaminoOwnerPool">-</span></div>
+                <div class="kv"><span>Status</span><span id="kaminoStatus">-</span></div>
+                <div class="kv"><span>Habilitado</span><span id="kaminoEnabled">-</span></div>
+                <div class="kv"><span>Simulado</span><span id="kaminoSimulated">-</span></div>
+                <div class="kv"><span>LTV</span><span id="kaminoLtv">-</span></div>
+                <div class="kv"><span>Colateral (USD)</span><span id="kaminoCollateralUsd">-</span></div>
+                <div class="kv"><span>Dívida (USD)</span><span id="kaminoDebtUsd">-</span></div>
+                <div class="kv"><span>Preço médio</span><span id="kaminoAvgPrice">-</span></div>
+                <div class="kv"><span>Preço alvo</span><span id="kaminoTargetPrice">-</span></div>
+              </div>
+              <div id="kaminoAvgModeHint" class="hint">Preço médio (cumulativo desde o início do ciclo)</div>
+              <div class="kv-grid cols-2">
+                <div class="kv"><span>Ciclos</span><span id="kaminoCycleCount">-</span></div>
+                <div class="kv"><span>Erro Kamino</span><span id="kaminoLastError">-</span></div>
+              </div>
+              <div class="kamino-collaterals" id="kaminoCollaterals"></div>
+              <div class="row tight">
+                <button id="kaminoCloseBtn" class="ghost">Fechar ciclo Kamino</button>
+                <button id="kaminoResetBtn" class="ghost danger">Resetar ciclo (local)</button>
+              </div>
+              <div class="kamino-test compact-grid">
+                <div class="field">
+                  <label>Colateral</label>
+                  <select id="kaminoTestToken">
+                    <option value="tokenA">Token A</option>
+                    <option value="tokenB">Token B</option>
+                    <option value="manual">Mint manual</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Mint manual</label>
+                  <input id="kaminoTestMint" placeholder="Mint SPL" />
+                </div>
+                <div class="field">
+                  <label>Qtd colateral</label>
+                  <input id="kaminoTestAmount" type="number" step="any" placeholder="0.0" />
+                </div>
+                <div class="field">
+                  <label>Borrow USD</label>
+                  <input id="kaminoTestBorrow" type="number" step="any" placeholder="0.0" />
+                </div>
+                <button id="kaminoTestBtn" class="ghost">Depositar + Borrow</button>
+                <div id="kaminoTestResult" class="kamino-test-result"></div>
+              </div>
             </div>
           </div>
         </div>
