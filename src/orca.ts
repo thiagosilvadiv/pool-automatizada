@@ -1794,7 +1794,7 @@ export class OrcaBot {
       ? state.collaterals.map((item) => ({ ...item }))
       : [];
     const collateralUsd = collaterals.length
-      ? collaterals.reduce((sum, item) => sum + (Number(item.usd ?? 0) || 0), 0)
+      ? collaterals.reduce((sum, item) => sum + (Number(item.usd ?? item.currentUsd ?? 0) || 0), 0)
       : (state?.collateralUsd ?? null);
     const debtUsd = collaterals.length
       ? collaterals.reduce((sum, item) => sum + (Number(item.debtUsd ?? 0) || 0), 0)
@@ -1885,9 +1885,6 @@ export class OrcaBot {
   }
 
   private async reconcileKaminoState(): Promise<void> {
-    if (!this.kaminoState?.active) {
-      return;
-    }
     if (this.isKaminoSimulated()) {
       return;
     }
@@ -1897,21 +1894,54 @@ export class OrcaBot {
       const hasDebt = (position?.debtAmount ?? 0) > 0;
       const hasCollateral = (position?.collateralAmount ?? 0) > 0;
       if (!position || (!hasDebt && !hasCollateral)) {
+        if (this.kaminoState?.active) {
+          const previous = this.kaminoState;
+          const nextState: KaminoCycleState = {
+            active: false,
+            collateralMint: null,
+            collateralAmount: 0,
+            collateralUsd: null,
+            debtMint: null,
+            debtAmount: 0,
+            debtUsd: null,
+            avgPriceUsdc: null,
+            targetPriceUsdc: null,
+            collaterals: [],
+            cycleCount: previous?.cycleCount ?? 0,
+            updatedAt: new Date().toISOString(),
+            lastError: null
+          };
+          this.kaminoState = this.normalizeKaminoState(nextState);
+        }
+        return;
+      }
+      if (!this.kaminoState?.active) {
+        const recoveredCollaterals: KaminoCollateralEntry[] = [];
+        if (position?.collateralMint && (position.collateralAmount ?? 0) > 0) {
+          recoveredCollaterals.push({
+            mint: position.collateralMint,
+            amount: position.collateralAmount ?? 0,
+            usd: null,
+            debtUsd: null,
+            avgPriceUsdc: null,
+            targetPriceUsdc: null
+          });
+        }
         const previous = this.kaminoState;
         const nextState: KaminoCycleState = {
-          active: false,
-          collateralMint: null,
-          collateralAmount: 0,
+          active: true,
+          collateralMint: position?.collateralMint ?? null,
+          collateralAmount: position?.collateralAmount ?? 0,
           collateralUsd: null,
-          debtMint: null,
-          debtAmount: 0,
+          debtMint: position?.debtMint ?? null,
+          debtAmount: position?.debtAmount ?? 0,
           debtUsd: null,
           avgPriceUsdc: null,
           targetPriceUsdc: null,
-          collaterals: [],
-          cycleCount: previous?.cycleCount ?? 0,
+          collaterals: recoveredCollaterals,
+          cycleCount: Math.max(previous?.cycleCount ?? 0, 1),
           updatedAt: new Date().toISOString(),
-          lastError: null
+          lastError: "Ciclo Kamino recuperado do market (sem histórico)."
         };
         this.kaminoState = this.normalizeKaminoState(nextState);
       }
@@ -2808,12 +2838,13 @@ export class OrcaBot {
       return "kamino-rebalance-failed";
     }
 
-    let openResult: string;
+    let openResult: string = "open-position-failed";
+    let openError: string | null = null;
     try {
       openResult = await this.openPosition(input.executionRange, input.price, input.solUsdPrice);
     } catch (err) {
       this.setError(err);
-      return "kamino-rebalance-failed";
+      openError = stringifyError(err);
     }
     if (openResult === "open-position") {
       this.lastRebalanceAt = Date.now();
@@ -2827,7 +2858,9 @@ export class OrcaBot {
       }
       await this.updatePortfolioSnapshot(input.price, input.solUsdPrice);
     } else {
-      this.setError(`Falha ao reabrir a pool (${openResult})`);
+      if (!openError) {
+        this.setError(`Falha ao reabrir a pool (${openResult})`);
+      }
     }
 
     const previous = this.kaminoState;
@@ -2900,7 +2933,7 @@ export class OrcaBot {
       collaterals: nextCollaterals,
       cycleCount: (previous?.cycleCount ?? 0) + 1,
       updatedAt: new Date().toISOString(),
-      lastError: null
+      lastError: openResult === "open-position" ? null : (this.lastStatus.lastError ?? null)
     };
     this.setKaminoState(nextState);
 

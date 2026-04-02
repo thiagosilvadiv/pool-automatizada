@@ -388,11 +388,25 @@ class RealKaminoClient implements KaminoClient {
       const deposit = obligation.getDeposits()[0];
       const borrow = obligation.getBorrows()[0];
       const ltv = obligation.refreshedStats?.loanToValue?.toNumber?.();
+      const collateralMint = deposit?.mintAddress ?? null;
+      const debtMint = borrow?.mintAddress ?? null;
+      const [collateralDecimals, debtDecimals] = await Promise.all([
+        collateralMint ? this.resolveDecimals(collateralMint) : Promise.resolve(null),
+        debtMint ? this.resolveDecimals(debtMint) : Promise.resolve(null)
+      ]);
+      const collateralRaw = deposit?.amount ? BigInt(deposit.amount.toString()) : null;
+      const debtRaw = borrow?.amount ? BigInt(borrow.amount.toString()) : null;
+      const collateralAmount = (collateralRaw != null && collateralDecimals != null)
+        ? Number(collateralRaw) / Math.pow(10, Math.max(0, collateralDecimals))
+        : null;
+      const debtAmount = (debtRaw != null && debtDecimals != null)
+        ? Number(debtRaw) / Math.pow(10, Math.max(0, debtDecimals))
+        : null;
       return {
-        collateralMint: deposit?.mintAddress ?? null,
-        collateralAmount: deposit?.amount ? Number(deposit.amount.toString()) : null,
-        debtMint: borrow?.mintAddress ?? null,
-        debtAmount: borrow?.amount ? Number(borrow.amount.toString()) : null,
+        collateralMint,
+        collateralAmount,
+        debtMint,
+        debtAmount,
         ltv: Number.isFinite(ltv) ? Number(ltv) : null
       };
     } catch (err) {
