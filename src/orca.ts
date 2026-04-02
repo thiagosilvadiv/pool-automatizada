@@ -16,6 +16,7 @@ import { getSolUsdPrice } from "./pyth.js";
 import { getTrendSnapshot } from "./trend.js";
 import type { TrendDirection, TrendTarget, TrendTimeframe } from "./trend.js";
 import type { KaminoCollateralEntry, KaminoCycleState } from "./kamino-types.js";
+import type { KaminoPositionState } from "./kamino-client.js";
 import { BalanceCoordinator } from "./balance-coordinator.js";
 
 const whirlpools = whirlpoolsSdk as any;
@@ -32,6 +33,7 @@ export type BotContext = {
   onLowSol?: () => Promise<void>;
   poolId?: string | null;
   balanceCoordinator?: BalanceCoordinator | null;
+  getKaminoMarketCandidates?: () => string[];
 };
 
 type PoolState = {
@@ -169,6 +171,8 @@ export class OrcaBot {
   private swapAllowlist: Set<string> | null = null;
   private kaminoState: KaminoCycleState | null = null;
   private kaminoClient: KaminoClient | null = null;
+  private kaminoClientMarket: string | null = null;
+  private kaminoMarketCandidates: (() => string[]) | null = null;
   private poolId: string | null = null;
   private poolName: string | null = null;
   private balanceCoordinator: BalanceCoordinator | null = null;
@@ -249,6 +253,7 @@ export class OrcaBot {
     this.onLowSol = botCtx.onLowSol;
     this.poolId = botCtx.poolId ?? null;
     this.balanceCoordinator = botCtx.balanceCoordinator ?? null;
+    this.kaminoMarketCandidates = botCtx.getKaminoMarketCandidates ?? null;
   }
 
   private resolveTrendTarget(target: TrendTarget): "tokenA" | "tokenB" | null {
@@ -1891,7 +1896,7 @@ export class OrcaBot {
     if (!this.balanceCoordinator || !this.poolId || !this.poolState) {
       return;
     }
-    const state = this.kaminoState;
+    let state = this.kaminoState;
     if (!state?.active) {
       this.balanceCoordinator.clearPool(this.poolId);
       return;
@@ -2141,11 +2146,56 @@ export class OrcaBot {
     this.lastStatus.kaminoCollaterals = nextCollaterals;
   }
 
-  private getKaminoMarketAddress(): string | null {
+  private getConfiguredKaminoMarketAddress(): string | null {
     return this.config.kaminoMarketAddress
       ?? process.env.KAMINO_MARKET
       ?? process.env.KAMINO_MAIN_MARKET
       ?? null;
+  }
+
+  private getKaminoMarketAddress(): string | null {
+    return this.kaminoState?.marketAddress ?? this.getConfiguredKaminoMarketAddress();
+  }
+
+  private getKaminoMarketCandidates(): string[] {
+    const candidates = new Set<string>();
+    const add = (value: string | null | undefined) => {
+      if (!value) return;
+      const trimmed = String(value).trim();
+      if (!trimmed) return;
+      candidates.add(trimmed);
+    };
+    add(this.kaminoState?.marketAddress ?? null);
+    if (this.kaminoMarketCandidates) {
+      for (const entry of this.kaminoMarketCandidates()) {
+        add(entry);
+      }
+    }
+    add(this.getConfiguredKaminoMarketAddress());
+    return Array.from(candidates.values());
+  }
+
+  private async resolveKaminoPositionWithFallback(): Promise<{
+    kamino: KaminoClient;
+    position: KaminoPositionState | null;
+    marketAddress: string | null;
+  }> {
+    const candidates = this.getKaminoMarketCandidates();
+    let lastClient = await this.ensureKaminoClient();
+    let lastMarket = this.getKaminoMarketAddress();
+    for (const market of candidates) {
+      const client = await this.ensureKaminoClient(market);
+      const position = await client.getPositionState();
+      const hasDebt = (position?.debtAmount ?? 0) > 0;
+      const hasCollateral = (position?.collateralAmount ?? 0) > 0
+        || (Array.isArray(position?.deposits) && position!.deposits!.length > 0);
+      if (position && (hasDebt || hasCollateral)) {
+        return { kamino: client, position, marketAddress: market };
+      }
+      lastClient = client;
+      lastMarket = market;
+    }
+    return { kamino: lastClient, position: null, marketAddress: lastMarket ?? null };
   }
 
   private canUseKaminoLock(): { ok: boolean; ownerName?: string } {
@@ -2267,17 +2317,26 @@ export class OrcaBot {
     this.config = config;
     if (previousMarket !== nextMarket) {
       this.kaminoClient = null;
+      this.kaminoClientMarket = null;
     }
     this.outOfRangeSince = null;
   }
 
-  private async ensureKaminoClient(): Promise<KaminoClient> {
-    if (!this.kaminoClient) {
-      this.kaminoClient = await createKaminoClient({
-        connection: this.connection,
-        wallet: this.wallet,
-        config: this.config
-      });
+  private async ensureKaminoClient(marketAddressOverride?: string | null): Promise<KaminoClient> {
+    const override = typeof marketAddressOverride === "string" && marketAddressOverride.trim()
+      ? marketAddressOverride.trim()
+      : (this.kaminoState?.marketAddress ?? null);
+    const desiredMarket = override ?? this.getConfiguredKaminoMarketAddress();
+    if (!this.kaminoClient || (desiredMarket && this.kaminoClientMarket !== desiredMarket)) {
+      this.kaminoClient = await createKaminoClient(
+        {
+          connection: this.connection,
+          wallet: this.wallet,
+          config: this.config
+        },
+        desiredMarket
+      );
+      this.kaminoClientMarket = desiredMarket ?? null;
     }
     return this.kaminoClient;
   }
@@ -2287,9 +2346,7 @@ export class OrcaBot {
   }
 
   private getKaminoMarketHint(): string {
-    const market = this.config.kaminoMarketAddress
-      ?? process.env.KAMINO_MARKET
-      ?? "";
+    const market = this.getKaminoMarketAddress() ?? "";
     return market ? ` (market ${market})` : "";
   }
 
@@ -2814,13 +2871,24 @@ export class OrcaBot {
     this.lastStatus.running = true;
     this.resetActionFee();
 
-    const kamino = await this.ensureKaminoClient();
-    const position = await kamino.getPositionState();
+    const resolved = await this.resolveKaminoPositionWithFallback();
+    const kamino = resolved.kamino;
+    const position = resolved.position;
     if (!position) {
       const message = "Posicao Kamino nao encontrada no market; fechamento cancelado.";
       this.setKaminoState({ ...state, lastError: message });
       this.queueKaminoLog("mismatch", message, "error");
-      return;
+      throw new Error(message);
+    }
+    const previousMarket = state.marketAddress ?? this.getConfiguredKaminoMarketAddress();
+    if (resolved.marketAddress && previousMarket && resolved.marketAddress !== previousMarket) {
+      if (this.poolId) {
+        releaseKaminoLock(this.poolId, previousMarket);
+      }
+      const updated = { ...state, marketAddress: resolved.marketAddress, lastError: null };
+      this.setKaminoState(updated);
+      this.queueKaminoLog("market-fallback", `Market Kamino ajustado para ${resolved.marketAddress}.`, "warn");
+      state = this.kaminoState ?? updated;
     }
 
     const collaterals = Array.isArray(state.collaterals) && state.collaterals.length
@@ -2904,39 +2972,112 @@ export class OrcaBot {
       : await this.getStableMintInfo();
 
     const debtAmount = Math.min(recordedDebtAmount, onChainDebtAmount);
+    const withdrawnForRepay = new Map<string, number>();
+    const recordWithdrawn = (mint: string, amount: number) => {
+      const prev = withdrawnForRepay.get(mint) ?? 0;
+      withdrawnForRepay.set(mint, prev + amount);
+      const current = onChainDeposits.get(mint) ?? 0;
+      onChainDeposits.set(mint, Math.max(0, current - amount));
+    };
+    const repayBufferPct = Math.max(0, Number(this.config.kaminoPriceBufferPct ?? 0.5));
+    const repayTarget = debtAmount * (1 + repayBufferPct / 100);
     if (debtAmount > 0) {
-      const stableBalance = await this.getWalletTokenBalance(stable.mint);
-      if (stableBalance < debtAmount) {
-        if (this.poolState) {
-          const tokenA = this.poolState.tokenMintA.toBase58();
-          const tokenB = this.poolState.tokenMintB.toBase58();
-          if (!this.isSwapAllowlistActive() || this.isSwapAllowed(tokenA)) {
-            const balanceA = (await this.getTokenBalances()).tokenA;
-            if (balanceA > 0) {
-              await this.swapTokenToStable({
-                inputMint: tokenA,
-                inputDecimals: this.poolState.decimalsA,
-                amountUi: balanceA,
+      let stableBalance = await this.getWalletTokenBalance(stable.mint);
+      if (stableBalance + epsilon < debtAmount) {
+        const coverShortfall = async (): Promise<{ ok: boolean; reason?: string }> => {
+          let shortfall = Math.max(0, repayTarget - stableBalance);
+          if (shortfall <= 0) return { ok: true };
+          if (collaterals.length === 0) {
+            return { ok: false, reason: "Sem colateral para quitar a divida" };
+          }
+          const candidates = collaterals.map((entry) => ({
+            mint: entry.mint,
+            amount: Math.max(0, onChainDeposits.get(entry.mint) ?? 0)
+          })).filter((entry) => entry.mint && entry.amount > 0);
+
+          const stableFirst = candidates.filter((entry) => entry.mint === stable.mint);
+          const others = candidates.filter((entry) => entry.mint !== stable.mint);
+
+          for (const entry of stableFirst) {
+            if (shortfall <= 0) break;
+            const withdrawAmount = Math.min(entry.amount, shortfall);
+            if (withdrawAmount <= 0) continue;
+            try {
+              await kamino.withdraw({ mint: entry.mint, amount: withdrawAmount });
+              this.queueHistoryAction("kamino-withdraw");
+              recordWithdrawn(entry.mint, withdrawAmount);
+            } catch (err) {
+              return { ok: false, reason: `Falha ao sacar colateral: ${stringifyError(err)}` };
+            }
+            stableBalance += withdrawAmount;
+            shortfall = Math.max(0, repayTarget - stableBalance);
+          }
+
+          for (const entry of others) {
+            if (shortfall <= 0) break;
+            if (!this.config.jupiterApiKey) {
+              return { ok: false, reason: "Jupiter API key ausente para converter colateral" };
+            }
+            if (this.isSwapAllowlistActive() && !this.isSwapAllowed(entry.mint)) {
+              return { ok: false, reason: "Token de colateral nao permitido para swap" };
+            }
+            const decimals = await this.getTokenDecimals(entry.mint);
+            const priceUsd = await this.getTokenUsdPrice({
+              mint: entry.mint,
+              decimals,
+              stableMint: stable.mint,
+              stableDecimals: stable.decimals
+            });
+            if (priceUsd == null || priceUsd <= 0) {
+              return { ok: false, reason: "Nao foi possivel precificar colateral para repay" };
+            }
+            const requiredAmount = shortfall / priceUsd;
+            const withdrawAmount = Math.min(entry.amount, requiredAmount);
+            if (withdrawAmount <= 0) continue;
+            try {
+              await kamino.withdraw({ mint: entry.mint, amount: withdrawAmount });
+              this.queueHistoryAction("kamino-withdraw");
+              recordWithdrawn(entry.mint, withdrawAmount);
+            } catch (err) {
+              return { ok: false, reason: `Falha ao sacar colateral: ${stringifyError(err)}` };
+            }
+            try {
+              const swappedOut = await this.swapTokenToStable({
+                inputMint: entry.mint,
+                inputDecimals: decimals,
+                amountUi: withdrawAmount,
                 stableMint: stable.mint,
                 stableDecimals: stable.decimals,
-                label: "tokenA->stable"
+                label: "kamino-collateral->stable"
               });
+              if (swappedOut != null) {
+                stableBalance += swappedOut;
+              } else {
+                stableBalance = await this.getWalletTokenBalance(stable.mint);
+              }
+            } catch (err) {
+              return { ok: false, reason: `Falha ao converter colateral: ${stringifyError(err)}` };
             }
+            shortfall = Math.max(0, repayTarget - stableBalance);
           }
-          if (!this.isSwapAllowlistActive() || this.isSwapAllowed(tokenB)) {
-            const balanceB = (await this.getTokenBalances()).tokenB;
-            if (balanceB > 0) {
-              await this.swapTokenToStable({
-                inputMint: tokenB,
-                inputDecimals: this.poolState.decimalsB,
-                amountUi: balanceB,
-                stableMint: stable.mint,
-                stableDecimals: stable.decimals,
-                label: "tokenB->stable"
-              });
-            }
-          }
+          return { ok: shortfall <= 0 };
+        };
+
+        this.queueKaminoLog("repay-collateral", "Usando colateral para pagar a divida.", "warn");
+        const coverage = await coverShortfall();
+        if (!coverage.ok) {
+          const message = coverage.reason ?? "Colateral insuficiente para pagar a divida";
+          this.setKaminoState({ ...state, lastError: message });
+          this.queueKaminoLog("repay-insufficient", message, "error");
+          throw new Error(message);
         }
+        stableBalance = await this.getWalletTokenBalance(stable.mint);
+      }
+      if (stableBalance + epsilon < debtAmount) {
+        const message = "Colateral insuficiente para pagar a divida";
+        this.setKaminoState({ ...state, lastError: message });
+        this.queueKaminoLog("repay-insufficient", message, "error");
+        throw new Error(message);
       }
       try {
         await kamino.repay({ mint: stable.mint, amount: debtAmount });

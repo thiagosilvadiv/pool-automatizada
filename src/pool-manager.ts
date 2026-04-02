@@ -189,6 +189,10 @@ export class PoolManager {
       : [];
   }
 
+  listKaminoMarketCandidates(): string[] {
+    return this.collectKaminoMarketAddresses();
+  }
+
   async setSwapAllowlist(mints: string[]): Promise<{ mints: string[]; updatedAt: string }> {
     const normalized = this.normalizeSwapAllowlist(mints);
     const updatedAt = new Date().toISOString();
@@ -1123,6 +1127,7 @@ export class PoolManager {
       config: poolConfig,
       poolId: entry.id,
       balanceCoordinator: this.balanceCoordinator,
+      getKaminoMarketCandidates: () => this.collectKaminoMarketAddresses(),
       onLowSol: async () => {
         await this.maybeCloseEmptyAccountsOnLowSol();
       }
