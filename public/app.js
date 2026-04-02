@@ -1,4 +1,4 @@
-?const statusBadge = document.getElementById("statusBadge");
+const statusBadge = document.getElementById("statusBadge");
 const runningEl = document.getElementById("running");
 const lastTickEl = document.getElementById("lastTick");
 const lastActionEl = document.getElementById("lastAction");
