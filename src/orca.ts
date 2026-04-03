@@ -281,8 +281,7 @@ export class OrcaBot {
     if (!err) return false;
     const message = String(err?.message ?? err).toLowerCase();
     if (message.includes("too large")) return false;
-    return message.includes("-32602")
-      || message.includes("invalid params")
+    return message.includes("invalid params")
       || message.includes("invalid parameters")
       || message.includes("quote failed")
       || message.includes("quote-failed");
@@ -3481,7 +3480,7 @@ export class OrcaBot {
         if (repayAttempt.error && !repayAttempt.retryable) {
           const msgLower = repayAttempt.error.toLowerCase();
           // Se for tx muito grande, seguimos para fallback manual (withdraw+swap) em vez de abortar.
-          if (!msgLower.includes("too large")) {
+          if (!msgLower.includes("too large") && !msgLower.includes("-32602")) {
             const message = `Repay com colateral falhou: ${repayAttempt.error}`;
             this.setKaminoState({ ...state, lastError: message });
             this.queueKaminoLog("repay-with-collateral-failed", message, "error");
