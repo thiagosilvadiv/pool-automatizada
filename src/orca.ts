@@ -272,6 +272,10 @@ export class OrcaBot {
     if (this.isRateLimitError(err)) return true;
     const message = String(err?.message ?? err).toLowerCase();
     return message.includes("-32002")
+      || message.includes("-32602")
+      || message.includes("quote failed")
+      || message.includes("quote-failed")
+      || message.includes("invalid params")
       || message.includes("rpc response error")
       || message.includes("too many requests")
       || message.includes("429");
@@ -3229,7 +3233,7 @@ export class OrcaBot {
           if (this.isKaminoRetryableError(message)) {
             this.queueKaminoLog("repay-with-collateral-failed", message, "warn");
             return {
-              performed: false,
+              performed: performed,
               debtAmount: debtRemaining,
               onChainDeposits,
               retryable: true,
@@ -3263,7 +3267,8 @@ export class OrcaBot {
         performed,
         debtAmount: debtRemaining,
         onChainDeposits,
-        error: lastQuoteError
+        error: lastQuoteError,
+        retryable: true
       };
     }
 
@@ -3444,6 +3449,12 @@ export class OrcaBot {
           if (wait) {
             return false;
           }
+        }
+        if (repayAttempt.error && !repayAttempt.retryable) {
+          const message = `Repay com colateral falhou: ${repayAttempt.error}`;
+          this.setKaminoState({ ...state, lastError: message });
+          this.queueKaminoLog("repay-with-collateral-failed", message, "error");
+          throw new Error(message);
         }
         if (repayAttempt.performed) {
           debtAmount = repayAttempt.debtAmount;
