@@ -4748,51 +4748,68 @@ export class OrcaBot {
 
   private async executeJupiterSwapDetailed(quoteResponse: any): Promise<{ sig: string | null; error?: string }> {
     const base = this.config.jupiterApiUrl.replace(/\/+$/, "");
-    try {
-      const { res, text } = await this.jupiterRequest(
-        `${base}/swap/v1/swap`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": this.config.jupiterApiKey ?? ""
-          },
-          body: JSON.stringify({
-            quoteResponse,
-            userPublicKey: this.wallet.publicKey.toBase58(),
-            wrapAndUnwrapSol: true
-          })
-        },
-        { retries: 2 }
-      );
-      if (!res.ok) {
-        return { sig: null, error: formatJupiterError(res.status, text) };
-      }
-      if (!text) {
-        return { sig: null, error: "Resposta vazia" };
-      }
-      let data: any;
+    let lastError: string | null = null;
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
-        data = JSON.parse(text);
-      } catch {
-        return { sig: null, error: "JSON invalido" };
+        const { res, text } = await this.jupiterRequest(
+          `${base}/swap/v1/swap`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": this.config.jupiterApiKey ?? ""
+            },
+            body: JSON.stringify({
+              quoteResponse,
+              userPublicKey: this.wallet.publicKey.toBase58(),
+              wrapAndUnwrapSol: true
+            })
+          },
+          { retries: 2 }
+        );
+        if (!res.ok) {
+          lastError = formatJupiterError(res.status, text);
+          if (attempt < maxAttempts && this.isKaminoRetryableError(lastError)) {
+            await this.sleep(KAMINO_REBALANCE_RETRY_SEC * 1000);
+            continue;
+          }
+          return { sig: null, error: lastError };
+        }
+        if (!text) {
+          return { sig: null, error: "Resposta vazia" };
+        }
+        let data: any;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          return { sig: null, error: "JSON invalido" };
+        }
+        const swapTx = data?.swapTransaction;
+        if (!swapTx) {
+          return { sig: null, error: "swapTransaction ausente" };
+        }
+        const tx = VersionedTransaction.deserialize(Buffer.from(swapTx, "base64"));
+        const signed = await this.wallet.signTransaction(tx);
+        const sig = await this.connection.sendRawTransaction(signed.serialize(), { maxRetries: 2 });
+        await this.connection.confirmTransaction(sig, "confirmed");
+        const feeLamports = await this.fetchTxFeeLamports(sig);
+        this.addActionFee(feeLamports);
+        return { sig };
+      } catch (err) {
+        const logs = await extractSendTxLogs(err);
+        const message = formatErrorWithLogs(stringifyError(err), logs);
+        lastError = message;
+        const lower = message.toLowerCase();
+        if (attempt < maxAttempts && (this.isKaminoRetryableError(message) || lower.includes("0x1771"))) {
+          logger.warn({ attempt, err: message }, "swap jupiter retry after transient/slippage error");
+          await this.sleep(KAMINO_REBALANCE_RETRY_SEC * 1000);
+          continue;
+        }
+        return { sig: null, error: message };
       }
-      const swapTx = data?.swapTransaction;
-      if (!swapTx) {
-        return { sig: null, error: "swapTransaction ausente" };
-      }
-      const tx = VersionedTransaction.deserialize(Buffer.from(swapTx, "base64"));
-      const signed = await this.wallet.signTransaction(tx);
-      const sig = await this.connection.sendRawTransaction(signed.serialize(), { maxRetries: 2 });
-      await this.connection.confirmTransaction(sig, "confirmed");
-      const feeLamports = await this.fetchTxFeeLamports(sig);
-      this.addActionFee(feeLamports);
-      return { sig };
-    } catch (err) {
-      const logs = await extractSendTxLogs(err);
-      const message = formatErrorWithLogs(stringifyError(err), logs);
-      return { sig: null, error: message };
     }
+    return { sig: null, error: lastError ?? "Swap Jupiter falhou apos retries" };
   }
 
   private async swapWalletToSol(reason: "auto" | "manual"): Promise<SwapWalletToSolResult> {
