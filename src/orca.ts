@@ -3184,6 +3184,10 @@ export class OrcaBot {
       }
     };
 
+    let maxChunk = debtRemaining;
+    let chunkAdjustments = 0;
+    const maxChunkAdjustments = 4; // reduce size a few times if txn too large
+
     while (debtRemaining > epsilon) {
       const sorted = [...candidates].sort((a, b) => {
         const usdDiff = (b.usd ?? 0) - (a.usd ?? 0);
@@ -3205,7 +3209,7 @@ export class OrcaBot {
           continue;
         }
         try {
-          const repayAmount = debtRemaining;
+          const repayAmount = Math.min(debtRemaining, maxChunk);
           this.queueKaminoLog(
             "repay-with-collateral",
             `Tentando repay de ${repayAmount.toFixed(8)} com colateral ${candidate.mint}.`,
@@ -3230,6 +3234,18 @@ export class OrcaBot {
           break;
         } catch (err) {
           const message = stringifyError(err);
+          if (message.toLowerCase().includes("too large")) {
+            if (chunkAdjustments < maxChunkAdjustments) {
+              chunkAdjustments += 1;
+              maxChunk = Math.max(debtRemaining / 2, epsilon * 10);
+              this.queueKaminoLog(
+                "repay-with-collateral",
+                `Transacao grande demais; reduzindo chunk para ${maxChunk.toFixed(8)}.`,
+                "warn"
+              );
+              continue;
+            }
+          }
           if (this.isKaminoRetryableError(message)) {
             this.queueKaminoLog("repay-with-collateral-failed", message, "warn");
             return {
