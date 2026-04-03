@@ -488,7 +488,10 @@ export class OrcaBot {
           this.lastStatus.positionMint = this.currentPositionMint;
           return this.getStatus();
         }
-        openOptions = { maxTokenA: reservedA, maxTokenB: reservedB };
+        const caps: { maxTokenA?: number; maxTokenB?: number } = {};
+        if (reservedA > 0) caps.maxTokenA = reservedA;
+        if (reservedB > 0) caps.maxTokenB = reservedB;
+        openOptions = Object.keys(caps).length ? caps : undefined;
       }
 
       logger.info({ price, range: executionRange }, "no active position found; opening new position");
