@@ -64,14 +64,23 @@ export function selectRepayChunkWithQuote(params: {
   if (!Number.isFinite(capacityUi) || capacityUi <= 0) {
     return { chunk: 0, reason: "capacidade de saque insuficiente" };
   }
-  if (!Number.isFinite(priceCollToDebt) || priceCollToDebt <= 0) {
-    return { chunk: 0, reason: "preco indisponivel para colateral" };
+  const priceFromQuote =
+    quoteOutStableUi != null && capacityUi > 0 ? quoteOutStableUi / capacityUi : null;
+  const effectivePrice =
+    priceFromQuote != null && priceFromQuote > 0
+      ? priceFromQuote
+      : Number.isFinite(priceCollToDebt) && priceCollToDebt > 0
+        ? priceCollToDebt
+        : 0;
+  if (!Number.isFinite(effectivePrice) || effectivePrice <= 0) {
+    return { chunk: 0, reason: "preco/quote indisponivel para colateral" };
   }
-  const maxByPrice = capacityUi * priceCollToDebt;
+  const maxByPrice = capacityUi * effectivePrice;
   const maxByQuote = quoteOutStableUi != null ? quoteOutStableUi : maxByPrice;
   let chunk = Math.min(debtRemaining, Math.max(0, maxByQuote));
   // Sanidade: se precisar de mais colateral que a capacidade tolerada, limite ao preço
-  const collNeededForDebt = priceCollToDebt > 0 ? debtRemaining / priceCollToDebt : Number.POSITIVE_INFINITY;
+  const collNeededForDebt =
+    effectivePrice > 0 ? debtRemaining / effectivePrice : Number.POSITIVE_INFINITY;
   if (collNeededForDebt > capacityUi * tolerance) {
     chunk = Math.min(chunk, maxByPrice);
   }
