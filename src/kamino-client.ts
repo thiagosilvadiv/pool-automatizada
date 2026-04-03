@@ -32,6 +32,7 @@ import {
   type SwapInputs
 } from "@kamino-finance/klend-sdk";
 import DecimalJs from "decimal.js";
+import type { Decimal as DecimalType } from "decimal.js";
 import { getSolanaErrorFromJsonRpcError, SolanaError } from "@solana/errors";
 
 import { Config } from "./config.js";
@@ -124,7 +125,7 @@ function toRawAmount(amount: number, decimals: number): bigint {
   return BigInt(Math.floor(amount * factor));
 }
 
-export function lamportsToUi(lamports: Decimal, decimals: number): number {
+export function lamportsToUi(lamports: DecimalType | null | undefined, decimals: number): number {
   if (!lamports || !(lamports as any).isFinite?.()) return 0;
   const divisor = Math.pow(10, Math.max(0, decimals));
   return (lamports as any).div(divisor).toNumber();
@@ -817,7 +818,7 @@ class RealKaminoClient implements KaminoClient {
     } catch {
       // ignore; capacity still useful
     }
-    let maxWithdrawLamports: Decimal;
+    let maxWithdrawLamports: DecimalType;
     try {
       maxWithdrawLamports = obligation.getMaxWithdrawAmountWithRepay(
         market,
