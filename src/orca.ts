@@ -29,6 +29,9 @@ const KAMINO_REPAY_CHUNK_FACTOR = 0.5;
 const KAMINO_REPAY_MIN_STABLE = 0.1; // unidade do stable
 const KAMINO_WITHDRAW_MIN = 0.000001;
 const KAMINO_REBALANCE_RETRY_SEC = 10;
+const DEFAULT_TX_SIZE_THRESHOLD = 1200;
+const FORCE_SPLIT_SOL = true;
+const JUPITER_DIRECT_ONLY = true;
 
 export function computeRiskAwareRepayChunk(params: {
   debtRemaining: number;
@@ -2358,6 +2361,18 @@ export class OrcaBot {
     this.pendingHistoryActions.push(snapshot);
   }
 
+  private async ensureAtaIfMissing(mint: string): Promise<void> {
+    try {
+      const ata = getAssociatedTokenAddressSync(new PublicKey(mint), this.wallet.publicKey);
+      const info = await this.connection.getAccountInfo(ata);
+      if (!info) {
+        this.queueKaminoLog("ata-missing", `ATA ausente para ${mint}; crie antes do repay para evitar instrucoes extras.`, "warn");
+      }
+    } catch (err) {
+      logger.warn({ err, mint }, "falha ao checar ATA");
+    }
+  }
+
   queueKaminoLog(action: string, message: string, level: "info" | "warn" | "error" = "info"): void {
     const entry: KaminoLogItem = {
       action,
@@ -3398,6 +3413,8 @@ export class OrcaBot {
           continue;
         }
         try {
+          await this.ensureAtaIfMissing(candidate.mint);
+          await this.ensureAtaIfMissing(input.debtMint);
           const collDecimals = await this.getTokenDecimals(candidate.mint);
           const debtDecimals = await this.getTokenDecimals(input.debtMint);
           const capacity = await input.kamino.getWithdrawCapacity({
@@ -3412,6 +3429,7 @@ export class OrcaBot {
             stableMint: input.debtMint,
             stableDecimals: debtDecimals
           });
+          const isSolColl = candidate.mint === NATIVE_MINT.toBase58();
           const quoteOutStableUi = await this.estimateStableOutForCollateral({
             collMint: candidate.mint,
             collDecimals,
@@ -3432,6 +3450,7 @@ export class OrcaBot {
           }
           const effectivePrice = Math.max(0, priceCollToDebt ?? 0);
           const preferSplit =
+            isSolColl ||
             this.kaminoTooLargeSeen ||
             (quoteOutStableUi != null &&
               capacity.capacityUi > 0 &&
@@ -5036,6 +5055,9 @@ export class OrcaBot {
       swapMode: "ExactIn",
       slippageBps: String(slippageBps)
     });
+    if (JUPITER_DIRECT_ONLY) {
+      params.set("onlyDirectRoutes", "true");
+    }
     if (Array.isArray(this.config.jupiterExcludeDexes) && this.config.jupiterExcludeDexes.length > 0) {
       params.set("excludeDexes", this.config.jupiterExcludeDexes.join(","));
     }
