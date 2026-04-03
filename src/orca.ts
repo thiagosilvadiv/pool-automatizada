@@ -3316,6 +3316,25 @@ export class OrcaBot {
     if (!collaterals.length) {
       return false;
     }
+
+    // Se a dívida já foi zerada mas ainda há colateral depositado,
+    // fechar imediatamente sem aguardar o preço-alvo.
+    // Isso ocorre quando o ciclo é reconstruído após debt-zero:
+    // o colateral existe on-chain mas não há mais dívida a pagar.
+    const epsilon = 1e-8;
+    const currentDebt = Number(state.debtAmount ?? 0);
+    if (currentDebt <= epsilon) {
+      this.queueKaminoLog(
+        "close-debt-zero",
+        "Divida zerada com colateral residual; sacando colateral automaticamente.",
+        "warn"
+      );
+      const closed = await this.closeKaminoCycle("target");
+      if (closed) {
+        this.lastStatus.lastAction = "kamino-close";
+      }
+      return closed;
+    }
     try {
       const stable = await this.getStableMintInfo();
       const poolPnlNoFeesUsd = this.getPositionPnlNoFeesUsd();
