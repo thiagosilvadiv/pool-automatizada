@@ -1782,6 +1782,10 @@ export class OrcaBot {
     if (amountIn <= 0) {
       return false;
     }
+    if (this.isSwapAllowlistActive() && !this.isSwapAllowed(inputMint.toBase58())) {
+      this.setError("Swap bloqueado: token nao permitido na allowlist");
+      return false;
+    }
 
     logger.info({ inputMint: inputMint.toBase58(), amountIn }, "attempting rebalance swap");
 
@@ -2668,6 +2672,9 @@ export class OrcaBot {
     amountStableRaw: bigint;
     label?: string;
   }): Promise<number | null> {
+    if (this.isSwapAllowlistActive() && !this.isSwapAllowed(input.outputMint)) {
+      throw new Error("Swap bloqueado: token nao permitido na allowlist");
+    }
     if (!this.config.jupiterApiKey) {
       throw new Error("Jupiter API key ausente");
     }
@@ -2706,6 +2713,9 @@ export class OrcaBot {
     stableDecimals: number;
     label?: string;
   }): Promise<number | null> {
+    if (this.isSwapAllowlistActive() && !this.isSwapAllowed(input.inputMint)) {
+      throw new Error("Swap bloqueado: token nao permitido na allowlist");
+    }
     if (!this.config.jupiterApiKey) {
       throw new Error("Jupiter API key ausente");
     }
