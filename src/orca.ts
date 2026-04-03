@@ -3185,7 +3185,6 @@ export class OrcaBot {
     let maxChunk = debtRemaining;
     let chunkAdjustments = 0;
     const maxChunkAdjustments = 6; // more attempts to shrink tx size
-    let tooLargeAbort = false;
 
     while (debtRemaining > epsilon) {
       const sorted = [...candidates].sort((a, b) => {
@@ -3236,9 +3235,17 @@ export class OrcaBot {
           lastFailure = message;
           const lower = message.toLowerCase();
           if (lower.includes("too large")) {
-            tooLargeAbort = true;
-            usedCandidate = true;
-            break;
+            if (chunkAdjustments < maxChunkAdjustments) {
+              chunkAdjustments += 1;
+              maxChunk = Math.max(debtRemaining / Math.pow(2, chunkAdjustments + 2), epsilon * 10);
+              this.queueKaminoLog(
+                "repay-with-collateral",
+                `Transacao grande; reduzindo chunk para ${maxChunk.toFixed(8)} e tentando de novo.`,
+                "warn"
+              );
+              usedCandidate = true; // triggers outer while to retry with smaller chunk
+              break;
+            }
           }
           if (this.isKaminoRetryableError(message)) {
             this.queueKaminoLog("repay-with-collateral-failed", message, "warn");
@@ -3269,10 +3276,6 @@ export class OrcaBot {
         }
       }
 
-      if (tooLargeAbort) {
-        // Stop looping; caller will handle fallback withdraw+swap.
-        break;
-      }
       if (!usedCandidate) break;
     }
 
@@ -3293,16 +3296,6 @@ export class OrcaBot {
         onChainDeposits,
         error: lastFailure,
         retryable: this.isKaminoRetryableError(lastFailure)
-      };
-    }
-
-    if (tooLargeAbort) {
-      return {
-        performed,
-        debtAmount: debtRemaining,
-        onChainDeposits,
-        error: "tx-too-large",
-        retryable: false
       };
     }
 
@@ -3528,7 +3521,7 @@ export class OrcaBot {
               const required = priceUsd && priceUsd > 0 ? shortfall / priceUsd * 1.05 : shortfall;
               let withdrawAmount = Math.min(pick.amount, required);
               let attempts = 0;
-              const maxAttempts = 5;
+              const maxAttempts = 10;
               while (withdrawAmount > epsilon && attempts < maxAttempts) {
                 attempts += 1;
                 try {
@@ -3556,8 +3549,13 @@ export class OrcaBot {
                   break;
                 } catch (err) {
                   const msg = stringifyError(err).toLowerCase();
-                  if (msg.includes("withdrawtoo") || msg.includes("too large")) {
+                  if (withdrawAmount > epsilon * 10) {
                     withdrawAmount = withdrawAmount / 2;
+                    this.queueKaminoLog(
+                      "repay-fallback",
+                      `Saque reduziu para ${withdrawAmount.toFixed(8)} por erro: ${msg}`,
+                      "warn"
+                    );
                     continue;
                   }
                   throw err;
