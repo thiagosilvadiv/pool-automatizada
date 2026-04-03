@@ -2375,7 +2375,7 @@ export class OrcaBot {
             debtAmount: onChainDebt,
             collaterals: recoveredCollaterals,
             updatedAt: new Date().toISOString(),
-            lastError: "Estado Kamino reconciliado com on-chain."
+            lastError: null
           };
           this.setKaminoState(updated);
           this.queueKaminoLog("reconcile", "Estado Kamino reconciliado com on-chain.", "warn");
@@ -3011,7 +3011,7 @@ export class OrcaBot {
       state = this.kaminoState ?? updated;
     }
 
-    const collaterals = Array.isArray(state.collaterals) && state.collaterals.length
+    let collaterals = Array.isArray(state.collaterals) && state.collaterals.length
       ? state.collaterals
       : (state.collateralMint
         ? [{
@@ -3037,8 +3037,8 @@ export class OrcaBot {
       onChainBorrows.set(item.mint, current + (Number(item.amount) || 0));
     });
 
-    const debtMint = state.debtMint ?? position.debtMint ?? null;
-    const recordedDebtAmount = Number(state.debtAmount ?? 0);
+    let debtMint = state.debtMint ?? position.debtMint ?? null;
+    let recordedDebtAmount = Number(state.debtAmount ?? 0);
     const onChainDebtAmount = debtMint ? (onChainBorrows.get(debtMint) ?? 0) : 0;
     const borrowMints = Array.from(onChainBorrows.keys()).filter((mint) => mint && mint !== debtMint);
 
@@ -3065,11 +3065,39 @@ export class OrcaBot {
       mismatchReasons.push("dividas em outros ativos detectadas");
     }
     if (mismatchReasons.length > 0) {
-      const message = `Mismatch Kamino on-chain: ${mismatchReasons.join("; ")}`;
-      this.setKaminoState({ ...state, lastError: message });
-      this.queueKaminoLog("mismatch", message, mode === "manual" ? "warn" : "error");
-      if (mode !== "manual") {
-        return;
+      const canReconcile = borrowMints.length === 0;
+      if (canReconcile) {
+        const reconciledCollaterals = Array.from(onChainDeposits.entries()).map(([mint, amount]) => ({
+          mint,
+          amount,
+          usd: null,
+          debtUsd: null,
+          avgPriceUsdc: null,
+          targetPriceUsdc: null
+        }));
+        const updated: KaminoCycleState = {
+          ...state,
+          collateralMint: position.collateralMint ?? state.collateralMint ?? null,
+          collateralAmount: Number(position.collateralAmount ?? 0),
+          debtMint: position.debtMint ?? state.debtMint ?? null,
+          debtAmount: Number(position.debtAmount ?? 0),
+          collaterals: reconciledCollaterals,
+          updatedAt: new Date().toISOString(),
+          lastError: null
+        };
+        this.setKaminoState(updated);
+        this.queueKaminoLog("reconcile", "Estado Kamino reconciliado no fechamento.", "warn");
+        state = this.kaminoState ?? updated;
+        collaterals = reconciledCollaterals;
+        debtMint = updated.debtMint ?? debtMint;
+        recordedDebtAmount = Number(updated.debtAmount ?? recordedDebtAmount);
+      } else {
+        const message = `Mismatch Kamino on-chain: ${mismatchReasons.join("; ")}`;
+        this.setKaminoState({ ...state, lastError: message });
+        this.queueKaminoLog("mismatch", message, mode === "manual" ? "warn" : "error");
+        if (mode !== "manual") {
+          return;
+        }
       }
     }
 
