@@ -639,6 +639,12 @@ export class OrcaBot {
     logger.info({ price, positionRange }, "price out of range; rebalancing");
     this.outOfRangeSince = null;
     await this.updatePortfolioSnapshot(price, solUsdPrice);
+    let preCloseBalancesRaw: { tokenA: number; tokenB: number } | null = null;
+    try {
+      preCloseBalancesRaw = await this.getTokenBalancesRaw();
+    } catch {
+      preCloseBalancesRaw = null;
+    }
     this.captureCloseSnapshot();
     await this.closePosition(this.currentPosition);
     this.queueHistoryAction("close-position", { lastAction: "close-position" });
@@ -3576,6 +3582,12 @@ export class OrcaBot {
     let deposited = false;
     this.outOfRangeSince = null;
 
+    let preCloseBalancesRaw: { tokenA: number; tokenB: number } | null = null;
+    try {
+      preCloseBalancesRaw = await this.getTokenBalancesRaw();
+    } catch {
+      preCloseBalancesRaw = null;
+    }
     this.captureCloseSnapshot();
     await this.closePosition(this.currentPosition);
     this.queueHistoryAction("close-position", { lastAction: "close-position" });
@@ -3598,8 +3610,12 @@ export class OrcaBot {
       });
     };
 
-    const baselineBalances = await this.getTokenBalancesRaw();
-    let balances = await this.getTokenBalances();
+    let baselineBalances = await this.getTokenBalancesRaw();
+    let exitBalancesRaw = {
+      tokenA: Math.max(0, baselineBalances.tokenA - (preCloseBalancesRaw?.tokenA ?? 0)),
+      tokenB: Math.max(0, baselineBalances.tokenB - (preCloseBalancesRaw?.tokenB ?? 0))
+    };
+    let balances = this.applyBalanceCoordinator(exitBalancesRaw);
     const collateralMode = this.config.kaminoCollateralMode ?? "max-value";
     if (this.config.kaminoConvertToCollateral && (collateralMode === "tokenA" || collateralMode === "tokenB")) {
       const tokenAMint = this.poolState.tokenMintA.toBase58();
@@ -3633,7 +3649,12 @@ export class OrcaBot {
           this.setError(swapResult.error ?? "Falha na swap Jupiter");
           return "kamino-rebalance-failed";
         }
-        balances = await this.getTokenBalances();
+        baselineBalances = await this.getTokenBalancesRaw();
+        exitBalancesRaw = {
+          tokenA: Math.max(0, baselineBalances.tokenA - (preCloseBalancesRaw?.tokenA ?? 0)),
+          tokenB: Math.max(0, baselineBalances.tokenB - (preCloseBalancesRaw?.tokenB ?? 0))
+        };
+        balances = this.applyBalanceCoordinator(exitBalancesRaw);
       }
     }
     let exitTokens: Awaited<ReturnType<typeof resolveTokens>>;
@@ -3696,6 +3717,8 @@ export class OrcaBot {
       this.setError("Saldo insuficiente para depositar no Kamino");
       return "kamino-rebalance-failed";
     }
+
+    // Deposito Kamino usa apenas o saldo que saiu da pool (delta do fechamento).
 
     for (const entry of deposits) {
       if (entry.depositUsd == null || !Number.isFinite(entry.depositUsd)) {
@@ -3934,12 +3957,41 @@ export class OrcaBot {
       return "kamino-wait-funds";
     }
 
+    let maxTokenA = reservedTokenA;
+    let maxTokenB = reservedTokenB;
+    if (this.config.budgetUsd != null && (reservedTokenA > 0 || reservedTokenB > 0)) {
+      try {
+        if (this.poolState.isTokenASol || this.poolState.isTokenBSol) {
+          const solUsd = input.solUsdPrice ?? await this.tryGetSolUsdPrice();
+          if (solUsd) {
+            const budgetSol = this.config.budgetUsd / solUsd;
+            const budgetTokenB = this.poolState.isTokenBSol ? budgetSol : budgetSol * input.price;
+            const reservedValueB = reservedTokenB + reservedTokenA * input.price;
+            if (budgetTokenB > reservedValueB) {
+              const available = await this.getTokenBalances();
+              const extraA = Math.max(0, available.tokenA - reservedTokenA);
+              const extraB = Math.max(0, available.tokenB - reservedTokenB);
+              const extraValueB = extraB + extraA * input.price;
+              if (extraValueB > 0) {
+                const missing = budgetTokenB - reservedValueB;
+                const factor = Math.min(1, missing / extraValueB);
+                maxTokenA = reservedTokenA + extraA * factor;
+                maxTokenB = reservedTokenB + extraB * factor;
+              }
+            }
+          }
+        }
+      } catch (err) {
+        logger.warn({ err }, "falha ao calcular top-up de budget para reabertura Kamino");
+      }
+    }
+
     let openResult: string = "open-position-failed";
     let openError: string | null = null;
     try {
       openResult = await this.openPosition(input.executionRange, input.price, input.solUsdPrice, {
-        maxTokenA: reservedTokenA,
-        maxTokenB: reservedTokenB
+        maxTokenA,
+        maxTokenB
       });
     } catch (err) {
       this.setError(err);
