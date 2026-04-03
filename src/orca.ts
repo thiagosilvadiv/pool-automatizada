@@ -3056,6 +3056,79 @@ export class OrcaBot {
     return false;
   }
 
+  private async tryRepayWithCollateral(input: {
+    kamino: KaminoClient;
+    collaterals: KaminoCollateralEntry[];
+    debtMint: string;
+    debtAmount: number;
+    onChainDeposits: Map<string, number>;
+  }): Promise<{ performed: boolean; debtAmount: number; onChainDeposits: Map<string, number> }> {
+    if (!input.collaterals.length || input.debtAmount <= 0) {
+      return { performed: false, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
+    }
+    if (!this.config.jupiterApiKey) {
+      this.queueKaminoLog("repay-with-collateral", "Jupiter API key ausente para repay com colateral.", "warn");
+      return { performed: false, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
+    }
+    const candidates = input.collaterals
+      .map((entry) => ({
+        mint: entry.mint,
+        amount: Math.max(0, input.onChainDeposits.get(entry.mint) ?? 0),
+        usd: Number(entry.usd ?? 0)
+      }))
+      .filter((entry) => entry.mint && entry.amount > 0 && entry.mint !== input.debtMint);
+    if (!candidates.length) {
+      return { performed: false, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
+    }
+    candidates.sort((a, b) => {
+      const usdDiff = (b.usd ?? 0) - (a.usd ?? 0);
+      if (Math.abs(usdDiff) > 0) return usdDiff;
+      return b.amount - a.amount;
+    });
+    const candidate = candidates[0];
+    if (!candidate?.mint) {
+      return { performed: false, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
+    }
+    if (this.isSwapAllowlistActive() && !this.isSwapAllowed(candidate.mint)) {
+      this.queueKaminoLog(
+        "repay-with-collateral",
+        "Token de colateral nao permitido para swap; repay com colateral bloqueado.",
+        "warn"
+      );
+      return { performed: false, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
+    }
+    try {
+      await input.kamino.repayWithCollateral({
+        collateralMint: candidate.mint,
+        debtMint: input.debtMint,
+        repayAmount: input.debtAmount,
+        slippageBps: this.config.slippageBps
+      });
+      this.queueHistoryAction("kamino-repay");
+      this.queueKaminoLog("repay-with-collateral", "Repay com colateral concluido.", "info");
+    } catch (err) {
+      this.queueKaminoLog("repay-with-collateral-failed", stringifyError(err), "error");
+      return { performed: false, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
+    }
+
+    try {
+      const position = await input.kamino.getPositionState();
+      if (position) {
+        const nextDeposits = new Map<string, number>();
+        for (const entry of position.deposits ?? []) {
+          if (entry?.mint) {
+            nextDeposits.set(entry.mint, Math.max(0, Number(entry.amount ?? 0)));
+          }
+        }
+        const nextDebt = Math.max(0, Number(position.debtAmount ?? 0));
+        return { performed: true, debtAmount: nextDebt, onChainDeposits: nextDeposits };
+      }
+    } catch (err) {
+      logger.warn({ err }, "falha ao atualizar posicao Kamino apos repay com colateral");
+    }
+    return { performed: true, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
+  }
+
   private async closeKaminoCycle(mode: "manual" | "target" | "token-change"): Promise<void> {
     let state = this.kaminoState;
     if (!state || !state.active) {
@@ -3102,7 +3175,7 @@ export class OrcaBot {
         }]
         : []);
 
-    const onChainDeposits = new Map<string, number>();
+    let onChainDeposits = new Map<string, number>();
     (position.deposits ?? []).forEach((item) => {
       if (!item?.mint) return;
       const current = onChainDeposits.get(item.mint) ?? 0;
@@ -3201,7 +3274,7 @@ export class OrcaBot {
       ? await this.getStableMintInfoByMint(debtMint, this.getStableLabelForMint(debtMint))
       : await this.getStableMintInfo();
 
-    const debtAmount = Math.min(recordedDebtAmount, onChainDebtAmount);
+    let debtAmount = Math.min(recordedDebtAmount, onChainDebtAmount);
     const withdrawnForRepay = new Map<string, number>();
     const recordWithdrawn = (mint: string, amount: number) => {
       const prev = withdrawnForRepay.get(mint) ?? 0;
@@ -3210,10 +3283,25 @@ export class OrcaBot {
       onChainDeposits.set(mint, Math.max(0, current - amount));
     };
     const repayBufferPct = Math.max(0, Number(this.config.kaminoPriceBufferPct ?? 0.5));
-    const repayTarget = debtAmount * (1 + repayBufferPct / 100);
+    let repayTarget = debtAmount * (1 + repayBufferPct / 100);
     if (debtAmount > 0) {
       let stableBalance = await this.getWalletTokenBalance(stable.mint);
       if (stableBalance + epsilon < debtAmount) {
+        const repayAttempt = await this.tryRepayWithCollateral({
+          kamino,
+          collaterals,
+          debtMint: stable.mint,
+          debtAmount,
+          onChainDeposits
+        });
+        if (repayAttempt.performed) {
+          debtAmount = repayAttempt.debtAmount;
+          onChainDeposits = repayAttempt.onChainDeposits;
+          stableBalance = await this.getWalletTokenBalance(stable.mint);
+          repayTarget = debtAmount * (1 + repayBufferPct / 100);
+        }
+      }
+      if (debtAmount > 0 && stableBalance + epsilon < debtAmount) {
         const coverShortfall = async (): Promise<{ ok: boolean; reason?: string }> => {
           let shortfall = Math.max(0, repayTarget - stableBalance);
           if (shortfall <= 0) return { ok: true };

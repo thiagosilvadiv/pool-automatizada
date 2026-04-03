@@ -5,7 +5,9 @@ import {
   createSolanaRpc,
   createSolanaRpcSubscriptions,
   createTransactionMessage,
+  fetchAddressesForLookupTables,
   getSignatureFromTransaction,
+  none,
   pipe,
   sendAndConfirmTransactionFactory,
   setTransactionMessageFeePayerSigner,
@@ -13,9 +15,22 @@ import {
   signTransactionMessageWithSigners,
   type Address
 } from "@solana/kit";
+import { AccountRole, type Instruction } from "@solana/instructions";
+import { compressTransactionMessageUsingAddressLookupTables } from "@solana/transaction-messages";
 import { createKeyPairSignerFromBytes, type TransactionSigner } from "@solana/signers";
 import { getMint } from "@solana/spl-token";
-import { KaminoAction, KaminoMarket, PROGRAM_ID, VanillaObligation } from "@kamino-finance/klend-sdk";
+import {
+  KaminoAction,
+  KaminoMarket,
+  PROGRAM_ID,
+  VanillaObligation,
+  getRepayWithCollIxs,
+  type SwapIxsProvider,
+  type SwapQuoteProvider,
+  type SwapQuote,
+  type SwapInputs
+} from "@kamino-finance/klend-sdk";
+import DecimalJs from "decimal.js";
 
 import { Config } from "./config.js";
 import { logger } from "./logger.js";
@@ -42,6 +57,7 @@ export type KaminoClient = {
   depositCollateral(input: { mint: string; amount: number }): Promise<string>;
   borrow(input: { mint: string; amount: number }): Promise<string>;
   repay(input: { mint: string; amount: number }): Promise<string>;
+  repayWithCollateral(input: { collateralMint: string; debtMint: string; repayAmount: number; slippageBps?: number }): Promise<string>;
   withdraw(input: { mint: string; amount: number }): Promise<string>;
   getPositionState(): Promise<KaminoPositionState | null>;
   supportsCollateral(mint: string): Promise<boolean>;
@@ -51,6 +67,42 @@ export type KaminoClient = {
 const DEFAULT_KAMINO_MARKET = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF";
 const DEFAULT_RECENT_SLOT_DURATION_MS = 400;
 const MAX_U64 = 18_446_744_073_709_551_615n;
+const Decimal: any = DecimalJs;
+
+type JupiterInstruction = {
+  programId: string;
+  accounts?: { pubkey: string; isSigner: boolean; isWritable: boolean }[];
+  data?: string;
+};
+
+type JupiterSwapInstructionsResponse = {
+  setupInstructions?: JupiterInstruction[];
+  swapInstruction?: JupiterInstruction;
+  cleanupInstruction?: JupiterInstruction;
+  tokenLedgerInstruction?: JupiterInstruction;
+  computeBudgetInstructions?: JupiterInstruction[];
+  addressLookupTableAddresses?: string[];
+};
+
+function mapAccountRole(isSigner: boolean, isWritable: boolean): AccountRole {
+  if (isSigner && isWritable) return AccountRole.WRITABLE_SIGNER;
+  if (isSigner) return AccountRole.READONLY_SIGNER;
+  if (isWritable) return AccountRole.WRITABLE;
+  return AccountRole.READONLY;
+}
+
+function toKitInstruction(ix: JupiterInstruction): Instruction {
+  return {
+    programAddress: address(ix.programId),
+    accounts: Array.isArray(ix.accounts)
+      ? ix.accounts.map((account) => ({
+        address: address(account.pubkey),
+        role: mapAccountRole(Boolean(account.isSigner), Boolean(account.isWritable))
+      }))
+      : [],
+    data: ix.data ? Buffer.from(ix.data, "base64") : new Uint8Array()
+  };
+}
 
 function isValidU64(value: bigint): boolean {
   return value > 0n && value <= MAX_U64;
@@ -84,6 +136,10 @@ function isRateLimitError(err: any): boolean {
     || String(code) === "8100002"
     || message.includes("too many requests")
     || message.includes("429");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function loadSignerFromEnv(wallet: WalletLike): Promise<TransactionSigner> {
@@ -194,6 +250,143 @@ class RealKaminoClient implements KaminoClient {
     const signature = getSignatureFromTransaction(signed);
     await this.sendAndConfirm(signed as any, { commitment: "confirmed", skipPreflight: false });
     return signature;
+  }
+
+  private async sendInstructions(ixs: Instruction[], lookupTableAddresses: string[] = []): Promise<string> {
+    if (!ixs.length) {
+      throw new Error("Nenhuma instrucao Kamino gerada");
+    }
+    const { value: latestBlockhash } = await (this.rpc as any)
+      .getLatestBlockhash({ commitment: "finalized" })
+      .send();
+    let txMessage = pipe(
+      createTransactionMessage({ version: 0 }),
+      (tx) => appendTransactionMessageInstructions(ixs, tx),
+      (tx) => setTransactionMessageFeePayerSigner(this.signer, tx),
+      (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx)
+    );
+    if (lookupTableAddresses.length > 0) {
+      try {
+        const luts = lookupTableAddresses
+          .map((item) => {
+            try {
+              return address(item);
+            } catch {
+              return null;
+            }
+          })
+          .filter((item): item is Address => Boolean(item));
+        if (luts.length > 0) {
+          const addressesByTable = await fetchAddressesForLookupTables(luts, this.rpc as any);
+          txMessage = compressTransactionMessageUsingAddressLookupTables(txMessage, addressesByTable);
+        }
+      } catch (err) {
+        logger.warn({ err }, "falha ao carregar lookup tables Jupiter");
+      }
+    }
+    const signed = await signTransactionMessageWithSigners(txMessage);
+    const signature = getSignatureFromTransaction(signed);
+    await this.sendAndConfirm(signed as any, { commitment: "confirmed", skipPreflight: false });
+    return signature;
+  }
+
+  private async jupiterRequest(url: string, init: RequestInit, retries = 2): Promise<{ res: Response; text: string }> {
+    let attempt = 0;
+    while (true) {
+      const res = await fetch(url, init);
+      const text = await res.text().catch(() => "");
+      if (res.status === 429 && attempt < retries) {
+        attempt += 1;
+        await sleep(1000 * attempt);
+        continue;
+      }
+      return { res, text };
+    }
+  }
+
+  private async fetchJupiterQuote(inputMint: string, outputMint: string, amount: string, slippageBps: number): Promise<any> {
+    if (!this.ctx.config.jupiterApiKey) {
+      throw new Error("Jupiter API key ausente");
+    }
+    const base = this.ctx.config.jupiterApiUrl.replace(/\/+$/, "");
+    const params = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount,
+      slippageBps: String(slippageBps)
+    });
+    if (Array.isArray(this.ctx.config.jupiterExcludeDexes) && this.ctx.config.jupiterExcludeDexes.length > 0) {
+      params.set("excludeDexes", this.ctx.config.jupiterExcludeDexes.join(","));
+    }
+    const { res, text } = await this.jupiterRequest(
+      `${base}/swap/v1/quote?${params.toString()}`,
+      { headers: { "x-api-key": this.ctx.config.jupiterApiKey ?? "" } }
+    );
+    if (!res.ok) {
+      throw new Error(`Falha no quote Jupiter (HTTP ${res.status})`);
+    }
+    if (!text) {
+      throw new Error("Resposta vazia do Jupiter");
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error("Resposta invalida do Jupiter");
+    }
+  }
+
+  private async fetchJupiterSwapInstructions(quoteResponse: any): Promise<{
+    preActionIxs: Instruction[];
+    swapIxs: Instruction[];
+    lookupTableAddresses: string[];
+  }> {
+    if (!this.ctx.config.jupiterApiKey) {
+      throw new Error("Jupiter API key ausente");
+    }
+    const base = this.ctx.config.jupiterApiUrl.replace(/\/+$/, "");
+    const { res, text } = await this.jupiterRequest(
+      `${base}/swap/v1/swap-instructions`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": this.ctx.config.jupiterApiKey ?? ""
+        },
+        body: JSON.stringify({
+          quoteResponse,
+          userPublicKey: this.signer.address,
+          wrapAndUnwrapSol: true
+        })
+      }
+    );
+    if (!res.ok) {
+      throw new Error(`Falha ao solicitar swap-instructions (HTTP ${res.status})`);
+    }
+    if (!text) {
+      throw new Error("Resposta vazia do Jupiter");
+    }
+    let payload: JupiterSwapInstructionsResponse | null = null;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new Error("Resposta invalida do Jupiter");
+    }
+    if (!payload) {
+      throw new Error("Resposta invalida do Jupiter");
+    }
+    const setup = Array.isArray(payload.setupInstructions) ? payload.setupInstructions : [];
+    const swapInstruction = payload.swapInstruction ? [payload.swapInstruction] : [];
+    const cleanup = payload.cleanupInstruction ? [payload.cleanupInstruction] : [];
+    const tokenLedger = payload.tokenLedgerInstruction ? [payload.tokenLedgerInstruction] : [];
+    const computeBudget = Array.isArray(payload.computeBudgetInstructions)
+      ? payload.computeBudgetInstructions
+      : [];
+    const preActionIxs = [...setup, ...tokenLedger].map(toKitInstruction);
+    const swapIxs = [...computeBudget, ...swapInstruction, ...cleanup].map(toKitInstruction);
+    const lookupTableAddresses = Array.isArray(payload.addressLookupTableAddresses)
+      ? payload.addressLookupTableAddresses.filter((item) => typeof item === "string" && item.trim().length > 0)
+      : [];
+    return { preActionIxs, swapIxs, lookupTableAddresses };
   }
 
   private async buildActionWithFallback<T extends KaminoAction>(
@@ -350,6 +543,103 @@ class RealKaminoClient implements KaminoClient {
       "kamino repay concluido"
     );
     return sig;
+  }
+
+  async repayWithCollateral(input: {
+    collateralMint: string;
+    debtMint: string;
+    repayAmount: number;
+    slippageBps?: number;
+  }): Promise<string> {
+    if (!Number.isFinite(input.repayAmount) || input.repayAmount <= 0) {
+      throw new Error("Valor de repay invalido");
+    }
+    if (!this.ctx.config.jupiterApiKey) {
+      throw new Error("Jupiter API key ausente");
+    }
+    const market = await this.loadMarket();
+    const obligation = await market.getObligationByWallet(
+      this.signer.address,
+      this.obligationType
+    );
+    if (!obligation) {
+      throw new Error("Posicao Kamino nao encontrada");
+    }
+    const currentSlot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
+    const slippageBps = Number.isFinite(input.slippageBps)
+      ? Math.max(1, Math.min(10_000, Number(input.slippageBps)))
+      : Math.max(1, Math.min(10_000, Number(this.ctx.config.slippageBps ?? 50)));
+    let lastLookupTables: string[] = [];
+
+    const quoter: SwapQuoteProvider<any> = async (swapInputs: SwapInputs) => {
+      const amountLamports = swapInputs.inputAmountLamports?.toFixed?.(0) ?? "0";
+      const quoteResponse = await this.fetchJupiterQuote(
+        String(swapInputs.inputMint),
+        String(swapInputs.outputMint),
+        amountLamports,
+        slippageBps
+      );
+      const inAmount = new Decimal(quoteResponse?.inAmount ?? "0");
+      const outAmount = new Decimal(quoteResponse?.outAmount ?? "0");
+      const priceAInB = inAmount.gt(0) ? outAmount.div(inAmount) : new Decimal(0);
+      const quote: SwapQuote<any> = {
+        priceAInB,
+        quoteResponse
+      };
+      return quote;
+    };
+
+    const swapper: SwapIxsProvider<any> = async (_swapInputs, _klendAccounts, quote) => {
+      const quoteResponse = (quote as SwapQuote<any>)?.quoteResponse;
+      if (!quoteResponse) {
+        throw new Error("Quote Jupiter ausente");
+      }
+      const swapIxs = await this.fetchJupiterSwapInstructions(quoteResponse);
+      lastLookupTables = swapIxs.lookupTableAddresses ?? [];
+      return [
+        {
+          preActionIxs: swapIxs.preActionIxs,
+          swapIxs: swapIxs.swapIxs,
+          lookupTables: [],
+          quote
+        }
+      ];
+    };
+
+    const responses = await getRepayWithCollIxs({
+      repayAmount: new Decimal(input.repayAmount),
+      isClosingPosition: true,
+      budgetAndPriorityFeeIxs: undefined,
+      collTokenMint: address(input.collateralMint),
+      debtTokenMint: address(input.debtMint),
+      kaminoMarket: market,
+      owner: this.signer,
+      obligation,
+      referrer: none(),
+      currentSlot,
+      scopeRefreshIx: [],
+      useV2Ixs: true,
+      quoter,
+      swapper,
+      logger: (msg: string, ...extra: any[]) => {
+        logger.info({ msg, extra }, "kamino repay-with-collateral");
+      }
+    });
+
+    if (!responses.length) {
+      throw new Error("Nenhuma instrucao para repay-with-collateral");
+    }
+    const signature = await this.sendInstructions(responses[0].ixs, lastLookupTables);
+    logger.info(
+      {
+        sig: signature,
+        collateral: input.collateralMint,
+        debt: input.debtMint,
+        amount: input.repayAmount
+      },
+      "kamino repay-with-collateral concluido"
+    );
+    return signature;
   }
 
   async withdraw(input: { mint: string; amount: number }): Promise<string> {
@@ -515,6 +805,23 @@ class NoopKaminoClient implements KaminoClient {
       collateralAmount: this.lastState?.collateralAmount ?? null,
       debtMint: input.mint,
       debtAmount: Math.max(0, (this.lastState?.debtAmount ?? 0) - input.amount),
+      ltv: this.lastState?.ltv ?? null
+    };
+    return 'noop';
+  }
+
+  async repayWithCollateral(input: {
+    collateralMint: string;
+    debtMint: string;
+    repayAmount: number;
+    slippageBps?: number;
+  }): Promise<string> {
+    this.ensureEnabled("repay-with-collateral");
+    this.lastState = {
+      collateralMint: input.collateralMint,
+      collateralAmount: this.lastState?.collateralAmount ?? null,
+      debtMint: input.debtMint,
+      debtAmount: Math.max(0, (this.lastState?.debtAmount ?? 0) - input.repayAmount),
       ltv: this.lastState?.ltv ?? null
     };
     return 'noop';
