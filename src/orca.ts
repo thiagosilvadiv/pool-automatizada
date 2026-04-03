@@ -3048,15 +3048,15 @@ export class OrcaBot {
       mismatchReasons.push("colateral on-chain nao registrado");
     }
     for (const entry of collaterals) {
-      if (!entry.mint || entry.amount <= 0) continue;
+      if (!entry.mint) continue;
       const onChainAmount = onChainDeposits.get(entry.mint) ?? 0;
-      if (onChainAmount + epsilon < entry.amount) {
-        mismatchReasons.push(`colateral ${entry.mint} menor que o registrado`);
+      if (Math.abs(onChainAmount - (entry.amount ?? 0)) > epsilon) {
+        mismatchReasons.push(`colateral ${entry.mint} diferente do registrado`);
         break;
       }
     }
-    if (recordedDebtAmount > 0 && onChainDebtAmount + epsilon < recordedDebtAmount) {
-      mismatchReasons.push("divida on-chain menor que o registrado");
+    if (Math.abs(onChainDebtAmount - recordedDebtAmount) > epsilon) {
+      mismatchReasons.push("divida on-chain diferente do registrado");
     }
     if ((recordedDebtAmount <= 0 || !debtMint) && onChainBorrows.size > 0) {
       mismatchReasons.push("divida on-chain nao registrada");
@@ -3086,7 +3086,11 @@ export class OrcaBot {
           lastError: null
         };
         this.setKaminoState(updated);
-        this.queueKaminoLog("reconcile", "Estado Kamino reconciliado no fechamento.", "warn");
+        this.queueKaminoLog(
+          "reconcile",
+          `Estado Kamino reconciliado no fechamento (${mismatchReasons.join("; ")}).`,
+          "warn"
+        );
         state = this.kaminoState ?? updated;
         collaterals = reconciledCollaterals;
         debtMint = updated.debtMint ?? debtMint;
