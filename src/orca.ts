@@ -51,6 +51,36 @@ export function computeRiskAwareRepayChunk(params: {
   return { chunk };
 }
 
+export function selectRepayChunkWithQuote(params: {
+  debtRemaining: number;
+  capacityUi: number;
+  priceCollToDebt: number;
+  quoteOutStableUi: number | null;
+  minStable: number;
+  tolerance?: number; // multiplicador para checar se debt cabe na capacidade (p.ex. 1.05)
+}): { chunk: number; reason?: string } {
+  const { debtRemaining, capacityUi, priceCollToDebt, quoteOutStableUi, minStable } = params;
+  const tolerance = Number.isFinite(params.tolerance) ? Math.max(1, Number(params.tolerance)) : 1.05;
+  if (!Number.isFinite(capacityUi) || capacityUi <= 0) {
+    return { chunk: 0, reason: "capacidade de saque insuficiente" };
+  }
+  if (!Number.isFinite(priceCollToDebt) || priceCollToDebt <= 0) {
+    return { chunk: 0, reason: "preco indisponivel para colateral" };
+  }
+  const maxByPrice = capacityUi * priceCollToDebt;
+  const maxByQuote = quoteOutStableUi != null ? quoteOutStableUi : maxByPrice;
+  let chunk = Math.min(debtRemaining, Math.max(0, maxByQuote));
+  // Sanidade: se precisar de mais colateral que a capacidade tolerada, limite ao preço
+  const collNeededForDebt = priceCollToDebt > 0 ? debtRemaining / priceCollToDebt : Number.POSITIVE_INFINITY;
+  if (collNeededForDebt > capacityUi * tolerance) {
+    chunk = Math.min(chunk, maxByPrice);
+  }
+  if (chunk < minStable) {
+    return { chunk: 0, reason: "capacidade insuficiente (price/quote)" };
+  }
+  return { chunk };
+}
+
 export type BotContext = {
   connection: Connection;
   wallet: WalletLike;
@@ -2773,6 +2803,35 @@ export class OrcaBot {
     return this.getTokenUsdValue({ ...input, amountUi: 1 });
   }
 
+  private async estimateStableOutForCollateral(input: {
+    collMint: string;
+    collDecimals: number;
+    stableMint: string;
+    stableDecimals: number;
+    collAmountUi: number;
+  }): Promise<number | null> {
+    if (!this.config.jupiterApiKey) return null;
+    if (!Number.isFinite(input.collAmountUi) || input.collAmountUi <= 0) return null;
+    const amountRaw = toRawAmount(input.collAmountUi, input.collDecimals);
+    if (!isValidU64(amountRaw)) return null;
+    try {
+      const quote = await this.fetchJupiterQuoteExactInDetailed(
+        input.collMint,
+        input.stableMint,
+        amountRaw.toString(),
+        this.config.slippageBps ?? 50
+      );
+      const outAmount = parseU64(quote?.quote?.outAmount ?? "0");
+      if (!outAmount) return null;
+      const outNumber = toSafeNumber(outAmount);
+      if (outNumber == null) return null;
+      return outNumber / Math.pow(10, input.stableDecimals);
+    } catch (err) {
+      logger.warn({ err }, "quote Jupiter falhou para estimateStableOutForCollateral");
+      return null;
+    }
+  }
+
   private async swapStableToToken(input: {
     stableMint: string;
     stableDecimals: number;
@@ -3190,6 +3249,9 @@ export class OrcaBot {
     let performed = false;
     let lastFailure: string | null = null;
     const capacityBuffer = 0.7;
+    let maxChunkOverride: number | null = null;
+    let chunkReductions = 0;
+    const maxChunkReductions = 6;
 
     const refreshPosition = async (): Promise<void> => {
       try {
@@ -3243,29 +3305,40 @@ export class OrcaBot {
             stableMint: input.debtMint,
             stableDecimals: debtDecimals
           });
-          const chunkChoice = computeRiskAwareRepayChunk({
+          const quoteOutStableUi = await this.estimateStableOutForCollateral({
+            collMint: candidate.mint,
+            collDecimals,
+            stableMint: input.debtMint,
+            stableDecimals: debtDecimals,
+            collAmountUi: capacity.capacityUi
+          });
+          const chunkChoice = selectRepayChunkWithQuote({
             debtRemaining,
             capacityUi: capacity.capacityUi,
             priceCollToDebt: priceCollToDebt ?? 0,
+            quoteOutStableUi,
             minStable: KAMINO_REPAY_MIN_STABLE
           });
+          let repayAmount = chunkChoice.chunk;
+          if (maxChunkOverride != null) {
+            repayAmount = Math.min(repayAmount, maxChunkOverride);
+          }
           if (chunkChoice.chunk <= epsilon) {
             const reason = chunkChoice.reason ?? "capacidade de saque insuficiente";
             lastFailure = reason;
             this.queueKaminoLog(
               "repay-with-collateral-capacity",
-              `${reason}; capacityUi=${capacity.capacityUi.toFixed(8)}`,
+              `${reason}; capacityUi=${capacity.capacityUi.toFixed(8)} price=${priceCollToDebt ?? "?"} quote=${quoteOutStableUi ?? "?"}`,
               "warn"
             );
             continue;
           }
-          const repayAmount = chunkChoice.chunk;
           if (repayAmount <= epsilon) {
             continue;
           }
           this.queueKaminoLog(
             "repay-with-collateral",
-            `Tentando repay de ${repayAmount.toFixed(8)} com colateral ${candidate.mint} (cap ${capacity.capacityUi.toFixed(8)}, price ${priceCollToDebt ?? "?"}).`,
+            `Tentando repay de ${repayAmount.toFixed(8)} com colateral ${candidate.mint} (cap ${capacity.capacityUi.toFixed(8)}, price ${priceCollToDebt ?? "?"}, quote ${quoteOutStableUi ?? "?"}, debtRemaining ${debtRemaining.toFixed(8)}).`,
             "info"
           );
           await input.kamino.repayWithCollateral({
@@ -3290,13 +3363,20 @@ export class OrcaBot {
           lastFailure = message;
           const lower = message.toLowerCase();
           if (lower.includes("too large") || lower.includes("invalid params")) {
-            const adjusted = Math.max(KAMINO_REPAY_MIN_STABLE, debtRemaining / 3);
+            chunkReductions += 1;
+            const adjusted: number =
+              maxChunkOverride != null
+                ? Math.max(KAMINO_REPAY_MIN_STABLE, maxChunkOverride / 2)
+                : Math.max(KAMINO_REPAY_MIN_STABLE, debtRemaining / 3);
             this.queueKaminoLog(
               "repay-with-collateral",
-              `Transacao recusada por tamanho; ajustando chunk para ${adjusted.toFixed(8)}.`,
+              `Transacao recusada por tamanho; ajustando chunk max para ${adjusted.toFixed(8)}.`,
               "warn"
             );
             usedCandidate = true;
+            if (chunkReductions <= maxChunkReductions) {
+              maxChunkOverride = adjusted;
+            }
             break;
           }
           if (this.isKaminoRetryableError(message)) {
@@ -3688,9 +3768,24 @@ export class OrcaBot {
                   repayAmountUi: debtAmount,
                   bufferPct: 0.7
                 });
-                withdrawAmount = Math.min(withdrawAmount, capacity.capacityUi);
-                if (withdrawAmount <= KAMINO_WITHDRAW_MIN || capacity.capacityUi <= KAMINO_WITHDRAW_MIN) {
-                  const msg = `Capacidade de saque insuficiente (${capacity.capacityUi.toFixed(8)})`;
+                const quoteOutStable = await this.estimateStableOutForCollateral({
+                  collMint: pick.mint,
+                  collDecimals: decimals,
+                  stableMint: stable.mint,
+                  stableDecimals: stable.decimals,
+                  collAmountUi: withdrawAmount
+                });
+                withdrawAmount = Math.min(
+                  withdrawAmount,
+                  capacity.capacityUi,
+                  priceUsd && priceUsd > 0 ? shortfall / priceUsd * 1.05 : withdrawAmount
+                );
+                if (
+                  withdrawAmount <= KAMINO_WITHDRAW_MIN ||
+                  capacity.capacityUi <= KAMINO_WITHDRAW_MIN ||
+                  (quoteOutStable != null && quoteOutStable < KAMINO_WITHDRAW_MIN)
+                ) {
+                  const msg = `Capacidade de saque insuficiente (cap ${capacity.capacityUi.toFixed(8)}, quote ${quoteOutStable ?? "?"})`;
                   this.setKaminoState({ ...state, lastError: msg });
                   this.queueKaminoLog("repay-fallback-capacity", msg, "warn");
                   break;
