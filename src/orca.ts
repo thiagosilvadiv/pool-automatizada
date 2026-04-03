@@ -3457,44 +3457,99 @@ export class OrcaBot {
 
     let debtAmount = Math.min(recordedDebtAmount, onChainDebtAmount);
     const repayBufferPct = Math.max(0, Number(this.config.kaminoPriceBufferPct ?? 0.5));
-    if (debtAmount > 0) {
-      this.queueKaminoLog(
-        "repay-start",
-        `Iniciando quitacao da divida ${debtAmount.toFixed(8)} ${stable.mint} antes de qualquer saque.`,
-        "info"
-      );
-      let stableBalance = await this.getWalletTokenBalance(stable.mint);
-      if (stableBalance + epsilon < debtAmount) {
-        const repayAttempt = await this.tryRepayWithCollateral({
-          kamino,
-          collaterals,
-          debtMint: stable.mint,
-          debtAmount,
-          onChainDeposits
-        });
-        if (repayAttempt.retryable && repayAttempt.error) {
-          const wait = this.scheduleKaminoRepayRetry(state, repayAttempt.error, mode);
-          if (wait) {
-            return false;
+      if (debtAmount > 0) {
+        this.queueKaminoLog(
+          "repay-start",
+          `Iniciando quitacao da divida ${debtAmount.toFixed(8)} ${stable.mint} antes de qualquer saque.`,
+          "info"
+        );
+        let stableBalance = await this.getWalletTokenBalance(stable.mint);
+        if (stableBalance + epsilon < debtAmount) {
+          const repayAttempt = await this.tryRepayWithCollateral({
+            kamino,
+            collaterals,
+            debtMint: stable.mint,
+            debtAmount,
+            onChainDeposits
+          });
+          if (repayAttempt.retryable && repayAttempt.error) {
+            const wait = this.scheduleKaminoRepayRetry(state, repayAttempt.error, mode);
+            if (wait) {
+              return false;
+            }
+          }
+          if (repayAttempt.error && !repayAttempt.retryable) {
+            const message = `Repay com colateral falhou: ${repayAttempt.error}`;
+            this.setKaminoState({ ...state, lastError: message });
+            this.queueKaminoLog("repay-with-collateral-failed", message, "error");
+            throw new Error(message);
+          }
+          if (repayAttempt.performed) {
+            debtAmount = repayAttempt.debtAmount;
+            onChainDeposits = repayAttempt.onChainDeposits;
+            stableBalance = await this.getWalletTokenBalance(stable.mint);
           }
         }
-        if (repayAttempt.error && !repayAttempt.retryable) {
-          const message = `Repay com colateral falhou: ${repayAttempt.error}`;
+        if (debtAmount > epsilon && stableBalance + epsilon < debtAmount) {
+          const shortfall = debtAmount - stableBalance;
+          const candidates = collaterals
+            .map((entry) => ({
+              mint: entry.mint,
+              amount: Math.max(0, onChainDeposits.get(entry.mint) ?? 0),
+              usd: entry.usd ?? null
+            }))
+            .filter((c) => c.mint && c.amount > 0 && c.mint !== stable.mint);
+          if (candidates.length > 0) {
+            candidates.sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0) || b.amount - a.amount);
+            const pick = candidates[0];
+            try {
+              const decimals = await this.getTokenDecimals(pick.mint);
+              const priceUsd = await this.getTokenUsdPrice({
+                mint: pick.mint,
+                decimals,
+                stableMint: stable.mint,
+                stableDecimals: stable.decimals
+              });
+              const required = priceUsd && priceUsd > 0 ? shortfall / priceUsd * 1.05 : shortfall;
+              const withdrawAmount = Math.min(pick.amount, required);
+              if (withdrawAmount > epsilon) {
+                this.queueKaminoLog(
+                  "repay-fallback",
+                  `Sacando ${withdrawAmount.toFixed(8)} de ${pick.mint} para quitar divida.`,
+                  "warn"
+                );
+                await this.kaminoCallWithRetry(
+                  () => kamino.withdraw({ mint: pick.mint, amount: withdrawAmount }),
+                  "kamino-withdraw"
+                );
+                onChainDeposits.set(pick.mint, Math.max(0, pick.amount - withdrawAmount));
+                const swappedOut = await this.swapTokenToStable({
+                  inputMint: pick.mint,
+                  inputDecimals: decimals,
+                  amountUi: withdrawAmount,
+                  stableMint: stable.mint,
+                  stableDecimals: stable.decimals,
+                  label: "kamino-fallback-collateral->stable"
+                });
+                if (swappedOut != null) {
+                  stableBalance += swappedOut;
+                } else {
+                  stableBalance = await this.getWalletTokenBalance(stable.mint);
+                }
+              }
+            } catch (err) {
+              const message = `Fallback repay falhou: ${stringifyError(err)}`;
+              this.setKaminoState({ ...state, lastError: message });
+              this.queueKaminoLog("repay-fallback-failed", message, "error");
+              throw new Error(message);
+            }
+          }
+        }
+        if (debtAmount > epsilon && stableBalance + epsilon < debtAmount) {
+          const message = `Colateral insuficiente para quitar a divida (restante ${debtAmount.toFixed(8)}).`;
           this.setKaminoState({ ...state, lastError: message });
-          this.queueKaminoLog("repay-with-collateral-failed", message, "error");
+          this.queueKaminoLog("repay-insufficient", message, "error");
           throw new Error(message);
-        }
-        if (repayAttempt.performed) {
-          debtAmount = repayAttempt.debtAmount;
-          onChainDeposits = repayAttempt.onChainDeposits;
-          stableBalance = await this.getWalletTokenBalance(stable.mint);
-        }
-      }
-      if (debtAmount > epsilon && stableBalance + epsilon < debtAmount) {
-        const message = `Colateral insuficiente para quitar a divida (restante ${debtAmount.toFixed(8)}).`;
-        this.setKaminoState({ ...state, lastError: message });
-        this.queueKaminoLog("repay-insufficient", message, "error");
-        throw new Error(message);
       }
       try {
         const repayAmount = Math.min(stableBalance, debtAmount * (1 + repayBufferPct / 100));
