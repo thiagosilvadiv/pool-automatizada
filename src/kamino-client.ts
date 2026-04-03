@@ -913,25 +913,39 @@ class RealKaminoClient implements KaminoClient {
   async getPositionState(): Promise<KaminoPositionState | null> {
     try {
       const market = await this.loadMarket();
-      const obligationTypes = [
-        this.obligationType,
-        // tentativa adicional para posicoes criadas com outro tipo de obligation
+      const obligationTypes = (() => {
+        const variants = [this.obligationType];
+        // Some markets may use MultiplyObligation; include if present in this SDK build.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (KaminoMarket as any)?.MultiplyObligation ? new (KaminoMarket as any).MultiplyObligation(PROGRAM_ID) : null
-      ].filter(Boolean);
-
-      let obligation = null;
-      for (const obligationType of obligationTypes) {
-        try {
-          obligation = await market.getObligationByWallet(
-            this.signer.address,
-            obligationType
-          );
-        } catch (innerErr) {
-          logger.warn({ err: decodeRpcError(innerErr) }, "falha ao buscar obligation com tipo alternativo");
-          continue;
+        const maybeMultiply = (KaminoMarket as any)?.MultiplyObligation;
+        if (maybeMultiply) {
+          try {
+            variants.push(new maybeMultiply(PROGRAM_ID));
+          } catch (err) {
+            logger.warn({ err: decodeRpcError(err) }, "falha ao instanciar MultiplyObligation; ignorando");
+          }
         }
-        if (obligation) break;
+        return variants;
+      })();
+
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      let obligation = null;
+      for (let attempt = 0; attempt < 3 && !obligation; attempt += 1) {
+        for (const obligationType of obligationTypes) {
+          try {
+            obligation = await market.getObligationByWallet(
+              this.signer.address,
+              obligationType
+            );
+          } catch (innerErr) {
+            logger.warn({ err: decodeRpcError(innerErr) }, "falha ao buscar obligation com tipo alternativo");
+            continue;
+          }
+          if (obligation) break;
+        }
+        if (!obligation && attempt < 2) {
+          await sleep(2000);
+        }
       }
       if (!obligation) {
         return null;
