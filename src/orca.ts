@@ -3184,6 +3184,7 @@ export class OrcaBot {
     let maxChunk = debtRemaining;
     let chunkAdjustments = 0;
     const maxChunkAdjustments = 6; // more attempts to shrink tx size
+    let tooLargeAbort = false;
 
     while (debtRemaining > epsilon) {
       const sorted = [...candidates].sort((a, b) => {
@@ -3234,18 +3235,9 @@ export class OrcaBot {
           lastFailure = message;
           const lower = message.toLowerCase();
           if (lower.includes("too large")) {
-            if (chunkAdjustments < maxChunkAdjustments) {
-              chunkAdjustments += 1;
-              // shrink aggressively: half, then quarter, etc.
-              maxChunk = Math.max(debtRemaining / Math.pow(2, chunkAdjustments), epsilon * 10);
-              this.queueKaminoLog(
-                "repay-with-collateral",
-                `Transacao grande demais; reduzindo chunk para ${maxChunk.toFixed(8)}.`,
-                "warn"
-              );
-              usedCandidate = true; // force retry loop with smaller chunk
-              break;
-            }
+            tooLargeAbort = true;
+            usedCandidate = true;
+            break;
           }
           if (this.isKaminoRetryableError(message)) {
             this.queueKaminoLog("repay-with-collateral-failed", message, "warn");
@@ -3276,6 +3268,10 @@ export class OrcaBot {
         }
       }
 
+      if (tooLargeAbort) {
+        // Stop looping; caller will handle fallback withdraw+swap.
+        break;
+      }
       if (!usedCandidate) break;
     }
 
@@ -3296,6 +3292,16 @@ export class OrcaBot {
         onChainDeposits,
         error: lastFailure,
         retryable: this.isKaminoRetryableError(lastFailure)
+      };
+    }
+
+    if (tooLargeAbort) {
+      return {
+        performed,
+        debtAmount: debtRemaining,
+        onChainDeposits,
+        error: "tx-too-large",
+        retryable: false
       };
     }
 
