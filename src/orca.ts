@@ -4264,8 +4264,8 @@ export class OrcaBot {
     }
 
     const postSwapBalances = await this.getTokenBalancesRaw();
-    const reservedTokenA = Math.max(0, postSwapBalances.tokenA - baselineBalances.tokenA);
-    const reservedTokenB = Math.max(0, postSwapBalances.tokenB - baselineBalances.tokenB);
+    let reservedTokenA = Math.max(0, postSwapBalances.tokenA - baselineBalances.tokenA);
+    let reservedTokenB = Math.max(0, postSwapBalances.tokenB - baselineBalances.tokenB);
     if (this.kaminoState?.active) {
       this.setKaminoState({
         ...this.kaminoState,
@@ -4277,10 +4277,18 @@ export class OrcaBot {
       });
     }
     if (reservedTokenA <= 0 && reservedTokenB <= 0) {
-      this.setError("Saldo emprestado insuficiente para reabrir a pool");
-      this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
-      this.lastStatus.lastAction = "kamino-wait-funds";
-      return "kamino-wait-funds";
+      // Tenta usar saldo livre da wallet antes de desistir
+      const walletBalances = await this.getTokenBalances();
+      const hasWallet = walletBalances.tokenA > 0 || walletBalances.tokenB > 0;
+      if (!hasWallet) {
+        this.setError("Saldo emprestado insuficiente para reabrir a pool");
+        this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
+        this.lastStatus.lastAction = "kamino-wait-funds";
+        return "kamino-wait-funds";
+      }
+      reservedTokenA = walletBalances.tokenA;
+      reservedTokenB = walletBalances.tokenB;
+      this.queueKaminoLog("wait-funds", "Usando saldo da wallet para reabrir a pool (sem empréstimo).", "warn");
     }
 
     let maxTokenA = reservedTokenA;
