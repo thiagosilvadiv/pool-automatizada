@@ -2366,10 +2366,13 @@ export class OrcaBot {
       const ata = getAssociatedTokenAddressSync(new PublicKey(mint), this.wallet.publicKey);
       const info = await this.connection.getAccountInfo(ata);
       if (!info) {
-        this.queueKaminoLog("ata-missing", `ATA ausente para ${mint}; crie antes do repay para evitar instrucoes extras.`, "warn");
+        const msg = `ATA ausente para ${mint}; crie antes do repay para evitar instrucoes extras.`;
+        this.queueKaminoLog("ata-missing", msg, "warn");
+        throw new Error(msg);
       }
     } catch (err) {
       logger.warn({ err, mint }, "falha ao checar ATA");
+      throw err;
     }
   }
 
