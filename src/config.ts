@@ -25,6 +25,7 @@ export type Config = {
   autoSolSlippageBps: number;
   autoSolCooldownSec: number;
   autoSolTargetBufferPct: number;
+  kaminoScanIntervalSec: number;
   autoCloseEmptyAccountsEnabled: boolean;
   autoCloseEmptyAccountsIntervalSec: number;
   autoCloseEmptyAccountsOnLowSol: boolean;
@@ -473,6 +474,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const envAutoSwapFeesToUsdcTargetMint = parseEnvString(process.env.AUTO_SWAP_FEES_TO_USDC_TARGET_MINT);
   const envJupiterApiKey = parseEnvString(process.env.JUPITER_API_KEY);
   const envJupiterApiUrl = parseEnvString(process.env.JUPITER_API_URL);
+  const envKaminoScanIntervalSec = parseEnvNumber(process.env.KAMINO_SCAN_INTERVAL_SEC);
   const envBybitApiKey = parseEnvString(process.env.BYBIT_API_KEY);
   const envBybitApiSecret = parseEnvString(process.env.BYBIT_API_SECRET);
   const envBybitBaseUrl = parseEnvString(process.env.BYBIT_BASE_URL);
@@ -511,6 +513,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     autoSolCooldownSec: parseEnvNumber(process.env.AUTO_SOL_COOLDOWN_SEC) ?? Number(data.autoSolCooldownSec ?? 60),
     autoSolTargetBufferPct: parseEnvNumber(process.env.AUTO_SOL_TARGET_BUFFER_PCT)
       ?? (data.autoSolTargetBufferPct == null ? 0 : Number(data.autoSolTargetBufferPct)),
+    kaminoScanIntervalSec: envKaminoScanIntervalSec ?? Number((data as any).kaminoScanIntervalSec ?? 30),
     autoCloseEmptyAccountsEnabled: parseEnvBool(process.env.AUTO_CLOSE_EMPTY_ACCOUNTS_ENABLED)
       ?? Boolean(data.autoCloseEmptyAccountsEnabled ?? false),
     autoCloseEmptyAccountsIntervalSec: parseEnvNumber(process.env.AUTO_CLOSE_EMPTY_ACCOUNTS_INTERVAL_SEC)
@@ -675,6 +678,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.autoSolTargetBufferPct) || config.autoSolTargetBufferPct < 0 || config.autoSolTargetBufferPct > 1) {
     throw new Error("autoSolTargetBufferPct must be between 0 and 1");
+  }
+  if (!Number.isFinite(config.kaminoScanIntervalSec) || config.kaminoScanIntervalSec < 5) {
+    throw new Error("kaminoScanIntervalSec must be >= 5");
   }
   if (!Number.isFinite(config.autoCloseEmptyAccountsIntervalSec) || config.autoCloseEmptyAccountsIntervalSec <= 0) {
     throw new Error("autoCloseEmptyAccountsIntervalSec must be > 0");

@@ -769,7 +769,7 @@ export class PoolManager {
     if (this.kaminoScanTimer) {
       clearInterval(this.kaminoScanTimer);
     }
-    const intervalMs = 30_000;
+    const intervalMs = Math.max(5000, Number(this.baseConfig.kaminoScanIntervalSec ?? 30) * 1000);
     this.kaminoScanTimer = setInterval(() => {
       void this.scanKaminoLoans();
     }, intervalMs);
