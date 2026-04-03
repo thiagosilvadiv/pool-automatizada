@@ -55,6 +55,7 @@ export type Config = {
   jupiterExcludeDexes: string[];
   dryRun: boolean;
   minSolBalance: number;
+  allowLowSolOperations: boolean;
   maxTokenA: number | null;
   maxTokenB: number | null;
   rebalanceSwapPct: number;
@@ -578,6 +579,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? [],
     dryRun: parseEnvBool(process.env.DRY_RUN) ?? Boolean(data.dryRun ?? false),
     minSolBalance: parseEnvNumber(process.env.MIN_SOL_BALANCE) ?? Number(data.minSolBalance ?? 0.02),
+    allowLowSolOperations: parseEnvBool(process.env.ALLOW_LOW_SOL_OPERATIONS)
+      ?? Boolean((data as any).allowLowSolOperations ?? false),
     maxTokenA: parseEnvNumber(process.env.MAX_TOKEN_A) ?? data.maxTokenA ?? null,
     maxTokenB: parseEnvNumber(process.env.MAX_TOKEN_B) ?? data.maxTokenB ?? null,
     rebalanceSwapPct: parseEnvNumber(process.env.REBALANCE_SWAP_PCT) ?? Number(data.rebalanceSwapPct ?? 1.0),

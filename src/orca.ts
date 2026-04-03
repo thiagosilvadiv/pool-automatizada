@@ -413,7 +413,7 @@ export class OrcaBot {
           }
         }
       }
-      if (finalSol < this.config.minSolBalance) {
+      if (finalSol < this.config.minSolBalance && !this.config.allowLowSolOperations) {
         logger.warn({ solBalance: finalSol, reason: topupResult.reason }, "SOL balance below minSolBalance; skipping");
         await this.loadExistingPosition();
         if (this.currentPosition) {
@@ -442,6 +442,9 @@ export class OrcaBot {
         this.lastStatus.positionRange = null;
         this.lastStatus.positionMint = this.currentPositionMint;
         return this.getStatus();
+      }
+      if (finalSol < this.config.minSolBalance && this.config.allowLowSolOperations) {
+        logger.warn({ solBalance: finalSol, reason: topupResult.reason }, "SOL balance below minSolBalance; continuing by config");
       }
     }
     const price = await this.getCurrentPrice();
@@ -951,7 +954,19 @@ export class OrcaBot {
     }
 
     const valueCap = usableB + usableA * price;
-    const valueCapUsd = Number.isFinite(valueCap) && valueCap > 0 ? valueCap : null;
+    let valueCapUsd = Number.isFinite(valueCap) && valueCap > 0 ? valueCap : null;
+    if (this.config.budgetUsd != null) {
+      if (!this.poolState?.isTokenASol && !this.poolState?.isTokenBSol) {
+        throw new Error("budgetUsd requires a SOL (wSOL) leg in the pool");
+      }
+      const solUsd = await this.tryGetSolUsdPrice();
+      if (!solUsd) {
+        throw new Error("SOL/USD price unavailable");
+      }
+      const budgetSol = this.config.budgetUsd / solUsd;
+      const budgetTokenB = this.poolState.isTokenBSol ? budgetSol : budgetSol * price;
+      valueCapUsd = valueCapUsd != null ? Math.min(valueCapUsd, budgetTokenB) : budgetTokenB;
+    }
     const applyValueCap = (nextBalances: { tokenA: number; tokenB: number }) => {
       let capA = Number.isFinite(nextBalances.tokenA) && nextBalances.tokenA > 0 ? nextBalances.tokenA : 0;
       let capB = Number.isFinite(nextBalances.tokenB) && nextBalances.tokenB > 0 ? nextBalances.tokenB : 0;
