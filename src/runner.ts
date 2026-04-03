@@ -41,6 +41,17 @@ function isEntryUsdSane(
   return true;
 }
 
+function isRateLimitError(err: unknown): boolean {
+  const raw: any = err as any;
+  const message = String(raw?.message ?? raw?.context?.message ?? err).toLowerCase();
+  const status = raw?.context?.statusCode ?? raw?.statusCode;
+  const code = raw?.context?.__code ?? raw?.__code ?? raw?.code;
+  return status === 429
+    || String(code) === "8100002"
+    || message.includes("too many requests")
+    || message.includes("429");
+}
+
 function resolveActionType(action: string | null): string | null {
   if (!action) {
     return null;
@@ -184,6 +195,7 @@ export class BotRunner {
   private hedgeDecisionByMint = new Map<string, { status: "opened" | "skipped" | "failed"; reason: string | null }>();
   private pendingClose = false;
   private pendingCloseMode: "manual" = "manual";
+  private rateLimitUntil: number | null = null;
   private pendingCloseRequestedAt: string | null = null;
   private autoAddRequestedByMint = new Set<string>();
   private onAutoAddRequest?: (poolId: string) => void;
@@ -666,6 +678,9 @@ export class BotRunner {
     if (this.inFlight) {
       return;
     }
+    if (this.rateLimitUntil && Date.now() < this.rateLimitUntil) {
+      return;
+    }
     if (this.pendingClose) {
       await this.performClose(this.pendingCloseMode);
       return;
@@ -826,8 +841,15 @@ export class BotRunner {
       this.flushKaminoLogs();
       this.maybeRequestAutoAdd(status);
     } catch (err) {
-      logger.error({ err }, "tick failed");
-      this.bot.setError(err);
+      if (isRateLimitError(err)) {
+        const backoffMs = 15000;
+        this.rateLimitUntil = Date.now() + backoffMs;
+        this.bot.setError("RPC rate limit (429). Aguardando para tentar novamente.");
+        logger.warn({ err, backoffMs }, "tick rate-limited");
+      } else {
+        logger.error({ err }, "tick failed");
+        this.bot.setError(err);
+      }
     } finally {
       this.inFlight = false;
       if (this.pendingClose) {
