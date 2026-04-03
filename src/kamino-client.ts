@@ -186,7 +186,16 @@ function decodeRpcError(err: any): { code?: number; name?: string; message: stri
 
 export function isBlockhashError(err: any): boolean {
   const msg = String(err?.message ?? err).toLowerCase();
-  return msg.includes("blockhash not found") || msg.includes("blockhash expired") || msg.includes("-32002");
+  return (
+    msg.includes("blockhash not found") ||
+    msg.includes("blockhash expired") ||
+    msg.includes("-32002") ||
+    // Erro #1 do @solana/kit: SOLANA_ERROR__TRANSACTION_EXPIRED_BLOCKHEIGHT_EXCEEDED
+    msg.includes("error #1") ||
+    msg.includes("blockheight exceeded") ||
+    msg.includes("lastvalidblockheight") ||
+    msg.includes("block height exceeded")
+  );
 }
 
 async function loadSignerFromEnv(wallet: WalletLike): Promise<TransactionSigner> {
