@@ -90,6 +90,103 @@ export function selectRepayChunkWithQuote(params: {
   return { chunk };
 }
 
+export async function performSplitRepayWithCollateralHelper(params: {
+  kamino: {
+    withdraw(input: { mint: string; amount: number }): Promise<string>;
+    repay(input: { mint: string; amount: number }): Promise<string>;
+  };
+  swapTokenToStable: (input: {
+    inputMint: string;
+    inputDecimals: number;
+    amountUi: number;
+    stableMint: string;
+    stableDecimals: number;
+    label?: string;
+  }) => Promise<number | null>;
+  collMint: string;
+  collDecimals: number;
+  debtMint: string;
+  debtDecimals: number;
+  repayUi: number;
+  capacityUi: number;
+  priceCollToDebt: number;
+  minWithdraw: number;
+  logger: (payload: any, msg: string, level?: "info" | "warn" | "error") => void;
+  isRetryable: (msg: string) => boolean;
+}): Promise<{ performed: boolean; retryable?: boolean; error?: string; debtRemaining?: number }> {
+  const {
+    kamino,
+    swapTokenToStable,
+    collMint,
+    collDecimals,
+    debtMint,
+    debtDecimals,
+    repayUi,
+    capacityUi,
+    priceCollToDebt,
+    minWithdraw,
+    logger,
+    isRetryable
+  } = params;
+  if (!Number.isFinite(priceCollToDebt) || priceCollToDebt <= 0) {
+    const error = "preco do colateral indisponivel para split repay";
+    return { performed: false, error };
+  }
+  const collNeeded = Math.max(minWithdraw, Math.min(capacityUi, repayUi / priceCollToDebt * 1.02));
+  if (collNeeded < minWithdraw || collNeeded > capacityUi + 1e-9) {
+    const error = `capacidade insuficiente para split (need ${collNeeded.toFixed(8)}, cap ${capacityUi.toFixed(8)})`;
+    return { performed: false, error };
+  }
+  try {
+    const withdrawSig = await kamino.withdraw({ mint: collMint, amount: collNeeded });
+    logger({ sig: withdrawSig, amount: collNeeded, mint: collMint }, "split-repay withdraw", "info");
+  } catch (err) {
+    const message = stringifyError(err);
+    if (isRetryable(message)) {
+      return { performed: false, retryable: true, error: message };
+    }
+    return { performed: false, error: message };
+  }
+  let stableOut = 0;
+  try {
+    const swapped = await swapTokenToStable({
+      inputMint: collMint,
+      inputDecimals: collDecimals,
+      amountUi: collNeeded,
+      stableMint: debtMint,
+      stableDecimals: debtDecimals,
+      label: "split-repay-coll->stable"
+    });
+    stableOut = swapped ?? 0;
+    if (stableOut <= 0) {
+      return { performed: false, error: "swap retornou valor zero" };
+    }
+    logger({ in: collNeeded, out: stableOut, collMint, debtMint }, "split-repay swap", "info");
+  } catch (err) {
+    const message = stringifyError(err);
+    if (isRetryable(message)) {
+      return { performed: false, retryable: true, error: message };
+    }
+    return { performed: false, error: message };
+  }
+  const repayAmount = Math.min(repayUi, stableOut);
+  if (repayAmount <= 0) {
+    return { performed: false, error: "valor de repay <= 0 apos swap" };
+  }
+  try {
+    const repaySig = await kamino.repay({ mint: debtMint, amount: repayAmount });
+    logger({ sig: repaySig, amount: repayAmount, mint: debtMint }, "split-repay repay", "info");
+    const remaining = Math.max(0, repayUi - repayAmount);
+    return { performed: true, debtRemaining: remaining };
+  } catch (err) {
+    const message = stringifyError(err);
+    if (isRetryable(message)) {
+      return { performed: false, retryable: true, error: message };
+    }
+    return { performed: false, error: message };
+  }
+}
+
 export type BotContext = {
   connection: Connection;
   wallet: WalletLike;
@@ -231,6 +328,7 @@ export class OrcaBot {
   private lastRebalanceAt: number | null = null;
   private missingPositionSince: number | null = null;
   private onLowSol?: () => Promise<void>;
+  private kaminoTooLargeSeen = false;
   private lastTrendPreferredExitToken: "tokenA" | "tokenB" | null = null;
   private swapAllowlist: Set<string> | null = null;
   private kaminoState: KaminoCycleState | null = null;
@@ -3332,6 +3430,13 @@ export class OrcaBot {
           if (maxChunkOverride != null) {
             repayAmount = Math.min(repayAmount, maxChunkOverride);
           }
+          const effectivePrice = Math.max(0, priceCollToDebt ?? 0);
+          const preferSplit =
+            this.kaminoTooLargeSeen ||
+            (quoteOutStableUi != null &&
+              capacity.capacityUi > 0 &&
+              effectivePrice > 0 &&
+              quoteOutStableUi / capacity.capacityUi < effectivePrice * 0.5); // heuristic: rotas com muito slippage/hops
           if (chunkChoice.chunk <= epsilon) {
             const reason = chunkChoice.reason ?? "capacidade de saque insuficiente";
             lastFailure = reason;
@@ -3343,6 +3448,42 @@ export class OrcaBot {
             continue;
           }
           if (repayAmount <= epsilon) {
+            continue;
+          }
+          if (preferSplit) {
+            const splitResult = await performSplitRepayWithCollateralHelper({
+              kamino: input.kamino,
+              swapTokenToStable: (args) => this.swapTokenToStable({ ...args, label: "split-repay-coll->stable" }),
+              collMint: candidate.mint,
+              collDecimals,
+              debtMint: input.debtMint,
+              debtDecimals,
+              repayUi: repayAmount,
+              capacityUi: capacity.capacityUi,
+              priceCollToDebt: effectivePrice,
+              minWithdraw: KAMINO_WITHDRAW_MIN,
+              logger: (payload, msg, level = "info") =>
+                this.queueKaminoLog("repay-with-collateral", `${msg} ${JSON.stringify(payload)}`, level as any),
+              isRetryable: (msg) => this.isKaminoRetryableError(msg)
+            });
+            if (splitResult.performed) {
+              performed = true;
+              usedCandidate = true;
+              debtRemaining = splitResult.debtRemaining ?? Math.max(0, debtRemaining - repayAmount);
+              await refreshPosition();
+              break;
+            }
+            if (splitResult.retryable) {
+              return {
+                performed,
+                debtAmount: debtRemaining,
+                onChainDeposits,
+                retryable: true,
+                error: splitResult.error
+              };
+            }
+            lastFailure = splitResult.error ?? "Split repay falhou";
+            this.queueKaminoLog("repay-with-collateral-failed", `${lastFailure} (mode: split)`, "warn");
             continue;
           }
           this.queueKaminoLog(
@@ -3371,7 +3512,12 @@ export class OrcaBot {
           const message = stringifyError(err);
           lastFailure = message;
           const lower = message.toLowerCase();
-          if (lower.includes("too large") || lower.includes("invalid params")) {
+          if (
+            lower.includes("too large") ||
+            lower.includes("versionedtransaction too large") ||
+            lower.includes("invalid params")
+          ) {
+            this.kaminoTooLargeSeen = true;
             chunkReductions += 1;
             const adjusted: number =
               maxChunkOverride != null
@@ -3379,7 +3525,7 @@ export class OrcaBot {
                 : Math.max(KAMINO_REPAY_MIN_STABLE, debtRemaining / 3);
             this.queueKaminoLog(
               "repay-with-collateral",
-              `Transacao recusada por tamanho; ajustando chunk max para ${adjusted.toFixed(8)}.`,
+              `Transacao recusada por tamanho; ajustando chunk max para ${adjusted.toFixed(8)}. Detalhe: ${message}`,
               "warn"
             );
             usedCandidate = true;
