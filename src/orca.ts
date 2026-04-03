@@ -3298,6 +3298,13 @@ export class OrcaBot {
     } catch (err) {
       logger.warn({ err }, "falha ao calcular pnl Kamino no fechamento");
     }
+    if (kaminoNetUsd == null) {
+      const fallbackCollateralUsd = Number(state.collateralUsd ?? NaN);
+      const fallbackDebtUsd = Number(state.debtUsd ?? NaN);
+      if (Number.isFinite(fallbackCollateralUsd) && Number.isFinite(fallbackDebtUsd)) {
+        kaminoNetUsd = fallbackCollateralUsd - fallbackDebtUsd;
+      }
+    }
     const nextState: KaminoCycleState = {
       active: false,
       ownerPoolId: state.ownerPoolId ?? this.poolId ?? null,
