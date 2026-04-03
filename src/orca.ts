@@ -3183,7 +3183,7 @@ export class OrcaBot {
 
     let maxChunk = debtRemaining;
     let chunkAdjustments = 0;
-    const maxChunkAdjustments = 4; // reduce size a few times if txn too large
+    const maxChunkAdjustments = 6; // more attempts to shrink tx size
 
     while (debtRemaining > epsilon) {
       const sorted = [...candidates].sort((a, b) => {
@@ -3232,10 +3232,12 @@ export class OrcaBot {
         } catch (err) {
           const message = stringifyError(err);
           lastFailure = message;
-          if (message.toLowerCase().includes("too large")) {
+          const lower = message.toLowerCase();
+          if (lower.includes("too large")) {
             if (chunkAdjustments < maxChunkAdjustments) {
               chunkAdjustments += 1;
-              maxChunk = Math.max(debtRemaining / 2, epsilon * 10);
+              // shrink aggressively: half, then quarter, etc.
+              maxChunk = Math.max(debtRemaining / Math.pow(2, chunkAdjustments), epsilon * 10);
               this.queueKaminoLog(
                 "repay-with-collateral",
                 `Transacao grande demais; reduzindo chunk para ${maxChunk.toFixed(8)}.`,
