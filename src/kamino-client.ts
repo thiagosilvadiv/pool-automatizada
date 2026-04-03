@@ -212,6 +212,7 @@ class RealKaminoClient implements KaminoClient {
   private marketPromise: Promise<KaminoMarket> | null = null;
   private sendAndConfirm: ReturnType<typeof sendAndConfirmTransactionFactory>;
   private lastState: KaminoPositionState | null = null;
+  private lastStateAt: number = 0;
 
   constructor(options: {
     ctx: KaminoClientContext;
@@ -911,11 +912,16 @@ class RealKaminoClient implements KaminoClient {
   }
 
   async getPositionState(): Promise<KaminoPositionState | null> {
+    // Cache de curta duração: se leu com sucesso há menos de 8s, devolve o cache.
+    // Isso evita travar o tick com 3 retries × 2s quando a RPC está lenta.
+    const CACHE_TTL_MS = 8_000;
+    if (this.lastState && (Date.now() - this.lastStateAt) < CACHE_TTL_MS) {
+      return this.lastState;
+    }
     try {
       const market = await this.loadMarket();
       const obligationTypes = (() => {
         const variants = [this.obligationType];
-        // Some markets may use MultiplyObligation; include if present in this SDK build.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const maybeMultiply = (KaminoMarket as any)?.MultiplyObligation;
         if (maybeMultiply) {
@@ -947,7 +953,10 @@ class RealKaminoClient implements KaminoClient {
           await sleep(2000);
         }
       }
+      // Se após 3 tentativas ainda não encontrou, invalida o cache do market
+      // para forçar um reload na próxima chamada (market pode estar com dados antigos).
       if (!obligation) {
+        this.marketPromise = null;
         return null;
       }
       const deposit = obligation.getDeposits()[0];
