@@ -699,17 +699,15 @@ class RealKaminoClient implements KaminoClient {
         const decimals = await this.resolveDecimals(mint);
         const text = typeof amountValue === "string" ? amountValue : amountValue?.toString?.() ?? String(amountValue);
         if (!text) return 0;
-        if (text.includes(".") || text.toLowerCase().includes("e")) {
-          const parsed = Number(text);
-          return Number.isFinite(parsed) ? parsed : 0;
+        const dec = new Decimal(text);
+        if (!dec.isFinite()) return 0;
+        const rawThreshold = Math.pow(10, Math.max(0, decimals - 1));
+        // Heurística: se o valor for grande (>= 10^(decimals-1)), tratamos como raw e dividimos.
+        // Caso contrário, assumimos que já está em UI.
+        if (dec.greaterThanOrEqualTo(rawThreshold)) {
+          return dec.div(Math.pow(10, Math.max(0, decimals))).toNumber();
         }
-        try {
-          const raw = BigInt(text);
-          return Number(raw) / Math.pow(10, Math.max(0, decimals));
-        } catch {
-          const fallback = Number(text);
-          return Number.isFinite(fallback) ? fallback : 0;
-        }
+        return dec.toNumber();
       };
 
       const deposits = await Promise.all(depositsRaw.map(async (item) => {
