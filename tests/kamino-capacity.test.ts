@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import Decimal from "decimal.js";
 
-import { applyWithdrawBuffer, lamportsToUi } from "../src/kamino-client.js";
+import { applyWithdrawBuffer, lamportsToUi, isBlockhashError } from "../src/kamino-client.js";
 import { computeRiskAwareRepayChunk } from "../src/orca.js";
 
 describe("kamino withdraw capacity helpers", () => {
@@ -42,5 +42,13 @@ describe("risk-aware chunk selection", () => {
     });
     expect(result.chunk).toBe(0);
     expect(result.reason).toMatch(/capacidade/i);
+  });
+});
+
+describe("kamino blockhash detection", () => {
+  it("detects -32002 messages", () => {
+    expect(isBlockhashError(new Error("Transaction simulation failed: -32002"))).toBe(true);
+    expect(isBlockhashError({ message: "blockhash not found" })).toBe(true);
+    expect(isBlockhashError({ message: "other error" })).toBe(false);
   });
 });

@@ -633,6 +633,13 @@ export class OrcaBot {
     this.syncKaminoStatus();
     await this.refreshKaminoCollateralMetrics();
     await this.refreshPoolState();
+    if (this.kaminoState?.repayRetryUntil) {
+      const retryAt = Date.parse(this.kaminoState.repayRetryUntil);
+      if (Number.isFinite(retryAt) && retryAt > Date.now()) {
+        this.lastStatus.lastAction = "kamino-repay-wait";
+        return this.getStatus();
+      }
+    }
     const trendSnapshot = await this.updateTrendStatus();
     const preferredExitToken = this.resolvePreferredExitToken(trendSnapshot.direction, trendSnapshot.stale);
     this.lastStatus.trendPreferredExitToken = preferredExitToken;
@@ -3541,6 +3548,12 @@ export class OrcaBot {
               break;
             }
             if (splitResult.retryable) {
+              await refreshPosition();
+              this.queueKaminoLog(
+                "repay-with-collateral-refresh",
+                `Retryable split-repay; debt agora ${debtRemaining.toFixed(8)}, deposits ${onChainDeposits.size}`,
+                "info"
+              );
               return {
                 performed,
                 debtAmount: debtRemaining,
@@ -3602,14 +3615,20 @@ export class OrcaBot {
             break;
           }
           if (this.isKaminoRetryableError(message)) {
-            this.queueKaminoLog("repay-with-collateral-failed", message, "warn");
-            return {
-              performed: performed,
-              debtAmount: debtRemaining,
-              onChainDeposits,
-              retryable: true,
-              error: message
-            };
+          this.queueKaminoLog("repay-with-collateral-failed", message, "warn");
+          await refreshPosition();
+          this.queueKaminoLog(
+            "repay-with-collateral-refresh",
+            `Retryable erro apos falha de repay; debt agora ${debtRemaining.toFixed(8)}, deposits ${onChainDeposits.size}`,
+            "info"
+          );
+          return {
+            performed: performed,
+            debtAmount: debtRemaining,
+            onChainDeposits,
+            retryable: true,
+            error: message
+          };
           }
           if (this.isKaminoQuoteError(message)) {
             lastQuoteError = message;
@@ -3740,7 +3759,21 @@ export class OrcaBot {
         break;
       }
     }
-    if (Math.abs(onChainDebtAmount - recordedDebtAmount) > epsilon) {
+    if (onChainDebtAmount + epsilon < recordedDebtAmount) {
+      // Debt decreased on-chain (likely tx confirmed despite RPC error) -> sync quietly.
+      this.queueKaminoLog(
+        "reconcile-info",
+        `Divida on-chain (${onChainDebtAmount}) menor que registrada (${recordedDebtAmount}); atualizando estado local.`,
+        "info"
+      );
+      recordedDebtAmount = onChainDebtAmount;
+      state = {
+        ...state,
+        debtAmount: onChainDebtAmount,
+        collaterals
+      };
+      this.setKaminoState(state);
+    } else if (onChainDebtAmount - epsilon > recordedDebtAmount) {
       mismatchReasons.push("divida on-chain diferente do registrado");
     }
     if ((recordedDebtAmount <= 0 || !debtMint) && onChainBorrows.size > 0) {

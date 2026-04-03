@@ -184,7 +184,7 @@ function decodeRpcError(err: any): { code?: number; name?: string; message: stri
   return { code: err?.code, name: err?.name, message, logs: err?.logs };
 }
 
-function isBlockhashError(err: any): boolean {
+export function isBlockhashError(err: any): boolean {
   const msg = String(err?.message ?? err).toLowerCase();
   return msg.includes("blockhash not found") || msg.includes("blockhash expired") || msg.includes("-32002");
 }
@@ -286,6 +286,7 @@ class RealKaminoClient implements KaminoClient {
     }
     let attempt = 0;
     let lastErr: any;
+    let lastSignature: string | null = null;
     while (attempt < 2) {
       attempt += 1;
       try {
@@ -301,6 +302,7 @@ class RealKaminoClient implements KaminoClient {
         );
         const signed = await signTransactionMessageWithSigners(txMessage);
         const signature = getSignatureFromTransaction(signed);
+        lastSignature = signature;
         await this.sendAndConfirmSafe(signed as any, signature, undefined, {
           blockhash: (latestBlockhash as any)?.blockhash ?? latestBlockhash,
           slot
@@ -310,9 +312,22 @@ class RealKaminoClient implements KaminoClient {
       } catch (err) {
         lastErr = err;
         const decoded = decodeRpcError(err);
-        if (attempt < 2 && isBlockhashError(err)) {
-          logger.warn({ attempt, err: decoded }, "retry Kamino tx por blockhash");
-          continue;
+        const isBlockhash = isBlockhashError(err);
+        if (isBlockhash && lastSignature) {
+          try {
+            await this.confirmSignatureWithRetry(lastSignature, 20_000, 1_000);
+            logger.info({ sig: lastSignature }, "kamino tx confirmada apos erro de blockhash");
+            return lastSignature;
+          } catch (confirmErr) {
+            logger.warn({ sig: lastSignature, err: decodeRpcError(confirmErr) }, "blockhash error; confirmacao falhou, marcando como retryable");
+          }
+        }
+        if (isBlockhash) {
+          const retryable = new Error("blockhash not found/expired (-32002) - retryable");
+          (retryable as any).__code = -32002;
+          (retryable as any).__retryable = true;
+          logger.warn({ attempt, err: decoded }, "kamino tx blockhash erro; devolvendo para retry");
+          throw retryable;
         }
         logger.error({ err: decoded }, "falha ao enviar Kamino tx");
         throw err;
@@ -327,6 +342,7 @@ class RealKaminoClient implements KaminoClient {
     }
     let attempt = 0;
     let lastErr: any;
+    let lastSignature: string | null = null;
     while (attempt < 2) {
       attempt += 1;
       try {
@@ -361,6 +377,7 @@ class RealKaminoClient implements KaminoClient {
         }
         const signed = await signTransactionMessageWithSigners(txMessage);
         const signature = getSignatureFromTransaction(signed);
+        lastSignature = signature;
         await this.sendAndConfirmSafe(signed as any, signature, undefined, {
           blockhash: (latestBlockhash as any)?.blockhash ?? latestBlockhash,
           slot
@@ -373,9 +390,22 @@ class RealKaminoClient implements KaminoClient {
       } catch (err) {
         lastErr = err;
         const decoded = decodeRpcError(err);
-        if (attempt < 2 && isBlockhashError(err)) {
-          logger.warn({ attempt, err: decoded }, "retry Kamino send por blockhash");
-          continue;
+        const isBlockhash = isBlockhashError(err);
+        if (isBlockhash && lastSignature) {
+          try {
+            await this.confirmSignatureWithRetry(lastSignature, 20_000, 1_000);
+            logger.info({ sig: lastSignature }, "kamino instructions confirmadas apos erro de blockhash");
+            return lastSignature;
+          } catch (confirmErr) {
+            logger.warn({ sig: lastSignature, err: decodeRpcError(confirmErr) }, "blockhash error em instructions; confirmacao falhou, marcando retryable");
+          }
+        }
+        if (isBlockhash) {
+          const retryable = new Error("blockhash not found/expired (-32002) - retryable");
+          (retryable as any).__code = -32002;
+          (retryable as any).__retryable = true;
+          logger.warn({ attempt, err: decoded }, "kamino instructions blockhash erro; devolvendo para retry");
+          throw retryable;
         }
         logger.error({ err: decoded }, "falha ao enviar instrucoes Kamino");
         throw err;
