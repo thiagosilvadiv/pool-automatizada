@@ -2926,7 +2926,7 @@ export class OrcaBot {
   }
 
   private async closeKaminoCycle(mode: "manual" | "target" | "token-change"): Promise<void> {
-    const state = this.kaminoState;
+    let state = this.kaminoState;
     if (!state || !state.active) {
       this.setError("Nenhum ciclo Kamino ativo");
       return;
