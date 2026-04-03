@@ -159,7 +159,9 @@ describe("config", () => {
       kaminoCloseRule: "avg-price",
       kaminoPriceBufferPct: 0.5,
       kaminoCollateralMode: "exit",
-      kaminoAutoCloseOnTokenChange: true
+      kaminoAutoCloseOnTokenChange: true,
+      kaminoRepayRetrySec: 10,
+      kaminoRepayMaxAttempts: 2
     })).not.toThrow();
     expect(() => loadWith({ kaminoCollateralMode: "both" })).not.toThrow();
   });
@@ -172,5 +174,7 @@ describe("config", () => {
     expect(() => loadWith({ kaminoCloseRule: "later" })).toThrow();
     expect(() => loadWith({ kaminoPriceBufferPct: -0.1 })).toThrow();
     expect(() => loadWith({ kaminoCollateralMode: "maybe" })).toThrow();
+    expect(() => loadWith({ kaminoRepayRetrySec: 0 })).toThrow();
+    expect(() => loadWith({ kaminoRepayMaxAttempts: -1 })).toThrow();
   });
 });

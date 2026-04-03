@@ -267,6 +267,60 @@ export class OrcaBot {
       || message.includes("429");
   }
 
+  private isKaminoRetryableError(err: any): boolean {
+    if (!err) return false;
+    if (this.isRateLimitError(err)) return true;
+    const message = String(err?.message ?? err).toLowerCase();
+    return message.includes("-32002")
+      || message.includes("rpc response error")
+      || message.includes("too many requests")
+      || message.includes("429");
+  }
+
+  private isKaminoQuoteError(err: any): boolean {
+    if (!err) return false;
+    const message = String(err?.message ?? err).toLowerCase();
+    return message.includes("-32602")
+      || message.includes("invalid params")
+      || message.includes("invalid parameters")
+      || message.includes("quote failed")
+      || message.includes("quote-failed");
+  }
+
+  private scheduleKaminoRepayRetry(
+    state: KaminoCycleState,
+    reason: string,
+    mode: "manual" | "target" | "token-change"
+  ): boolean {
+    const retrySec = Math.max(1, Number(this.config.kaminoRepayRetrySec ?? 15));
+    const maxAttempts = Math.max(0, Math.floor(Number(this.config.kaminoRepayMaxAttempts ?? 2)));
+    const nextAttempts = Number(state.repayRetryAttempts ?? 0) + 1;
+    if (maxAttempts === 0 || nextAttempts > maxAttempts) {
+      this.setKaminoState({
+        ...state,
+        repayRetryUntil: null,
+        repayRetryAttempts: nextAttempts,
+        repayRetryReason: reason,
+        lastError: reason
+      });
+      return false;
+    }
+    const retryUntil = new Date(Date.now() + retrySec * 1000).toISOString();
+    const message = `${reason} (nova tentativa em ${retrySec}s)`;
+    this.setKaminoState({
+      ...state,
+      repayRetryUntil: retryUntil,
+      repayRetryAttempts: nextAttempts,
+      repayRetryReason: reason,
+      lastError: message
+    });
+    this.queueKaminoLog("repay-wait", message, "warn");
+    if (mode === "target") {
+      return true;
+    }
+    throw new Error(message);
+  }
+
   private async sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -737,9 +791,12 @@ export class OrcaBot {
     this.lastStatus.running = true;
     this.resetActionFee();
     try {
-      await this.closeKaminoCycle("manual");
-      this.lastStatus.lastAction = "kamino-close";
-      return { ok: true, status: this.getStatus() };
+      const closed = await this.closeKaminoCycle("manual");
+      if (closed) {
+        this.lastStatus.lastAction = "kamino-close";
+        return { ok: true, status: this.getStatus() };
+      }
+      return { ok: false, reason: "Fechamento Kamino nao concluido", status: this.getStatus() };
     } catch (err) {
       this.setError(err);
       return { ok: false, reason: err instanceof Error ? err.message : String(err), status: this.getStatus() };
@@ -2100,6 +2157,11 @@ export class OrcaBot {
       ownerPoolName: state.ownerPoolName ?? null,
       marketAddress: state.marketAddress ?? null,
       lastSeenAt: state.lastSeenAt ?? null,
+      repayRetryUntil: state.repayRetryUntil ?? null,
+      repayRetryAttempts: Number.isFinite(Number(state.repayRetryAttempts ?? NaN))
+        ? Number(state.repayRetryAttempts)
+        : null,
+      repayRetryReason: state.repayRetryReason ?? null,
       baselineTokenA,
       baselineTokenB,
       reservedTokenA,
@@ -3051,9 +3113,12 @@ export class OrcaBot {
           { rule, collaterals: collaterals.map((item) => item.mint) },
           "kamino target atingido; fechando ciclo"
         );
-        await this.closeKaminoCycle("target");
-        this.lastStatus.lastAction = "kamino-close";
-        return true;
+        const closed = await this.closeKaminoCycle("target");
+        if (closed) {
+          this.lastStatus.lastAction = "kamino-close";
+          return true;
+        }
+        return false;
       }
     } catch (err) {
       logger.warn({ err }, "falha ao avaliar fechamento kamino");
@@ -3068,7 +3133,13 @@ export class OrcaBot {
     debtMint: string;
     debtAmount: number;
     onChainDeposits: Map<string, number>;
-  }): Promise<{ performed: boolean; debtAmount: number; onChainDeposits: Map<string, number> }> {
+  }): Promise<{
+    performed: boolean;
+    debtAmount: number;
+    onChainDeposits: Map<string, number>;
+    retryable?: boolean;
+    error?: string;
+  }> {
     if (!input.collaterals.length || input.debtAmount <= 0) {
       return { performed: false, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
     }
@@ -3091,30 +3162,70 @@ export class OrcaBot {
       if (Math.abs(usdDiff) > 0) return usdDiff;
       return b.amount - a.amount;
     });
-    const candidate = candidates[0];
-    if (!candidate?.mint) {
-      return { performed: false, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
+    let lastQuoteError: string | null = null;
+    for (const candidate of candidates) {
+      if (!candidate?.mint) continue;
+      if (this.isSwapAllowlistActive() && !this.isSwapAllowed(candidate.mint)) {
+        this.queueKaminoLog(
+          "repay-with-collateral",
+          `Token ${candidate.mint} nao permitido para swap; ignorando colateral.`,
+          "warn"
+        );
+        continue;
+      }
+      try {
+        this.queueKaminoLog(
+          "repay-with-collateral",
+          `Tentando repay com colateral ${candidate.mint}.`,
+          "info"
+        );
+        await input.kamino.repayWithCollateral({
+          collateralMint: candidate.mint,
+          debtMint: input.debtMint,
+          repayAmount: input.debtAmount,
+          slippageBps: this.config.slippageBps
+        });
+        this.queueHistoryAction("kamino-repay");
+        this.queueKaminoLog("repay-with-collateral", "Repay com colateral concluido.", "info");
+        lastQuoteError = null;
+        break;
+      } catch (err) {
+        const message = stringifyError(err);
+        if (this.isKaminoRetryableError(message)) {
+          this.queueKaminoLog("repay-with-collateral-failed", message, "warn");
+          return {
+            performed: false,
+            debtAmount: input.debtAmount,
+            onChainDeposits: input.onChainDeposits,
+            retryable: true,
+            error: message
+          };
+        }
+        if (this.isKaminoQuoteError(message)) {
+          lastQuoteError = message;
+          this.queueKaminoLog(
+            "repay-with-collateral-failed",
+            `Quote falhou para ${candidate.mint}: ${message}`,
+            "warn"
+          );
+          continue;
+        }
+        this.queueKaminoLog("repay-with-collateral-failed", message, "error");
+        return {
+          performed: false,
+          debtAmount: input.debtAmount,
+          onChainDeposits: input.onChainDeposits,
+          error: message
+        };
+      }
     }
-    if (this.isSwapAllowlistActive() && !this.isSwapAllowed(candidate.mint)) {
-      this.queueKaminoLog(
-        "repay-with-collateral",
-        "Token de colateral nao permitido para swap; repay com colateral bloqueado.",
-        "warn"
-      );
-      return { performed: false, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
-    }
-    try {
-      await input.kamino.repayWithCollateral({
-        collateralMint: candidate.mint,
-        debtMint: input.debtMint,
-        repayAmount: input.debtAmount,
-        slippageBps: this.config.slippageBps
-      });
-      this.queueHistoryAction("kamino-repay");
-      this.queueKaminoLog("repay-with-collateral", "Repay com colateral concluido.", "info");
-    } catch (err) {
-      this.queueKaminoLog("repay-with-collateral-failed", stringifyError(err), "error");
-      return { performed: false, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
+    if (lastQuoteError) {
+      return {
+        performed: false,
+        debtAmount: input.debtAmount,
+        onChainDeposits: input.onChainDeposits,
+        error: lastQuoteError
+      };
     }
 
     try {
@@ -3135,11 +3246,11 @@ export class OrcaBot {
     return { performed: true, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
   }
 
-  private async closeKaminoCycle(mode: "manual" | "target" | "token-change"): Promise<void> {
+  private async closeKaminoCycle(mode: "manual" | "target" | "token-change"): Promise<boolean> {
     let state = this.kaminoState;
     if (!state || !state.active) {
       this.setError("Nenhum ciclo Kamino ativo");
-      return;
+      return false;
     }
     if (!this.isKaminoOwner(state)) {
       const owner = state.ownerPoolName ?? state.ownerPoolId ?? "outra pool";
@@ -3147,6 +3258,13 @@ export class OrcaBot {
     }
     this.lastStatus.running = true;
     this.resetActionFee();
+
+    if (mode === "target" && state.repayRetryUntil) {
+      const retryAt = Date.parse(state.repayRetryUntil);
+      if (Number.isFinite(retryAt) && retryAt > Date.now()) {
+        return false;
+      }
+    }
 
     const resolved = await this.resolveKaminoPositionWithFallback();
     const kamino = resolved.kamino;
@@ -3257,7 +3375,7 @@ export class OrcaBot {
         this.setKaminoState({ ...state, lastError: message });
         this.queueKaminoLog("mismatch", message, mode === "manual" ? "warn" : "error");
         if (mode !== "manual") {
-          return;
+          return false;
         }
       }
     }
@@ -3300,6 +3418,12 @@ export class OrcaBot {
           debtAmount,
           onChainDeposits
         });
+        if (repayAttempt.retryable && repayAttempt.error) {
+          const wait = this.scheduleKaminoRepayRetry(state, repayAttempt.error, mode);
+          if (wait) {
+            return false;
+          }
+        }
         if (repayAttempt.performed) {
           debtAmount = repayAttempt.debtAmount;
           onChainDeposits = repayAttempt.onChainDeposits;
@@ -3432,6 +3556,12 @@ export class OrcaBot {
         const coverage = await coverShortfall();
         if (!coverage.ok) {
           const message = coverage.reason ?? "Colateral insuficiente para pagar a divida";
+          if (this.isKaminoRetryableError(message)) {
+            const wait = this.scheduleKaminoRepayRetry(state, message, mode);
+            if (wait) {
+              return false;
+            }
+          }
           this.setKaminoState({ ...state, lastError: message });
           this.queueKaminoLog("repay-insufficient", message, "error");
           throw new Error(message);
@@ -3451,7 +3581,14 @@ export class OrcaBot {
         );
         this.queueHistoryAction("kamino-repay");
       } catch (err) {
-        this.queueKaminoLog("repay-failed", stringifyError(err), "error");
+        const message = stringifyError(err);
+        if (this.isKaminoRetryableError(message)) {
+          const wait = this.scheduleKaminoRepayRetry(state, message, mode);
+          if (wait) {
+            return false;
+          }
+        }
+        this.queueKaminoLog("repay-failed", message, "error");
         throw err;
       }
     }
@@ -3479,7 +3616,14 @@ export class OrcaBot {
           );
           this.queueHistoryAction("kamino-withdraw");
         } catch (err) {
-          this.queueKaminoLog("withdraw-failed", stringifyError(err), "error");
+          const message = stringifyError(err);
+          if (this.isKaminoRetryableError(message)) {
+            const wait = this.scheduleKaminoRepayRetry(state, message, mode);
+            if (wait) {
+              return false;
+            }
+          }
+          this.queueKaminoLog("withdraw-failed", message, "error");
           throw err;
         }
       }
@@ -3529,6 +3673,9 @@ export class OrcaBot {
       ownerPoolId: state.ownerPoolId ?? this.poolId ?? null,
       ownerPoolName: state.ownerPoolName ?? this.poolName ?? null,
       marketAddress: state.marketAddress ?? this.getKaminoMarketAddress(),
+      repayRetryUntil: null,
+      repayRetryAttempts: 0,
+      repayRetryReason: null,
       baselineTokenA: null,
       baselineTokenB: null,
       reservedTokenA: null,
@@ -3556,6 +3703,7 @@ export class OrcaBot {
     this.releaseKaminoLockIfOwned();
     this.queueKaminoLog("close", "Ciclo Kamino fechado (repay + withdraw).", "info");
     logger.info({ mode }, "kamino cycle closed");
+    return true;
   }
 
   private async rebalanceWithKamino(input: {
@@ -3684,7 +3832,11 @@ export class OrcaBot {
       if (nextMint && existing.length > 0 && !existing.includes(nextMint)) {
         if (this.config.kaminoAutoCloseOnTokenChange) {
           try {
-            await this.closeKaminoCycle("token-change");
+            const closed = await this.closeKaminoCycle("token-change");
+            if (!closed) {
+              this.setError("Fechamento do ciclo Kamino pendente");
+              return "kamino-rebalance-failed";
+            }
           } catch (err) {
             this.setError(err);
             return "kamino-rebalance-failed";

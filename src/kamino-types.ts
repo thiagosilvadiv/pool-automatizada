@@ -21,6 +21,9 @@ export type KaminoCycleState = {
   ownerPoolName?: string | null;
   marketAddress?: string | null;
   lastSeenAt?: string | null;
+  repayRetryUntil?: string | null;
+  repayRetryAttempts?: number | null;
+  repayRetryReason?: string | null;
   baselineTokenA?: number | null;
   baselineTokenB?: number | null;
   reservedTokenA?: number | null;

@@ -48,6 +48,8 @@ export type Config = {
   kaminoConvertToCollateral: boolean;
   kaminoAvgPriceBasis: "deposit" | "debt";
   kaminoAvgMode: "cumulative" | "reset";
+  kaminoRepayRetrySec: number;
+  kaminoRepayMaxAttempts: number;
   autoResumeEnabled: boolean;
   autoResumeMaxAttempts: number;
   autoResumeBaseDelayMs: number;
@@ -386,6 +388,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   if (dataKaminoAvgModeRaw != null && dataKaminoAvgMode === undefined) {
     throw new Error("kaminoAvgMode must be cumulative or reset");
   }
+  const envKaminoRepayRetrySec = parseEnvNumber(process.env.KAMINO_REPAY_RETRY_SEC);
+  const envKaminoRepayMaxAttempts = parseEnvNumber(process.env.KAMINO_REPAY_MAX_ATTEMPTS);
 
   const envTrendTimeframeRaw = process.env.TREND_TIMEFRAME ?? "";
   const envTrendTimeframe = parseTrendTimeframe(envTrendTimeframeRaw);
@@ -568,6 +572,10 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     kaminoAvgMode: envKaminoAvgMode
       ?? dataKaminoAvgMode
       ?? "cumulative",
+    kaminoRepayRetrySec: envKaminoRepayRetrySec
+      ?? Number((data as any).kaminoRepayRetrySec ?? 15),
+    kaminoRepayMaxAttempts: envKaminoRepayMaxAttempts
+      ?? Number((data as any).kaminoRepayMaxAttempts ?? 2),
     autoResumeEnabled,
     autoResumeMaxAttempts: Number(autoResumeMaxAttempts),
     autoResumeBaseDelayMs: Number(autoResumeBaseDelayMs),
@@ -735,6 +743,12 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!parseKaminoAvgMode(config.kaminoAvgMode)) {
     throw new Error("kaminoAvgMode must be cumulative or reset");
+  }
+  if (!Number.isFinite(config.kaminoRepayRetrySec) || config.kaminoRepayRetrySec < 1) {
+    throw new Error("kaminoRepayRetrySec must be >= 1");
+  }
+  if (!Number.isFinite(config.kaminoRepayMaxAttempts) || config.kaminoRepayMaxAttempts < 0) {
+    throw new Error("kaminoRepayMaxAttempts must be >= 0");
   }
   if (!Number.isFinite(config.minSolBalance) || config.minSolBalance < 0) {
     throw new Error("minSolBalance must be >= 0");
