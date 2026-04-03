@@ -3221,25 +3221,22 @@ export class OrcaBot {
             shortfall = Math.max(0, repayTarget - stableBalance);
           }
 
-          for (const entry of others) {
-            if (shortfall <= 0) break;
-            if (!this.config.jupiterApiKey) {
-              return { ok: false, reason: "Jupiter API key ausente para converter colateral" };
-            }
-            if (this.isSwapAllowlistActive() && !this.isSwapAllowed(entry.mint)) {
-              return { ok: false, reason: "Token de colateral nao permitido para swap" };
-            }
-            const decimals = await this.getTokenDecimals(entry.mint);
-            const priceUsd = await this.getTokenUsdPrice({
-              mint: entry.mint,
-              decimals,
-              stableMint: stable.mint,
-              stableDecimals: stable.decimals
-            });
-            if (priceUsd == null || priceUsd <= 0) {
-              return { ok: false, reason: "Nao foi possivel precificar colateral para repay" };
-            }
-            const requiredAmount = shortfall / priceUsd;
+        for (const entry of others) {
+          if (shortfall <= 0) break;
+          if (!this.config.jupiterApiKey) {
+            return { ok: false, reason: "Jupiter API key ausente para converter colateral" };
+          }
+          if (this.isSwapAllowlistActive() && !this.isSwapAllowed(entry.mint)) {
+            return { ok: false, reason: "Token de colateral nao permitido para swap" };
+          }
+          const decimals = await this.getTokenDecimals(entry.mint);
+          const priceUsd = await this.getTokenUsdPrice({
+            mint: entry.mint,
+            decimals,
+            stableMint: stable.mint,
+            stableDecimals: stable.decimals
+          });
+          const requiredAmount = priceUsd && priceUsd > 0 ? shortfall / priceUsd : entry.amount;
           const withdrawAmount = Math.min(entry.amount, requiredAmount);
           if (withdrawAmount <= 0) continue;
           try {
@@ -3252,11 +3249,46 @@ export class OrcaBot {
           } catch (err) {
             return { ok: false, reason: `Falha ao sacar colateral: ${stringifyError(err)}` };
           }
+          try {
+            const swappedOut = await this.swapTokenToStable({
+              inputMint: entry.mint,
+              inputDecimals: decimals,
+              amountUi: withdrawAmount,
+              stableMint: stable.mint,
+              stableDecimals: stable.decimals,
+              label: "kamino-collateral->stable"
+            });
+            if (swappedOut != null) {
+              stableBalance += swappedOut;
+            } else {
+              stableBalance = await this.getWalletTokenBalance(stable.mint);
+            }
+          } catch (err) {
+            return { ok: false, reason: `Falha ao converter colateral: ${stringifyError(err)}` };
+          }
+          shortfall = Math.max(0, repayTarget - stableBalance);
+        }
+
+        // Última tentativa: se ainda faltar, saque todo colateral restante e converta tudo.
+        if (shortfall > 0) {
+          for (const entry of others) {
+            const remaining = onChainDeposits.get(entry.mint) ?? 0;
+            if (remaining <= 0) continue;
+            try {
+              await this.kaminoCallWithRetry(
+                () => kamino.withdraw({ mint: entry.mint, amount: remaining }),
+                "kamino-withdraw"
+              );
+              this.queueHistoryAction("kamino-withdraw");
+              recordWithdrawn(entry.mint, remaining);
+            } catch (err) {
+              continue;
+            }
             try {
               const swappedOut = await this.swapTokenToStable({
                 inputMint: entry.mint,
-                inputDecimals: decimals,
-                amountUi: withdrawAmount,
+                inputDecimals: await this.getTokenDecimals(entry.mint),
+                amountUi: remaining,
                 stableMint: stable.mint,
                 stableDecimals: stable.decimals,
                 label: "kamino-collateral->stable"
@@ -3266,13 +3298,16 @@ export class OrcaBot {
               } else {
                 stableBalance = await this.getWalletTokenBalance(stable.mint);
               }
-            } catch (err) {
-              return { ok: false, reason: `Falha ao converter colateral: ${stringifyError(err)}` };
+            } catch {
+              // ignore swap failure in fallback; continue
             }
             shortfall = Math.max(0, repayTarget - stableBalance);
+            if (shortfall <= 0) break;
           }
-          return { ok: shortfall <= 0 };
-        };
+        }
+
+        return { ok: shortfall <= 0 };
+      };
 
         this.queueKaminoLog("repay-collateral", "Usando colateral para pagar a divida.", "warn");
         const coverage = await coverShortfall();
