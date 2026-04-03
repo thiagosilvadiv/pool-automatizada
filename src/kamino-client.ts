@@ -293,7 +293,7 @@ class RealKaminoClient implements KaminoClient {
   private async sendAndConfirmSafe(
     signed: any,
     signature: string,
-    opts: { commitment?: "confirmed" | "finalized"; skipPreflight?: boolean } = {
+    opts: { commitment: "processed" | "confirmed" | "finalized"; skipPreflight?: boolean } = {
       commitment: "confirmed",
       skipPreflight: false
     }
@@ -301,7 +301,7 @@ class RealKaminoClient implements KaminoClient {
     try {
       await this.sendAndConfirm(signed, opts);
     } catch (err) {
-      const msg = String(err?.message ?? err);
+      const msg = String((err as any)?.message ?? err);
       if (msg.toLowerCase().includes("not confirmed")) {
         logger.warn({ signature, err: msg }, "tx not confirmed in time; polling status");
         await this.confirmSignatureWithRetry(signature);
