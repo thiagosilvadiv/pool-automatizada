@@ -351,7 +351,9 @@ class RealKaminoClient implements KaminoClient {
       inputMint,
       outputMint,
       amount,
-      slippageBps: String(slippageBps)
+      slippageBps: String(slippageBps),
+      restrictIntermediateTokens: "true",
+      maxAccounts: "24"
     });
     if (Array.isArray(this.ctx.config.jupiterExcludeDexes) && this.ctx.config.jupiterExcludeDexes.length > 0) {
       params.set("excludeDexes", this.ctx.config.jupiterExcludeDexes.join(","));
