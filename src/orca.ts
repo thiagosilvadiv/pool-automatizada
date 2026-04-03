@@ -3241,7 +3241,8 @@ export class OrcaBot {
                 `Transacao grande demais; reduzindo chunk para ${maxChunk.toFixed(8)}.`,
                 "warn"
               );
-              continue;
+              usedCandidate = true; // force retry loop with smaller chunk
+              break;
             }
           }
           if (this.isKaminoRetryableError(message)) {
