@@ -3296,7 +3296,6 @@ export class OrcaBot {
               `Transacao recusada por tamanho; ajustando chunk para ${adjusted.toFixed(8)}.`,
               "warn"
             );
-            debtRemaining = Math.max(debtRemaining, adjusted); // keep loop running with smaller attempt
             usedCandidate = true;
             break;
           }
