@@ -913,10 +913,26 @@ class RealKaminoClient implements KaminoClient {
   async getPositionState(): Promise<KaminoPositionState | null> {
     try {
       const market = await this.loadMarket();
-      const obligation = await market.getObligationByWallet(
-        this.signer.address,
-        this.obligationType
-      );
+      const obligationTypes = [
+        this.obligationType,
+        // tentativa adicional para posicoes criadas com outro tipo de obligation
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (KaminoMarket as any)?.MultiplyObligation ? new (KaminoMarket as any).MultiplyObligation(PROGRAM_ID) : null
+      ].filter(Boolean);
+
+      let obligation = null;
+      for (const obligationType of obligationTypes) {
+        try {
+          obligation = await market.getObligationByWallet(
+            this.signer.address,
+            obligationType
+          );
+        } catch (innerErr) {
+          logger.warn({ err: decodeRpcError(innerErr) }, "falha ao buscar obligation com tipo alternativo");
+          continue;
+        }
+        if (obligation) break;
+      }
       if (!obligation) {
         return null;
       }

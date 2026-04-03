@@ -3699,10 +3699,11 @@ export class OrcaBot {
     const kamino = resolved.kamino;
     const position = resolved.position;
     if (!position) {
-      const message = "Posicao Kamino nao encontrada no market; fechamento cancelado.";
+      const message = "Posicao Kamino nao encontrada no market; aguardando proxima leitura.";
       this.setKaminoState({ ...state, lastError: message });
-      this.queueKaminoLog("mismatch", message, "error");
-      throw new Error(message);
+      this.queueKaminoLog("not-found", message, "warn");
+      this.lastStatus.lastAction = "kamino-repay-wait";
+      return false;
     }
     const previousMarket = state.marketAddress ?? this.getConfiguredKaminoMarketAddress();
     if (resolved.marketAddress && previousMarket && resolved.marketAddress !== previousMarket) {
@@ -3748,13 +3749,14 @@ export class OrcaBot {
 
     const mismatchReasons: string[] = [];
     const epsilon = 1e-8;
+    const collateralTolerance = (expected: number) => Math.max(epsilon, Math.abs(expected) * 1e-6);
     if (collaterals.length === 0 && onChainDeposits.size > 0) {
       mismatchReasons.push("colateral on-chain nao registrado");
     }
     for (const entry of collaterals) {
       if (!entry.mint) continue;
       const onChainAmount = onChainDeposits.get(entry.mint) ?? 0;
-      if (Math.abs(onChainAmount - (entry.amount ?? 0)) > epsilon) {
+      if (Math.abs(onChainAmount - (entry.amount ?? 0)) > collateralTolerance(entry.amount ?? 0)) {
         mismatchReasons.push(`colateral ${entry.mint} diferente do registrado`);
         break;
       }
