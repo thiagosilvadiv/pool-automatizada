@@ -1011,6 +1011,7 @@ class RealKaminoClient implements KaminoClient {
         borrows
       };
       this.lastState = state;
+      this.lastStateAt = Date.now();
       return state;
     } catch (err) {
       if (isRateLimitError(err)) {
