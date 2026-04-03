@@ -1719,6 +1719,23 @@ export class OrcaBot {
       }
     }
 
+    // Fallback: if missing a side, allow a partial swap even without "surplus"
+    if (deltaA > 0 && walletB > 0) {
+      const neededB = deltaA * price;
+      const amountIn = Math.min(neededB, walletB) * factor;
+      if (amountIn > 0) {
+        return this.swap(this.poolState.tokenMintB, amountIn, slippage);
+      }
+    }
+
+    if (deltaB > 0 && walletA > 0) {
+      const neededA = deltaB / price;
+      const amountIn = Math.min(neededA, walletA) * factor;
+      if (amountIn > 0) {
+        return this.swap(this.poolState.tokenMintA, amountIn, slippage);
+      }
+    }
+
     return false;
   }
 
