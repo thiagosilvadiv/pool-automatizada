@@ -75,6 +75,17 @@ function deriveWsUrl(rpcUrl: string): string {
   return trimmed;
 }
 
+function isRateLimitError(err: any): boolean {
+  if (!err) return false;
+  const message = String(err?.message ?? err?.context?.message ?? err).toLowerCase();
+  const status = err?.context?.statusCode ?? err?.statusCode;
+  const code = err?.context?.__code ?? err?.__code ?? err?.code;
+  return status === 429
+    || String(code) === "8100002"
+    || message.includes("too many requests")
+    || message.includes("429");
+}
+
 async function loadSignerFromEnv(wallet: WalletLike): Promise<TransactionSigner> {
   const keypair = loadKeypair();
   const signer = await createKeyPairSignerFromBytes(keypair.secretKey);
@@ -97,6 +108,7 @@ class RealKaminoClient implements KaminoClient {
   private obligationType: VanillaObligation;
   private marketPromise: Promise<KaminoMarket> | null = null;
   private sendAndConfirm: ReturnType<typeof sendAndConfirmTransactionFactory>;
+  private lastState: KaminoPositionState | null = null;
 
   constructor(options: {
     ctx: KaminoClientContext;
@@ -431,7 +443,7 @@ class RealKaminoClient implements KaminoClient {
       const debtAmount = borrows.length
         ? borrows.reduce((sum, item) => sum + (item.amount ?? 0), 0)
         : null;
-      return {
+      const state: KaminoPositionState = {
         collateralMint,
         collateralAmount,
         debtMint,
@@ -440,7 +452,13 @@ class RealKaminoClient implements KaminoClient {
         deposits,
         borrows
       };
+      this.lastState = state;
+      return state;
     } catch (err) {
+      if (isRateLimitError(err)) {
+        logger.warn({ err }, "kamino rate limit ao ler posicao; usando cache");
+        return this.lastState;
+      }
       logger.warn({ err }, "falha ao ler posicao Kamino");
       return null;
     }

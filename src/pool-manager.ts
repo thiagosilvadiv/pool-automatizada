@@ -37,6 +37,17 @@ function stringifyError(err: unknown): string {
   }
   return String(err);
 }
+
+function isRateLimitError(err: unknown): boolean {
+  const raw: any = err as any;
+  const message = String(raw?.message ?? raw?.context?.message ?? err).toLowerCase();
+  const status = raw?.context?.statusCode ?? raw?.statusCode;
+  const code = raw?.context?.__code ?? raw?.__code ?? raw?.code;
+  return status === 429
+    || String(code) === "8100002"
+    || message.includes("too many requests")
+    || message.includes("429");
+}
 export type PoolEntry = {
   id: string;
   name: string;
@@ -153,6 +164,7 @@ export class PoolManager {
   private kaminoMarkets: KaminoMarketEntry[] = [];
   private kaminoScanTimer: NodeJS.Timeout | null = null;
   private kaminoScanInFlight = false;
+  private kaminoScanCooldownUntil: number | null = null;
   private balanceCoordinator = new BalanceCoordinator();
 
   constructor(baseConfig: Config, connection: any, wallet: any) {
@@ -873,6 +885,10 @@ export class PoolManager {
     if (this.baseConfig.dryRun || process.env.KAMINO_NOOP === "true") {
       return;
     }
+    const nowMs = Date.now();
+    if (this.kaminoScanCooldownUntil && nowMs < this.kaminoScanCooldownUntil) {
+      return;
+    }
     this.kaminoScanInFlight = true;
     try {
       const markets = this.collectKaminoMarketAddresses();
@@ -931,6 +947,18 @@ export class PoolManager {
             record?.runner.recoverKaminoFromLoan(updated);
           }
         } catch (err) {
+          if (isRateLimitError(err)) {
+            const cooldownMs = 60_000;
+            this.kaminoScanCooldownUntil = Date.now() + cooldownMs;
+            if (existing) {
+              nextByMarket.set(marketAddress, {
+                ...existing,
+                lastError: "Rate limit Kamino (429); aguardando antes de re-tentar.",
+                lastSeenAt: existing.lastSeenAt ?? now
+              });
+            }
+            break;
+          }
           if (existing) {
             nextByMarket.set(marketAddress, {
               ...existing,
