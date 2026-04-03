@@ -256,6 +256,39 @@ export class OrcaBot {
     this.kaminoMarketCandidates = botCtx.getKaminoMarketCandidates ?? null;
   }
 
+  private isRateLimitError(err: any): boolean {
+    if (!err) return false;
+    const message = String(err?.message ?? err?.context?.message ?? err).toLowerCase();
+    const status = err?.context?.statusCode ?? err?.statusCode;
+    const code = err?.context?.__code ?? err?.__code ?? err?.code;
+    return status === 429
+      || String(code) === "8100002"
+      || message.includes("too many requests")
+      || message.includes("429");
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async kaminoCallWithRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+    let lastErr: any;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        if (!this.isRateLimitError(err)) {
+          throw err;
+        }
+        const waitMs = 2000 * (attempt + 1);
+        logger.warn({ err, attempt, label, waitMs }, "kamino call rate-limited; retrying");
+        await this.sleep(waitMs);
+      }
+    }
+    throw lastErr;
+  }
+
   private resolveTrendTarget(target: TrendTarget): "tokenA" | "tokenB" | null {
     if (target === "tokenA" || target === "tokenB") {
       return target;
@@ -3172,15 +3205,18 @@ export class OrcaBot {
 
           for (const entry of stableFirst) {
             if (shortfall <= 0) break;
-            const withdrawAmount = Math.min(entry.amount, shortfall);
-            if (withdrawAmount <= 0) continue;
-            try {
-              await kamino.withdraw({ mint: entry.mint, amount: withdrawAmount });
-              this.queueHistoryAction("kamino-withdraw");
-              recordWithdrawn(entry.mint, withdrawAmount);
-            } catch (err) {
-              return { ok: false, reason: `Falha ao sacar colateral: ${stringifyError(err)}` };
-            }
+          const withdrawAmount = Math.min(entry.amount, shortfall);
+          if (withdrawAmount <= 0) continue;
+          try {
+            await this.kaminoCallWithRetry(
+              () => kamino.withdraw({ mint: entry.mint, amount: withdrawAmount }),
+              "kamino-withdraw"
+            );
+            this.queueHistoryAction("kamino-withdraw");
+            recordWithdrawn(entry.mint, withdrawAmount);
+          } catch (err) {
+            return { ok: false, reason: `Falha ao sacar colateral: ${stringifyError(err)}` };
+          }
             stableBalance += withdrawAmount;
             shortfall = Math.max(0, repayTarget - stableBalance);
           }
@@ -3204,15 +3240,18 @@ export class OrcaBot {
               return { ok: false, reason: "Nao foi possivel precificar colateral para repay" };
             }
             const requiredAmount = shortfall / priceUsd;
-            const withdrawAmount = Math.min(entry.amount, requiredAmount);
-            if (withdrawAmount <= 0) continue;
-            try {
-              await kamino.withdraw({ mint: entry.mint, amount: withdrawAmount });
-              this.queueHistoryAction("kamino-withdraw");
-              recordWithdrawn(entry.mint, withdrawAmount);
-            } catch (err) {
-              return { ok: false, reason: `Falha ao sacar colateral: ${stringifyError(err)}` };
-            }
+          const withdrawAmount = Math.min(entry.amount, requiredAmount);
+          if (withdrawAmount <= 0) continue;
+          try {
+            await this.kaminoCallWithRetry(
+              () => kamino.withdraw({ mint: entry.mint, amount: withdrawAmount }),
+              "kamino-withdraw"
+            );
+            this.queueHistoryAction("kamino-withdraw");
+            recordWithdrawn(entry.mint, withdrawAmount);
+          } catch (err) {
+            return { ok: false, reason: `Falha ao sacar colateral: ${stringifyError(err)}` };
+          }
             try {
               const swappedOut = await this.swapTokenToStable({
                 inputMint: entry.mint,
@@ -3252,7 +3291,10 @@ export class OrcaBot {
         throw new Error(message);
       }
       try {
-        await kamino.repay({ mint: stable.mint, amount: debtAmount });
+        await this.kaminoCallWithRetry(
+          () => kamino.repay({ mint: stable.mint, amount: debtAmount }),
+          "kamino-repay"
+        );
         this.queueHistoryAction("kamino-repay");
       } catch (err) {
         this.queueKaminoLog("repay-failed", stringifyError(err), "error");
@@ -3277,7 +3319,10 @@ export class OrcaBot {
     for (const entry of withdrawTargets) {
       if (entry.mint && entry.amount > 0) {
         try {
-          await kamino.withdraw({ mint: entry.mint, amount: entry.amount });
+          await this.kaminoCallWithRetry(
+            () => kamino.withdraw({ mint: entry.mint, amount: entry.amount }),
+            "kamino-withdraw"
+          );
           this.queueHistoryAction("kamino-withdraw");
         } catch (err) {
           this.queueKaminoLog("withdraw-failed", stringifyError(err), "error");
