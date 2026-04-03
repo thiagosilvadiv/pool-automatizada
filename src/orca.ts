@@ -3516,6 +3516,7 @@ export class OrcaBot {
         try {
           const solMint = NATIVE_MINT.toBase58();
           const solDecimals = 9;
+          const minSolReserve = Math.max(0, Number(this.config.minSolBalance ?? 0));
           let solBalance = await this.getWalletTokenBalance(solMint);
           const maxSolIterations = 6;
           let solAttempts = 0;
@@ -3527,13 +3528,15 @@ export class OrcaBot {
           });
           while (
             solAttempts < maxSolIterations &&
-            solBalance > 0.005 &&
+            solBalance - minSolReserve > 0.005 &&
             stableBalance + epsilon < debtAmount
           ) {
             solAttempts += 1;
             const shortfall = Math.max(0, debtAmount - stableBalance);
             const neededSol = solPrice && solPrice > 0 ? (shortfall * 1.05) / solPrice : 0.02;
-            const solChunk = Math.min(solBalance, Math.max(0.005, Math.min(0.1, neededSol)));
+            const maxSpendable = Math.max(0, solBalance - minSolReserve);
+            const solChunk = Math.min(maxSpendable, Math.max(0.005, Math.min(0.1, neededSol)));
+            if (solChunk <= 0) break;
             this.queueKaminoLog(
               "repay-sol",
               `Convertendo ${solChunk.toFixed(8)} SOL para ${stable.mint} (tentativa ${solAttempts}).`,
