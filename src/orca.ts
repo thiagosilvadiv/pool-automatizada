@@ -280,6 +280,7 @@ export class OrcaBot {
   private isKaminoQuoteError(err: any): boolean {
     if (!err) return false;
     const message = String(err?.message ?? err).toLowerCase();
+    if (message.includes("too large")) return false;
     return message.includes("-32602")
       || message.includes("invalid params")
       || message.includes("invalid parameters")
