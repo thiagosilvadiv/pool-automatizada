@@ -2318,18 +2318,71 @@ export class OrcaBot {
         }
         return;
       }
-      if (!this.kaminoState?.active) {
-        const recoveredCollaterals: KaminoCollateralEntry[] = [];
-        if (position?.collateralMint && (position.collateralAmount ?? 0) > 0) {
-          recoveredCollaterals.push({
+
+      const deposits = Array.isArray(position.deposits) ? position.deposits : [];
+      const borrows = Array.isArray(position.borrows) ? position.borrows : [];
+      const recoveredCollaterals: KaminoCollateralEntry[] = deposits.length
+        ? deposits.map((item) => ({
+          mint: item.mint ?? "",
+          amount: item.amount ?? 0,
+          usd: null,
+          debtUsd: null,
+          avgPriceUsdc: null,
+          targetPriceUsdc: null
+        }))
+        : (position?.collateralMint && (position.collateralAmount ?? 0) > 0
+          ? [{
             mint: position.collateralMint,
             amount: position.collateralAmount ?? 0,
             usd: null,
             debtUsd: null,
             avgPriceUsdc: null,
             targetPriceUsdc: null
-          });
+          }]
+          : []);
+
+      if (this.kaminoState?.active) {
+        const recordedDebt = Number(this.kaminoState.debtAmount ?? 0);
+        const recordedCollateral = Number(this.kaminoState.collateralAmount ?? 0);
+        const onChainDebt = Number(position.debtAmount ?? 0);
+        const onChainCollateral = Number(position.collateralAmount ?? 0);
+        const epsilon = 1e-8;
+
+        if (onChainDebt <= epsilon) {
+          const updated: KaminoCycleState = {
+            ...this.kaminoState,
+            active: false,
+            collateralMint: position.collateralMint ?? this.kaminoState.collateralMint ?? null,
+            collateralAmount: onChainCollateral,
+            debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
+            debtAmount: 0,
+            collaterals: recoveredCollaterals,
+            lastError: "Divida Kamino zerada; ciclo pausado localmente.",
+            updatedAt: new Date().toISOString()
+          };
+          this.setKaminoState(updated);
+          this.releaseKaminoLockIfOwned();
+          this.queueKaminoLog("debt-zero", "Divida Kamino zerada; ciclo pausado localmente.", "warn");
+          return;
         }
+
+        if (onChainDebt + epsilon < recordedDebt || onChainCollateral + epsilon < recordedCollateral) {
+          const updated: KaminoCycleState = {
+            ...this.kaminoState,
+            collateralMint: position.collateralMint ?? this.kaminoState.collateralMint ?? null,
+            collateralAmount: onChainCollateral,
+            debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
+            debtAmount: onChainDebt,
+            collaterals: recoveredCollaterals,
+            updatedAt: new Date().toISOString(),
+            lastError: "Estado Kamino reconciliado com on-chain."
+          };
+          this.setKaminoState(updated);
+          this.queueKaminoLog("reconcile", "Estado Kamino reconciliado com on-chain.", "warn");
+        }
+      }
+
+      if (!this.kaminoState?.active) {
         const previous = this.kaminoState;
         const ownerPoolId = this.poolId ?? previous?.ownerPoolId ?? null;
         const ownerPoolName = this.poolName ?? previous?.ownerPoolName ?? null;
