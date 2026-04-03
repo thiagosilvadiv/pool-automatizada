@@ -3467,6 +3467,47 @@ export class OrcaBot {
           "info"
         );
         let stableBalance = await this.getWalletTokenBalance(stable.mint);
+        // Usa SOL livre da wallet para gerar stable antes de tentar repay com colateral.
+        if (stableBalance + epsilon < debtAmount) {
+          try {
+            const solMint = NATIVE_MINT.toBase58();
+            const solBalance = await this.getWalletTokenBalance(solMint);
+            const solDecimals = 9;
+            if (solBalance > 0.01) {
+              const solPrice = await this.getTokenUsdPrice({
+                mint: solMint,
+                decimals: solDecimals,
+                stableMint: stable.mint,
+                stableDecimals: stable.decimals
+              });
+              const shortfall = Math.max(0, debtAmount - stableBalance);
+              const neededSol = solPrice && solPrice > 0 ? (shortfall * 1.05) / solPrice : 0.05;
+              const solChunk = Math.min(solBalance, Math.max(0.01, Math.min(0.1, neededSol)));
+              if (solChunk > epsilon) {
+                this.queueKaminoLog(
+                  "repay-sol",
+                  `Convertendo ${solChunk.toFixed(8)} SOL para ${stable.mint} para quitar divida.`,
+                  "info"
+                );
+                const swapped = await this.swapTokenToStable({
+                  inputMint: solMint,
+                  inputDecimals: solDecimals,
+                  amountUi: solChunk,
+                  stableMint: stable.mint,
+                  stableDecimals: stable.decimals,
+                  label: "wallet-sol->stable-repay"
+                });
+                if (swapped != null) {
+                  stableBalance += swapped;
+                } else {
+                  stableBalance = await this.getWalletTokenBalance(stable.mint);
+                }
+              }
+            }
+          } catch (err) {
+            logger.warn({ err }, "falha ao converter SOL livre para stable no fechamento");
+          }
+        }
         if (stableBalance + epsilon < debtAmount) {
           const repayAttempt = await this.tryRepayWithCollateral({
             kamino,
