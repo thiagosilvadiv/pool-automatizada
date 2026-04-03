@@ -1,5 +1,7 @@
 ﻿import { Connection, LAMPORTS_PER_SOL, PublicKey, VersionedTransaction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, getMint, TOKEN_PROGRAM_ID, NATIVE_MINT } from "@solana/spl-token";
+import { Transaction } from "@solana/web3.js";
+import { createAssociatedTokenAccountInstruction } from "@solana/spl-token";
 import DecimalJs from "decimal.js";
 import * as whirlpoolsSdk from "@orca-so/whirlpools-sdk";
 import * as commonSdk from "@orca-so/common-sdk";
@@ -2366,13 +2368,23 @@ export class OrcaBot {
       const ata = getAssociatedTokenAddressSync(new PublicKey(mint), this.wallet.publicKey);
       const info = await this.connection.getAccountInfo(ata);
       if (!info) {
-        const msg = `ATA ausente para ${mint}; crie antes do repay para evitar instrucoes extras.`;
-        this.queueKaminoLog("ata-missing", msg, "warn");
-        throw new Error(msg);
+        const ix = createAssociatedTokenAccountInstruction(
+          this.wallet.publicKey,
+          ata,
+          this.wallet.publicKey,
+          new PublicKey(mint)
+        );
+        const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash("finalized");
+        const tx = new Transaction().add(ix);
+        tx.feePayer = this.wallet.publicKey;
+        tx.recentBlockhash = blockhash;
+        const signed = (await this.wallet.signTransaction(tx)) as Transaction;
+        const sig = await this.connection.sendRawTransaction(signed.serialize());
+        await this.connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
+        this.queueKaminoLog("ata-created", `ATA criada para ${mint}`, "info");
       }
     } catch (err) {
       logger.warn({ err, mint }, "falha ao checar ATA");
-      throw err;
     }
   }
 
