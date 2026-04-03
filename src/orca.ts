@@ -3506,8 +3506,12 @@ export class OrcaBot {
             repayAmount = Math.min(repayAmount, maxChunkOverride);
           }
           const effectivePrice = Math.max(0, priceCollToDebt ?? 0);
+          // Não forçar split para wSOL: o SDK Kamino suporta wSOL como colateral
+          // no repayWithCollateral nativo (uma tx atômica). O split (withdraw→swap→repay)
+          // usa 3 txs separadas, cada uma sujeita a falha de blockhash.
+          // Só vai para split se: já viu "tx too large" antes, ou se o quote
+          // indica slippage/rota ruim (quoteOut < 50% do preço esperado).
           const preferSplit =
-            isSolColl ||
             this.kaminoTooLargeSeen ||
             (quoteOutStableUi != null &&
               capacity.capacityUi > 0 &&

@@ -292,7 +292,7 @@ class RealKaminoClient implements KaminoClient {
       attempt += 1;
       try {
         const { value: latestBlockhash } = await (this.rpc as any)
-          .getLatestBlockhash({ commitment: "finalized" })
+          .getLatestBlockhash({ commitment: "confirmed" })
           .send();
         const slot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
         const txMessage = pipe(
@@ -348,7 +348,7 @@ class RealKaminoClient implements KaminoClient {
       attempt += 1;
       try {
         const { value: latestBlockhash } = await (this.rpc as any)
-          .getLatestBlockhash({ commitment: "finalized" })
+          .getLatestBlockhash({ commitment: "confirmed" })
           .send();
         const slot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
         let txMessage = pipe(
@@ -735,11 +735,19 @@ class RealKaminoClient implements KaminoClient {
       throw new Error("Jupiter API key ausente");
     }
     const market = await this.loadMarket();
-    const obligation = await market.getObligationByWallet(
-      this.signer.address,
-      this.obligationType
-    );
+    // Tenta encontrar a obligation com retry para tolerar leitura transitória de RPC.
+    let obligation = null;
+    for (let attempt = 0; attempt < 3 && !obligation; attempt += 1) {
+      obligation = await market.getObligationByWallet(
+        this.signer.address,
+        this.obligationType
+      ).catch(() => null);
+      if (!obligation && attempt < 2) {
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
     if (!obligation) {
+      this.marketPromise = null; // força reload do market na próxima tentativa
       throw new Error("Posicao Kamino nao encontrada");
     }
     const currentSlot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
