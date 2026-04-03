@@ -3560,9 +3560,9 @@ export class OrcaBot {
         }
       }
 
-      // Usa stable da wallet primeiro (em blocos de 5) antes do colateral.
+      // Usa stable da wallet primeiro (sem limite fixo de 5) antes do colateral.
       if (stableBalance > epsilon && debtAmount > epsilon) {
-        const repayChunk = Math.min(5, stableBalance, repayTarget);
+        const repayChunk = Math.min(stableBalance, repayTarget);
         if (repayChunk > epsilon) {
           await this.kaminoCallWithRetry(
             () => kamino.repay({ mint: stable.mint, amount: repayChunk }),
