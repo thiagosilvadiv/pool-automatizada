@@ -3601,7 +3601,11 @@ export class OrcaBot {
           if (
             lower.includes("too large") ||
             lower.includes("versionedtransaction too large") ||
-            lower.includes("invalid params")
+            lower.includes("invalid params") ||
+            // Solana error #-32602 = RPC rejeitou a tx por tamanho ou params inválidos.
+            // O @solana/kit formata como "Solana error #-32602" sem a string "invalid params".
+            lower.includes("-32602") ||
+            lower.includes("error #-32602")
           ) {
             this.kaminoTooLargeSeen = true;
             chunkReductions += 1;
@@ -3979,7 +3983,11 @@ export class OrcaBot {
         if (repayAttempt.error && !repayAttempt.retryable) {
           const msgLower = repayAttempt.error.toLowerCase();
           // Se for tx muito grande, seguimos para fallback manual (withdraw+swap) em vez de abortar.
-          if (!msgLower.includes("too large") && !msgLower.includes("-32602")) {
+          if (
+            !msgLower.includes("too large") &&
+            !msgLower.includes("-32602") &&
+            !msgLower.includes("error #-32602")
+          ) {
             const message = `Repay com colateral falhou: ${repayAttempt.error}`;
             this.setKaminoState({ ...state, lastError: message });
             this.queueKaminoLog("repay-with-collateral-failed", message, "error");
@@ -4078,8 +4086,12 @@ export class OrcaBot {
               } catch (err) {
                 const msg = stringifyError(err);
                 if (this.isKaminoRetryableError(msg)) {
+                  // Erro retryable no fallback manual: agendar retry do ciclo inteiro
+                  // em vez de apenas reduzir o chunk. O blockhash expirado não é
+                  // resolvido reduzindo o chunk — precisa de uma nova tx com novo blockhash.
                   const wait = this.scheduleKaminoRepayRetry(state, msg, mode);
                   if (wait) return false;
+                  // Se tentativas esgotadas, reduz chunk como último recurso.
                 }
                 withdrawAmount *= KAMINO_REPAY_CHUNK_FACTOR;
                 this.queueKaminoLog(
