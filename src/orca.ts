@@ -25,6 +25,9 @@ const Decimal: any = DecimalJs;
 const MIN_ENTRY_BUDGET_FACTOR = 0.25;
 const MAX_USD_SANITY = 1_000_000_000;
 const DEFAULT_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const KAMINO_REPAY_CHUNK_FACTOR = 0.5;
+const KAMINO_REPAY_MIN_STABLE = 0.1; // unidade do stable
+const KAMINO_WITHDRAW_MIN = 0.000001;
 
 export type BotContext = {
   connection: Connection;
@@ -3460,79 +3463,122 @@ export class OrcaBot {
 
     let debtAmount = Math.min(recordedDebtAmount, onChainDebtAmount);
     const repayBufferPct = Math.max(0, Number(this.config.kaminoPriceBufferPct ?? 0.5));
-      if (debtAmount > 0) {
-        this.queueKaminoLog(
-          "repay-start",
-          `Iniciando quitacao da divida ${debtAmount.toFixed(8)} ${stable.mint} antes de qualquer saque.`,
-          "info"
-        );
-        let stableBalance = await this.getWalletTokenBalance(stable.mint);
-        // Usa SOL livre da wallet para gerar stable antes de tentar colateral.
-        if (stableBalance + epsilon < debtAmount) {
-          try {
-            const solMint = NATIVE_MINT.toBase58();
-            const solDecimals = 9;
-            let solBalance = await this.getWalletTokenBalance(solMint);
-            const maxSolIterations = 6;
-            let solAttempts = 0;
-            const solPrice = await this.getTokenUsdPrice({
-              mint: solMint,
-              decimals: solDecimals,
-              stableMint: stable.mint,
-              stableDecimals: stable.decimals
-            });
-            while (
-              solAttempts < maxSolIterations &&
-              solBalance > 0.005 &&
-              stableBalance + epsilon < debtAmount
-            ) {
-              solAttempts += 1;
-              const shortfall = Math.max(0, debtAmount - stableBalance);
-              const neededSol = solPrice && solPrice > 0 ? (shortfall * 1.05) / solPrice : 0.02;
-              const solChunk = Math.min(solBalance, Math.max(0.005, Math.min(0.1, neededSol)));
-              this.queueKaminoLog(
-                "repay-sol",
-                `Convertendo ${solChunk.toFixed(8)} SOL para ${stable.mint} (tentativa ${solAttempts}).`,
-                "info"
-              );
-              const swapped = await this.swapTokenToStable({
-                inputMint: solMint,
-                inputDecimals: solDecimals,
-                amountUi: solChunk,
-                stableMint: stable.mint,
-                stableDecimals: stable.decimals,
-                label: "wallet-sol->stable-repay"
-              });
-              stableBalance = swapped != null
-                ? stableBalance + swapped
-                : await this.getWalletTokenBalance(stable.mint);
-              solBalance = await this.getWalletTokenBalance(solMint);
-            }
-          } catch (err) {
-            logger.warn({ err }, "falha ao converter SOL livre para stable no fechamento");
+    if (debtAmount > 0) {
+      this.queueKaminoLog(
+        "repay-start",
+        `Iniciando quitacao da divida ${debtAmount.toFixed(8)} ${stable.mint} antes de qualquer saque.`,
+        "info"
+      );
+
+      const estimateConvertibleUsd = async (): Promise<number> => {
+        let total = 0;
+        for (const entry of collaterals) {
+          const amount = Math.max(0, onChainDeposits.get(entry.mint) ?? 0);
+          if (amount <= 0) continue;
+          if (entry.mint === stable.mint) {
+            total += amount;
+            continue;
           }
-        }
-        // Usa stable da wallet primeiro (em blocos de 5) antes do colateral.
-        if (stableBalance > epsilon && debtAmount > epsilon) {
-          const repayChunk = Math.min(5, stableBalance, debtAmount * (1 + repayBufferPct / 100));
-          if (repayChunk > epsilon) {
-            await this.kaminoCallWithRetry(
-              () => kamino.repay({ mint: stable.mint, amount: repayChunk }),
-              "kamino-repay-wallet"
-            );
-            this.queueHistoryAction("kamino-repay");
-            debtAmount = Math.max(0, debtAmount - repayChunk);
-            stableBalance = await this.getWalletTokenBalance(stable.mint);
-          }
-        }
-        if (stableBalance + epsilon < debtAmount) {
-          const repayAttempt = await this.tryRepayWithCollateral({
-            kamino,
-            collaterals,
-            debtMint: stable.mint,
-            debtAmount,
-            onChainDeposits
+          if (!this.config.jupiterApiKey) continue;
+          const decimals = await this.getTokenDecimals(entry.mint);
+          const priceUsd = await this.getTokenUsdPrice({
+            mint: entry.mint,
+            decimals,
+            stableMint: stable.mint,
+            stableDecimals: stable.decimals
           });
+          if (priceUsd != null) {
+            total += priceUsd * amount;
+          }
+        }
+        return total;
+      };
+
+      let stableBalance = await this.getWalletTokenBalance(stable.mint);
+      const repayTarget = debtAmount * (1 + repayBufferPct / 100);
+      const convertibleUsd = await estimateConvertibleUsd();
+      if (stableBalance + convertibleUsd + epsilon < repayTarget) {
+        const missing = repayTarget - (stableBalance + convertibleUsd);
+        const message = `Colateral insuficiente para quitar a divida (faltam ${missing.toFixed(8)}).`;
+        this.setKaminoState({ ...state, lastError: message });
+        this.queueKaminoLog("repay-insufficient", message, "error");
+        if (this.scheduleKaminoRepayRetry(state, message, mode) && mode === "target") {
+          return false;
+        }
+        if (mode === "target") {
+          return false;
+        }
+        throw new Error(message);
+      }
+
+      // Usa SOL livre da wallet para gerar stable antes de tentar colateral.
+      if (stableBalance + epsilon < debtAmount) {
+        try {
+          const solMint = NATIVE_MINT.toBase58();
+          const solDecimals = 9;
+          let solBalance = await this.getWalletTokenBalance(solMint);
+          const maxSolIterations = 6;
+          let solAttempts = 0;
+          const solPrice = await this.getTokenUsdPrice({
+            mint: solMint,
+            decimals: solDecimals,
+            stableMint: stable.mint,
+            stableDecimals: stable.decimals
+          });
+          while (
+            solAttempts < maxSolIterations &&
+            solBalance > 0.005 &&
+            stableBalance + epsilon < debtAmount
+          ) {
+            solAttempts += 1;
+            const shortfall = Math.max(0, debtAmount - stableBalance);
+            const neededSol = solPrice && solPrice > 0 ? (shortfall * 1.05) / solPrice : 0.02;
+            const solChunk = Math.min(solBalance, Math.max(0.005, Math.min(0.1, neededSol)));
+            this.queueKaminoLog(
+              "repay-sol",
+              `Convertendo ${solChunk.toFixed(8)} SOL para ${stable.mint} (tentativa ${solAttempts}).`,
+              "info"
+            );
+            const swapped = await this.swapTokenToStable({
+              inputMint: solMint,
+              inputDecimals: solDecimals,
+              amountUi: solChunk,
+              stableMint: stable.mint,
+              stableDecimals: stable.decimals,
+              label: "wallet-sol->stable-repay"
+            });
+            stableBalance = swapped != null
+              ? stableBalance + swapped
+              : await this.getWalletTokenBalance(stable.mint);
+            solBalance = await this.getWalletTokenBalance(solMint);
+          }
+        } catch (err) {
+          logger.warn({ err }, "falha ao converter SOL livre para stable no fechamento");
+        }
+      }
+
+      // Usa stable da wallet primeiro (em blocos de 5) antes do colateral.
+      if (stableBalance > epsilon && debtAmount > epsilon) {
+        const repayChunk = Math.min(5, stableBalance, repayTarget);
+        if (repayChunk > epsilon) {
+          await this.kaminoCallWithRetry(
+            () => kamino.repay({ mint: stable.mint, amount: repayChunk }),
+            "kamino-repay-wallet"
+          );
+          this.queueHistoryAction("kamino-repay");
+          debtAmount = Math.max(0, debtAmount - repayChunk);
+          stableBalance = await this.getWalletTokenBalance(stable.mint);
+        }
+      }
+
+      if (stableBalance + epsilon < debtAmount) {
+        const repayAttempt = await this.tryRepayWithCollateral({
+          kamino,
+          collaterals,
+          debtMint: stable.mint,
+          debtAmount,
+          onChainDeposits
+        });
         if (repayAttempt.retryable && repayAttempt.error) {
           const wait = this.scheduleKaminoRepayRetry(state, repayAttempt.error, mode);
           if (wait) {
@@ -3558,110 +3604,116 @@ export class OrcaBot {
           debtAmount = repayAttempt.debtAmount;
           onChainDeposits = repayAttempt.onChainDeposits;
           stableBalance = await this.getWalletTokenBalance(stable.mint);
+        }
+      }
+
+      if (debtAmount > epsilon && stableBalance + epsilon < debtAmount) {
+        const shortfall = debtAmount - stableBalance;
+        const candidates = collaterals
+          .map((entry) => ({
+            mint: entry.mint,
+            amount: Math.max(0, onChainDeposits.get(entry.mint) ?? 0),
+            usd: entry.usd ?? null
+          }))
+          .filter((c) => c.mint && c.amount > 0 && c.mint !== stable.mint);
+        if (candidates.length > 0) {
+          candidates.sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0) || b.amount - a.amount);
+          const pick = candidates[0];
+          try {
+            const decimals = await this.getTokenDecimals(pick.mint);
+            const priceUsd = await this.getTokenUsdPrice({
+              mint: pick.mint,
+              decimals,
+              stableMint: stable.mint,
+              stableDecimals: stable.decimals
+            });
+            const required = priceUsd && priceUsd > 0 ? shortfall / priceUsd * 1.05 : shortfall;
+            let withdrawAmount = Math.min(pick.amount, required);
+            let attempts = 0;
+            const maxAttempts = 10;
+            while (withdrawAmount > KAMINO_WITHDRAW_MIN && attempts < maxAttempts && debtAmount > epsilon) {
+              attempts += 1;
+              try {
+                this.queueKaminoLog(
+                  "repay-fallback",
+                  `Sacando ${withdrawAmount.toFixed(8)} de ${pick.mint} para quitar divida (tentativa ${attempts}).`,
+                  "warn"
+                );
+                await this.kaminoCallWithRetry(
+                  () => kamino.withdraw({ mint: pick.mint, amount: withdrawAmount }),
+                  "kamino-withdraw"
+                );
+                onChainDeposits.set(pick.mint, Math.max(0, (onChainDeposits.get(pick.mint) ?? pick.amount) - withdrawAmount));
+                const swappedOut = await this.swapTokenToStable({
+                  inputMint: pick.mint,
+                  inputDecimals: decimals,
+                  amountUi: withdrawAmount,
+                  stableMint: stable.mint,
+                  stableDecimals: stable.decimals,
+                  label: "kamino-fallback-collateral->stable"
+                });
+                stableBalance = swappedOut != null
+                  ? stableBalance + swappedOut
+                  : await this.getWalletTokenBalance(stable.mint);
+                break;
+              } catch (err) {
+                const msg = stringifyError(err);
+                if (this.isKaminoRetryableError(msg)) {
+                  const wait = this.scheduleKaminoRepayRetry(state, msg, mode);
+                  if (wait) return false;
+                }
+                withdrawAmount *= KAMINO_REPAY_CHUNK_FACTOR;
+                this.queueKaminoLog(
+                  "repay-fallback",
+                  `Saque reduziu para ${withdrawAmount.toFixed(8)} por erro: ${msg}`,
+                  "warn"
+                );
+              }
+            }
+          } catch (err) {
+            const message = `Fallback repay falhou: ${stringifyError(err)}`;
+            this.setKaminoState({ ...state, lastError: message });
+            this.queueKaminoLog("repay-fallback-failed", message, "error");
+            throw new Error(message);
           }
         }
-        if (debtAmount > epsilon && stableBalance + epsilon < debtAmount) {
-          const shortfall = debtAmount - stableBalance;
-          const candidates = collaterals
-            .map((entry) => ({
-              mint: entry.mint,
-              amount: Math.max(0, onChainDeposits.get(entry.mint) ?? 0),
-              usd: entry.usd ?? null
-            }))
-            .filter((c) => c.mint && c.amount > 0 && c.mint !== stable.mint);
-          if (candidates.length > 0) {
-            candidates.sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0) || b.amount - a.amount);
-            const pick = candidates[0];
-            try {
-              const decimals = await this.getTokenDecimals(pick.mint);
-              const priceUsd = await this.getTokenUsdPrice({
-                mint: pick.mint,
-                decimals,
-                stableMint: stable.mint,
-                stableDecimals: stable.decimals
-              });
-              const required = priceUsd && priceUsd > 0 ? shortfall / priceUsd * 1.05 : shortfall;
-              let withdrawAmount = Math.min(pick.amount, required, 0.02); // limita inicio a 0.02 unidades do colateral
-              let attempts = 0;
-              const maxAttempts = 10;
-              while (withdrawAmount > epsilon && attempts < maxAttempts) {
-                attempts += 1;
-                try {
-                  this.queueKaminoLog(
-                    "repay-fallback",
-                    `Sacando ${withdrawAmount.toFixed(8)} de ${pick.mint} para quitar divida (tentativa ${attempts}).`,
-                    "warn"
-                  );
-                  await this.kaminoCallWithRetry(
-                    () => kamino.withdraw({ mint: pick.mint, amount: withdrawAmount }),
-                    "kamino-withdraw"
-                  );
-                  onChainDeposits.set(pick.mint, Math.max(0, (onChainDeposits.get(pick.mint) ?? pick.amount) - withdrawAmount));
-                  const swappedOut = await this.swapTokenToStable({
-                    inputMint: pick.mint,
-                    inputDecimals: decimals,
-                    amountUi: withdrawAmount,
-                    stableMint: stable.mint,
-                    stableDecimals: stable.decimals,
-                    label: "kamino-fallback-collateral->stable"
-                  });
-                  stableBalance = swappedOut != null
-                    ? stableBalance + swappedOut
-                    : await this.getWalletTokenBalance(stable.mint);
-                  break;
-                } catch (err) {
-                  const msg = stringifyError(err).toLowerCase();
-                  if (withdrawAmount > epsilon * 10) {
-                    withdrawAmount = withdrawAmount / 2;
-                    this.queueKaminoLog(
-                      "repay-fallback",
-                      `Saque reduziu para ${withdrawAmount.toFixed(8)} por erro: ${msg}`,
-                      "warn"
-                    );
-                    continue;
-                  }
-                  throw err;
-                }
-              }
-            } catch (err) {
-              const message = `Fallback repay falhou: ${stringifyError(err)}`;
-              this.setKaminoState({ ...state, lastError: message });
-              this.queueKaminoLog("repay-fallback-failed", message, "error");
-              throw new Error(message);
+      }
+
+      if (debtAmount > epsilon && stableBalance + epsilon < debtAmount) {
+        const message = `Colateral insuficiente para quitar a divida (restante ${debtAmount.toFixed(8)}).`;
+        this.setKaminoState({ ...state, lastError: message });
+        this.queueKaminoLog("repay-insufficient", message, "error");
+        throw new Error(message);
+      }
+
+      if (debtAmount > epsilon) {
+        try {
+          const repayAmount = Math.min(stableBalance, debtAmount * (1 + repayBufferPct / 100));
+          if (repayAmount + epsilon < debtAmount) {
+            const message = `Saldo stable insuficiente para repay (tem ${stableBalance.toFixed(8)}, precisa ${debtAmount.toFixed(8)}).`;
+            this.setKaminoState({ ...state, lastError: message });
+            this.queueKaminoLog("repay-insufficient", message, "error");
+            throw new Error(message);
+          }
+          await this.kaminoCallWithRetry(
+            () => kamino.repay({ mint: stable.mint, amount: repayAmount }),
+            "kamino-repay"
+          );
+          this.queueHistoryAction("kamino-repay");
+          debtAmount = Math.max(0, debtAmount - repayAmount);
+          stableBalance = await this.getWalletTokenBalance(stable.mint);
+        } catch (err) {
+          const message = stringifyError(err);
+          if (this.isKaminoRetryableError(message)) {
+            const wait = this.scheduleKaminoRepayRetry(state, message, mode);
+            if (wait) {
+              return false;
             }
           }
+          this.queueKaminoLog("repay-failed", message, "error");
+          throw err;
         }
-        if (debtAmount > epsilon && stableBalance + epsilon < debtAmount) {
-          const message = `Colateral insuficiente para quitar a divida (restante ${debtAmount.toFixed(8)}).`;
-          this.setKaminoState({ ...state, lastError: message });
-          this.queueKaminoLog("repay-insufficient", message, "error");
-          throw new Error(message);
       }
-      try {
-        const repayAmount = Math.min(stableBalance, debtAmount * (1 + repayBufferPct / 100));
-        if (repayAmount + epsilon < debtAmount) {
-          const message = `Saldo stable insuficiente para repay (tem ${stableBalance.toFixed(8)}, precisa ${debtAmount.toFixed(8)}).`;
-          this.setKaminoState({ ...state, lastError: message });
-          this.queueKaminoLog("repay-insufficient", message, "error");
-          throw new Error(message);
-        }
-        await this.kaminoCallWithRetry(
-          () => kamino.repay({ mint: stable.mint, amount: repayAmount }),
-          "kamino-repay"
-        );
-        this.queueHistoryAction("kamino-repay");
-      } catch (err) {
-        const message = stringifyError(err);
-        if (this.isKaminoRetryableError(message)) {
-          const wait = this.scheduleKaminoRepayRetry(state, message, mode);
-          if (wait) {
-            return false;
-          }
-        }
-        this.queueKaminoLog("repay-failed", message, "error");
-        throw err;
-      }
-      debtAmount = 0;
     }
 
     if (debtAmount > epsilon) {
