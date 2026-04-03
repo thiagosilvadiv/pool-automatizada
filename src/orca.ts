@@ -272,10 +272,6 @@ export class OrcaBot {
     if (this.isRateLimitError(err)) return true;
     const message = String(err?.message ?? err).toLowerCase();
     return message.includes("-32002")
-      || message.includes("-32602")
-      || message.includes("quote failed")
-      || message.includes("quote-failed")
-      || message.includes("invalid params")
       || message.includes("rpc response error")
       || message.includes("too many requests")
       || message.includes("429");
@@ -3472,22 +3468,31 @@ export class OrcaBot {
             debtAmount,
             onChainDeposits
           });
-          if (repayAttempt.retryable && repayAttempt.error) {
-            const wait = this.scheduleKaminoRepayRetry(state, repayAttempt.error, mode);
-            if (wait) {
-              return false;
-            }
+        if (repayAttempt.retryable && repayAttempt.error) {
+          const wait = this.scheduleKaminoRepayRetry(state, repayAttempt.error, mode);
+          if (wait) {
+            return false;
           }
-          if (repayAttempt.error && !repayAttempt.retryable) {
+        }
+        if (repayAttempt.error && !repayAttempt.retryable) {
+          const msgLower = repayAttempt.error.toLowerCase();
+          // Se for tx muito grande, seguimos para fallback manual (withdraw+swap) em vez de abortar.
+          if (!msgLower.includes("too large")) {
             const message = `Repay com colateral falhou: ${repayAttempt.error}`;
             this.setKaminoState({ ...state, lastError: message });
             this.queueKaminoLog("repay-with-collateral-failed", message, "error");
             throw new Error(message);
           }
-          if (repayAttempt.performed) {
-            debtAmount = repayAttempt.debtAmount;
-            onChainDeposits = repayAttempt.onChainDeposits;
-            stableBalance = await this.getWalletTokenBalance(stable.mint);
+          this.queueKaminoLog(
+            "repay-with-collateral-failed",
+            `Repay com colateral muito grande; tentando fallback manual. Detalhe: ${repayAttempt.error}`,
+            "warn"
+          );
+        }
+        if (repayAttempt.performed) {
+          debtAmount = repayAttempt.debtAmount;
+          onChainDeposits = repayAttempt.onChainDeposits;
+          stableBalance = await this.getWalletTokenBalance(stable.mint);
           }
         }
         if (debtAmount > epsilon && stableBalance + epsilon < debtAmount) {
