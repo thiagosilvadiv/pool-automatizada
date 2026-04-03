@@ -30,6 +30,27 @@ const KAMINO_REPAY_MIN_STABLE = 0.1; // unidade do stable
 const KAMINO_WITHDRAW_MIN = 0.000001;
 const KAMINO_REBALANCE_RETRY_SEC = 10;
 
+export function computeRiskAwareRepayChunk(params: {
+  debtRemaining: number;
+  capacityUi: number;
+  priceCollToDebt: number;
+  minStable: number;
+}): { chunk: number; reason?: string } {
+  const { debtRemaining, capacityUi, priceCollToDebt, minStable } = params;
+  if (!Number.isFinite(capacityUi) || capacityUi <= 0) {
+    return { chunk: 0, reason: "capacidade de saque insuficiente" };
+  }
+  if (!Number.isFinite(priceCollToDebt) || priceCollToDebt <= 0) {
+    return { chunk: 0, reason: "preco indisponivel para colateral" };
+  }
+  const capacityDebt = capacityUi * priceCollToDebt;
+  const chunk = Math.min(debtRemaining, capacityDebt);
+  if (chunk < minStable) {
+    return { chunk: 0, reason: "capacidade de saque insuficiente" };
+  }
+  return { chunk };
+}
+
 export type BotContext = {
   connection: Connection;
   wallet: WalletLike;
@@ -3168,7 +3189,7 @@ export class OrcaBot {
     let debtRemaining = input.debtAmount;
     let performed = false;
     let lastFailure: string | null = null;
-    const maxRepayChunkUi = 5; // limite de 5 unidades de stable por chunk para evitar tx grandes
+    const capacityBuffer = 0.7;
 
     const refreshPosition = async (): Promise<void> => {
       try {
@@ -3186,10 +3207,6 @@ export class OrcaBot {
         logger.warn({ err }, "falha ao atualizar posicao Kamino apos repay com colateral");
       }
     };
-
-    let maxChunk = debtRemaining;
-    let chunkAdjustments = 0;
-    const maxChunkAdjustments = 6; // more attempts to shrink tx size
 
     while (debtRemaining > epsilon) {
       const sorted = [...candidates].sort((a, b) => {
@@ -3212,13 +3229,43 @@ export class OrcaBot {
           continue;
         }
         try {
-          const repayAmount = Math.min(debtRemaining, maxChunk, maxRepayChunkUi);
+          const collDecimals = await this.getTokenDecimals(candidate.mint);
+          const debtDecimals = await this.getTokenDecimals(input.debtMint);
+          const capacity = await input.kamino.getWithdrawCapacity({
+            collateralMint: candidate.mint,
+            debtMint: input.debtMint,
+            repayAmountUi: debtRemaining,
+            bufferPct: capacityBuffer
+          });
+          const priceCollToDebt = await this.getTokenUsdPrice({
+            mint: candidate.mint,
+            decimals: collDecimals,
+            stableMint: input.debtMint,
+            stableDecimals: debtDecimals
+          });
+          const chunkChoice = computeRiskAwareRepayChunk({
+            debtRemaining,
+            capacityUi: capacity.capacityUi,
+            priceCollToDebt: priceCollToDebt ?? 0,
+            minStable: KAMINO_REPAY_MIN_STABLE
+          });
+          if (chunkChoice.chunk <= epsilon) {
+            const reason = chunkChoice.reason ?? "capacidade de saque insuficiente";
+            lastFailure = reason;
+            this.queueKaminoLog(
+              "repay-with-collateral-capacity",
+              `${reason}; capacityUi=${capacity.capacityUi.toFixed(8)}`,
+              "warn"
+            );
+            continue;
+          }
+          const repayAmount = chunkChoice.chunk;
           if (repayAmount <= epsilon) {
             continue;
           }
           this.queueKaminoLog(
             "repay-with-collateral",
-            `Tentando repay de ${repayAmount.toFixed(8)} com colateral ${candidate.mint}.`,
+            `Tentando repay de ${repayAmount.toFixed(8)} com colateral ${candidate.mint} (cap ${capacity.capacityUi.toFixed(8)}, price ${priceCollToDebt ?? "?"}).`,
             "info"
           );
           await input.kamino.repayWithCollateral({
@@ -3242,18 +3289,16 @@ export class OrcaBot {
           const message = stringifyError(err);
           lastFailure = message;
           const lower = message.toLowerCase();
-          if (lower.includes("too large")) {
-            if (chunkAdjustments < maxChunkAdjustments) {
-              chunkAdjustments += 1;
-              maxChunk = Math.max(debtRemaining / Math.pow(2, chunkAdjustments + 2), epsilon * 10);
-              this.queueKaminoLog(
-                "repay-with-collateral",
-                `Transacao grande; reduzindo chunk para ${maxChunk.toFixed(8)} e tentando de novo.`,
-                "warn"
-              );
-              usedCandidate = true; // triggers outer while to retry with smaller chunk
-              break;
-            }
+          if (lower.includes("too large") || lower.includes("invalid params")) {
+            const adjusted = Math.max(KAMINO_REPAY_MIN_STABLE, debtRemaining / 3);
+            this.queueKaminoLog(
+              "repay-with-collateral",
+              `Transacao recusada por tamanho; ajustando chunk para ${adjusted.toFixed(8)}.`,
+              "warn"
+            );
+            debtRemaining = Math.max(debtRemaining, adjusted); // keep loop running with smaller attempt
+            usedCandidate = true;
+            break;
           }
           if (this.isKaminoRetryableError(message)) {
             this.queueKaminoLog("repay-with-collateral-failed", message, "warn");
@@ -3638,6 +3683,19 @@ export class OrcaBot {
             while (withdrawAmount > KAMINO_WITHDRAW_MIN && attempts < maxAttempts && debtAmount > epsilon) {
               attempts += 1;
               try {
+                const capacity = await kamino.getWithdrawCapacity({
+                  collateralMint: pick.mint,
+                  debtMint: stable.mint,
+                  repayAmountUi: debtAmount,
+                  bufferPct: 0.7
+                });
+                withdrawAmount = Math.min(withdrawAmount, capacity.capacityUi);
+                if (withdrawAmount <= KAMINO_WITHDRAW_MIN || capacity.capacityUi <= KAMINO_WITHDRAW_MIN) {
+                  const msg = `Capacidade de saque insuficiente (${capacity.capacityUi.toFixed(8)})`;
+                  this.setKaminoState({ ...state, lastError: msg });
+                  this.queueKaminoLog("repay-fallback-capacity", msg, "warn");
+                  break;
+                }
                 this.queueKaminoLog(
                   "repay-fallback",
                   `Sacando ${withdrawAmount.toFixed(8)} de ${pick.mint} para quitar divida (tentativa ${attempts}).`,

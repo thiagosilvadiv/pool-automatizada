@@ -24,6 +24,7 @@ import {
   KaminoMarket,
   PROGRAM_ID,
   VanillaObligation,
+  calcMaxWithdrawCollateral,
   getRepayWithCollIxs,
   type SwapIxsProvider,
   type SwapQuoteProvider,
@@ -31,6 +32,7 @@ import {
   type SwapInputs
 } from "@kamino-finance/klend-sdk";
 import DecimalJs from "decimal.js";
+import { getSolanaErrorFromJsonRpcError, SolanaError } from "@solana/errors";
 
 import { Config } from "./config.js";
 import { logger } from "./logger.js";
@@ -59,6 +61,12 @@ export type KaminoClient = {
   repay(input: { mint: string; amount: number }): Promise<string>;
   repayWithCollateral(input: { collateralMint: string; debtMint: string; repayAmount: number; slippageBps?: number }): Promise<string>;
   withdraw(input: { mint: string; amount: number }): Promise<string>;
+  getWithdrawCapacity(input: {
+    collateralMint: string;
+    debtMint: string;
+    repayAmountUi: number;
+    bufferPct?: number;
+  }): Promise<{ capacityUi: number; slot: number; blockhash?: string }>;
   getPositionState(): Promise<KaminoPositionState | null>;
   supportsCollateral(mint: string): Promise<boolean>;
   supportsBorrow(mint: string): Promise<{ ok: boolean; reason?: string }>;
@@ -116,6 +124,17 @@ function toRawAmount(amount: number, decimals: number): bigint {
   return BigInt(Math.floor(amount * factor));
 }
 
+export function lamportsToUi(lamports: Decimal, decimals: number): number {
+  if (!lamports || !(lamports as any).isFinite?.()) return 0;
+  const divisor = Math.pow(10, Math.max(0, decimals));
+  return (lamports as any).div(divisor).toNumber();
+}
+
+export function applyWithdrawBuffer(capacityUi: number, bufferPct: number): number {
+  const pct = Math.max(0, Math.min(1, bufferPct));
+  return Math.max(0, capacityUi * pct);
+}
+
 function deriveWsUrl(rpcUrl: string): string {
   const trimmed = rpcUrl.trim();
   if (trimmed.startsWith("https://")) {
@@ -140,6 +159,33 @@ function isRateLimitError(err: any): boolean {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function decodeRpcError(err: any): { code?: number; name?: string; message: string; logs?: string[] } {
+  try {
+    if (err?.code != null && err?.message) {
+      const solErr = getSolanaErrorFromJsonRpcError({
+        code: Number(err.code),
+        data: err.data,
+        message: String(err.message)
+      });
+      return {
+        code: Number(err.code),
+        name: (solErr as SolanaError)?.name,
+        message: solErr?.message ?? String(err.message),
+        logs: (solErr as any)?.logs ?? err?.logs
+      };
+    }
+  } catch {
+    // ignore and fall back
+  }
+  const message = String(err?.message ?? err);
+  return { code: err?.code, name: err?.name, message, logs: err?.logs };
+}
+
+function isBlockhashError(err: any): boolean {
+  const msg = String(err?.message ?? err).toLowerCase();
+  return msg.includes("blockhash not found") || msg.includes("blockhash expired") || msg.includes("-32002");
 }
 
 async function loadSignerFromEnv(wallet: WalletLike): Promise<TransactionSigner> {
@@ -237,57 +283,104 @@ class RealKaminoClient implements KaminoClient {
     if (!ixs.length) {
       throw new Error("Nenhuma instrucao Kamino gerada");
     }
-    const { value: latestBlockhash } = await (this.rpc as any)
-      .getLatestBlockhash({ commitment: "finalized" })
-      .send();
-    const txMessage = pipe(
-      createTransactionMessage({ version: 0 }),
-      (tx) => appendTransactionMessageInstructions(ixs, tx),
-      (tx) => setTransactionMessageFeePayerSigner(this.signer, tx),
-      (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx)
-    );
-    const signed = await signTransactionMessageWithSigners(txMessage);
-    const signature = getSignatureFromTransaction(signed);
-    await this.sendAndConfirmSafe(signed as any, signature);
-    return signature;
+    let attempt = 0;
+    let lastErr: any;
+    while (attempt < 2) {
+      attempt += 1;
+      try {
+        const { value: latestBlockhash } = await (this.rpc as any)
+          .getLatestBlockhash({ commitment: "finalized" })
+          .send();
+        const slot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
+        const txMessage = pipe(
+          createTransactionMessage({ version: 0 }),
+          (tx) => appendTransactionMessageInstructions(ixs, tx),
+          (tx) => setTransactionMessageFeePayerSigner(this.signer, tx),
+          (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx)
+        );
+        const signed = await signTransactionMessageWithSigners(txMessage);
+        const signature = getSignatureFromTransaction(signed);
+        await this.sendAndConfirmSafe(signed as any, signature, undefined, {
+          blockhash: (latestBlockhash as any)?.blockhash ?? latestBlockhash,
+          slot
+        });
+        logger.info({ sig: signature, slot, blockhash: (latestBlockhash as any)?.blockhash ?? latestBlockhash }, "kamino tx enviada");
+        return signature;
+      } catch (err) {
+        lastErr = err;
+        const decoded = decodeRpcError(err);
+        if (attempt < 2 && isBlockhashError(err)) {
+          logger.warn({ attempt, err: decoded }, "retry Kamino tx por blockhash");
+          continue;
+        }
+        logger.error({ err: decoded }, "falha ao enviar Kamino tx");
+        throw err;
+      }
+    }
+    throw lastErr ?? new Error("falha ao enviar Kamino tx");
   }
 
   private async sendInstructions(ixs: Instruction[], lookupTableAddresses: string[] = []): Promise<string> {
     if (!ixs.length) {
       throw new Error("Nenhuma instrucao Kamino gerada");
     }
-    const { value: latestBlockhash } = await (this.rpc as any)
-      .getLatestBlockhash({ commitment: "finalized" })
-      .send();
-    let txMessage = pipe(
-      createTransactionMessage({ version: 0 }),
-      (tx) => appendTransactionMessageInstructions(ixs, tx),
-      (tx) => setTransactionMessageFeePayerSigner(this.signer, tx),
-      (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx)
-    );
-    if (lookupTableAddresses.length > 0) {
+    let attempt = 0;
+    let lastErr: any;
+    while (attempt < 2) {
+      attempt += 1;
       try {
-        const luts = lookupTableAddresses
-          .map((item) => {
-            try {
-              return address(item);
-            } catch {
-              return null;
+        const { value: latestBlockhash } = await (this.rpc as any)
+          .getLatestBlockhash({ commitment: "finalized" })
+          .send();
+        const slot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
+        let txMessage = pipe(
+          createTransactionMessage({ version: 0 }),
+          (tx) => appendTransactionMessageInstructions(ixs, tx),
+          (tx) => setTransactionMessageFeePayerSigner(this.signer, tx),
+          (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx)
+        );
+        if (lookupTableAddresses.length > 0) {
+          try {
+            const luts = lookupTableAddresses
+              .map((item) => {
+                try {
+                  return address(item);
+                } catch {
+                  return null;
+                }
+              })
+              .filter((item): item is Address => Boolean(item));
+            if (luts.length > 0) {
+              const addressesByTable = await fetchAddressesForLookupTables(luts, this.rpc as any);
+              txMessage = compressTransactionMessageUsingAddressLookupTables(txMessage, addressesByTable);
             }
-          })
-          .filter((item): item is Address => Boolean(item));
-        if (luts.length > 0) {
-          const addressesByTable = await fetchAddressesForLookupTables(luts, this.rpc as any);
-          txMessage = compressTransactionMessageUsingAddressLookupTables(txMessage, addressesByTable);
+          } catch (err) {
+            logger.warn({ err }, "falha ao carregar lookup tables Jupiter");
+          }
         }
+        const signed = await signTransactionMessageWithSigners(txMessage);
+        const signature = getSignatureFromTransaction(signed);
+        await this.sendAndConfirmSafe(signed as any, signature, undefined, {
+          blockhash: (latestBlockhash as any)?.blockhash ?? latestBlockhash,
+          slot
+        });
+        logger.info(
+          { sig: signature, slot, blockhash: (latestBlockhash as any)?.blockhash ?? latestBlockhash },
+          "kamino instructions enviadas"
+        );
+        return signature;
       } catch (err) {
-        logger.warn({ err }, "falha ao carregar lookup tables Jupiter");
+        lastErr = err;
+        const decoded = decodeRpcError(err);
+        if (attempt < 2 && isBlockhashError(err)) {
+          logger.warn({ attempt, err: decoded }, "retry Kamino send por blockhash");
+          continue;
+        }
+        logger.error({ err: decoded }, "falha ao enviar instrucoes Kamino");
+        throw err;
       }
     }
-    const signed = await signTransactionMessageWithSigners(txMessage);
-    const signature = getSignatureFromTransaction(signed);
-    await this.sendAndConfirmSafe(signed as any, signature);
-    return signature;
+    throw lastErr ?? new Error("falha ao enviar instrucoes Kamino");
   }
 
   private async sendAndConfirmSafe(
@@ -296,7 +389,8 @@ class RealKaminoClient implements KaminoClient {
     opts: { commitment: "processed" | "confirmed" | "finalized"; skipPreflight?: boolean } = {
       commitment: "confirmed",
       skipPreflight: false
-    }
+    },
+    ctx?: { blockhash?: string; slot?: number }
   ): Promise<void> {
     const optsWithRetry = {
       ...opts,
@@ -306,13 +400,16 @@ class RealKaminoClient implements KaminoClient {
     };
     try {
       await this.sendAndConfirm(signed, optsWithRetry);
+      logger.info({ signature, blockhash: ctx?.blockhash, slot: ctx?.slot }, "kamino tx confirmada");
     } catch (err) {
-      const msg = String((err as any)?.message ?? err);
+      const decoded = decodeRpcError(err);
+      const msg = String(decoded?.message ?? (err as any)?.message ?? err);
       if (msg.toLowerCase().includes("not confirmed")) {
         logger.warn({ signature, err: msg }, "tx not confirmed in time; polling status");
         await this.confirmSignatureWithRetry(signature);
         return;
       }
+      logger.error({ signature, blockhash: ctx?.blockhash, slot: ctx?.slot, err: decoded }, "kamino tx falhou");
       throw err;
     }
   }
@@ -690,6 +787,61 @@ class RealKaminoClient implements KaminoClient {
     return signature;
   }
 
+  async getWithdrawCapacity(input: {
+    collateralMint: string;
+    debtMint: string;
+    repayAmountUi: number;
+    bufferPct?: number;
+  }): Promise<{ capacityUi: number; slot: number; blockhash?: string }> {
+    if (!Number.isFinite(input.repayAmountUi) || input.repayAmountUi <= 0) {
+      throw new Error("Valor de repay invalido");
+    }
+    const market = await this.loadMarket();
+    const obligation = await market.getObligationByWallet(this.signer.address, this.obligationType);
+    if (!obligation) {
+      throw new Error("Posicao Kamino nao encontrada");
+    }
+    const slot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
+    const debtDecimals = await this.resolveDecimals(input.debtMint);
+    const collDecimals = await this.resolveDecimals(input.collateralMint);
+    const repayLamports = new Decimal(toRawAmount(input.repayAmountUi, debtDecimals).toString());
+    const debtReserve = market.getReserveByMint(address(input.debtMint));
+    const bufferPct = Number.isFinite(input.bufferPct) ? Number(input.bufferPct) : 0.7;
+    if (!debtReserve) {
+      throw new Error("Reserva da divida nao encontrada");
+    }
+    let latestBlockhash: string | undefined;
+    try {
+      const bhResp = await (this.rpc as any).getLatestBlockhash({ commitment: "processed" }).send();
+      latestBlockhash = bhResp?.value?.blockhash ?? bhResp?.blockhash ?? undefined;
+    } catch {
+      // ignore; capacity still useful
+    }
+    let maxWithdrawLamports: Decimal;
+    try {
+      maxWithdrawLamports = obligation.getMaxWithdrawAmountWithRepay(
+        market,
+        address(input.collateralMint),
+        slot,
+        repayLamports,
+        debtReserve.address
+      );
+    } catch (err) {
+      const fallback = calcMaxWithdrawCollateral(
+        market,
+        obligation,
+        address(input.collateralMint),
+        debtReserve.address,
+        repayLamports
+      );
+      maxWithdrawLamports = fallback?.maxWithdrawableCollLamports ?? new Decimal(0);
+      logger.warn({ err, fallback }, "fallback calcMaxWithdrawCollateral usado para capacidade de saque");
+    }
+    const capacityUiRaw = lamportsToUi(maxWithdrawLamports, collDecimals);
+    const capacityUi = applyWithdrawBuffer(capacityUiRaw, bufferPct);
+    return { capacityUi, slot, blockhash: latestBlockhash };
+  }
+
   async withdraw(input: { mint: string; amount: number }): Promise<string> {
     const market = await this.loadMarket();
     const amountRaw = await this.toRawAmountString(input.mint, input.amount);
@@ -871,6 +1023,17 @@ class NoopKaminoClient implements KaminoClient {
       ltv: this.lastState?.ltv ?? null
     };
     return 'noop';
+  }
+
+  async getWithdrawCapacity(input: {
+    collateralMint: string;
+    debtMint: string;
+    repayAmountUi: number;
+    bufferPct?: number;
+  }): Promise<{ capacityUi: number; slot: number; blockhash?: string }> {
+    const currentDeposit = Math.max(0, this.lastState?.collateralAmount ?? input.repayAmountUi ?? 0);
+    const capacityUi = applyWithdrawBuffer(Math.min(currentDeposit, Math.max(0, input.repayAmountUi)), input.bufferPct ?? 0.7);
+    return { capacityUi, slot: 0 };
   }
 
   async withdraw(input: { mint: string; amount: number }): Promise<string> {
