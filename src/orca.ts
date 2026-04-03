@@ -272,6 +272,7 @@ export class OrcaBot {
     if (this.isRateLimitError(err)) return true;
     const message = String(err?.message ?? err).toLowerCase();
     return message.includes("-32002")
+      || message.includes("8100002") // rate limit from rpc-transport
       || message.includes("rpc response error")
       || message.includes("too many requests")
       || message.includes("429");

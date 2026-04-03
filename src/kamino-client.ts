@@ -298,8 +298,14 @@ class RealKaminoClient implements KaminoClient {
       skipPreflight: false
     }
   ): Promise<void> {
+    const optsWithRetry = {
+      ...opts,
+      // Favor processed to reduce block RPC load; confirm manually below.
+      commitment: "processed" as const,
+      skipPreflight: false
+    };
     try {
-      await this.sendAndConfirm(signed, opts);
+      await this.sendAndConfirm(signed, optsWithRetry);
     } catch (err) {
       const msg = String((err as any)?.message ?? err);
       if (msg.toLowerCase().includes("not confirmed")) {
@@ -314,7 +320,9 @@ class RealKaminoClient implements KaminoClient {
   private async confirmSignatureWithRetry(signature: string, timeoutMs = 60_000, pollMs = 1500): Promise<void> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      const statusResp = await (this.rpc as any).getSignatureStatuses({ signatures: [signature] }).send();
+      const statusResp = await (this.rpc as any)
+        .getSignatureStatuses({ signatures: [signature] })
+        .send();
       const info = statusResp?.value?.[0];
       if (info?.err) {
         throw new Error(`Transaction ${signature} failed: ${JSON.stringify(info.err)}`);
