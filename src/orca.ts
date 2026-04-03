@@ -3526,30 +3526,41 @@ export class OrcaBot {
                 stableDecimals: stable.decimals
               });
               const required = priceUsd && priceUsd > 0 ? shortfall / priceUsd * 1.05 : shortfall;
-              const withdrawAmount = Math.min(pick.amount, required);
-              if (withdrawAmount > epsilon) {
-                this.queueKaminoLog(
-                  "repay-fallback",
-                  `Sacando ${withdrawAmount.toFixed(8)} de ${pick.mint} para quitar divida.`,
-                  "warn"
-                );
-                await this.kaminoCallWithRetry(
-                  () => kamino.withdraw({ mint: pick.mint, amount: withdrawAmount }),
-                  "kamino-withdraw"
-                );
-                onChainDeposits.set(pick.mint, Math.max(0, pick.amount - withdrawAmount));
-                const swappedOut = await this.swapTokenToStable({
-                  inputMint: pick.mint,
-                  inputDecimals: decimals,
-                  amountUi: withdrawAmount,
-                  stableMint: stable.mint,
-                  stableDecimals: stable.decimals,
-                  label: "kamino-fallback-collateral->stable"
-                });
-                if (swappedOut != null) {
-                  stableBalance += swappedOut;
-                } else {
-                  stableBalance = await this.getWalletTokenBalance(stable.mint);
+              let withdrawAmount = Math.min(pick.amount, required);
+              let attempts = 0;
+              const maxAttempts = 5;
+              while (withdrawAmount > epsilon && attempts < maxAttempts) {
+                attempts += 1;
+                try {
+                  this.queueKaminoLog(
+                    "repay-fallback",
+                    `Sacando ${withdrawAmount.toFixed(8)} de ${pick.mint} para quitar divida (tentativa ${attempts}).`,
+                    "warn"
+                  );
+                  await this.kaminoCallWithRetry(
+                    () => kamino.withdraw({ mint: pick.mint, amount: withdrawAmount }),
+                    "kamino-withdraw"
+                  );
+                  onChainDeposits.set(pick.mint, Math.max(0, (onChainDeposits.get(pick.mint) ?? pick.amount) - withdrawAmount));
+                  const swappedOut = await this.swapTokenToStable({
+                    inputMint: pick.mint,
+                    inputDecimals: decimals,
+                    amountUi: withdrawAmount,
+                    stableMint: stable.mint,
+                    stableDecimals: stable.decimals,
+                    label: "kamino-fallback-collateral->stable"
+                  });
+                  stableBalance = swappedOut != null
+                    ? stableBalance + swappedOut
+                    : await this.getWalletTokenBalance(stable.mint);
+                  break;
+                } catch (err) {
+                  const msg = stringifyError(err).toLowerCase();
+                  if (msg.includes("withdrawtoo") || msg.includes("too large")) {
+                    withdrawAmount = withdrawAmount / 2;
+                    continue;
+                  }
+                  throw err;
                 }
               }
             } catch (err) {
