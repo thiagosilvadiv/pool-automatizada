@@ -392,20 +392,34 @@ class RealKaminoClient implements KaminoClient {
       const ltv = obligation.refreshedStats?.loanToValue?.toNumber?.();
       const depositsRaw = obligation.getDeposits() ?? [];
       const borrowsRaw = obligation.getBorrows() ?? [];
+      const parseAmountToUi = async (mint: string, amountValue: any): Promise<number> => {
+        if (amountValue == null) return 0;
+        const decimals = await this.resolveDecimals(mint);
+        const text = typeof amountValue === "string" ? amountValue : amountValue?.toString?.() ?? String(amountValue);
+        if (!text) return 0;
+        if (text.includes(".") || text.toLowerCase().includes("e")) {
+          const parsed = Number(text);
+          return Number.isFinite(parsed) ? parsed : 0;
+        }
+        try {
+          const raw = BigInt(text);
+          return Number(raw) / Math.pow(10, Math.max(0, decimals));
+        } catch {
+          const fallback = Number(text);
+          return Number.isFinite(fallback) ? fallback : 0;
+        }
+      };
+
       const deposits = await Promise.all(depositsRaw.map(async (item) => {
         const mint = item?.mintAddress ?? "";
         if (!mint) return null;
-        const decimals = await this.resolveDecimals(mint);
-        const raw = item?.amount ? BigInt(item.amount.toString()) : 0n;
-        const amount = Number(raw) / Math.pow(10, Math.max(0, decimals));
+        const amount = await parseAmountToUi(mint, item?.amount);
         return { mint, amount };
       })).then((items) => items.filter(Boolean) as { mint: string; amount: number }[]);
       const borrows = await Promise.all(borrowsRaw.map(async (item) => {
         const mint = item?.mintAddress ?? "";
         if (!mint) return null;
-        const decimals = await this.resolveDecimals(mint);
-        const raw = item?.amount ? BigInt(item.amount.toString()) : 0n;
-        const amount = Number(raw) / Math.pow(10, Math.max(0, decimals));
+        const amount = await parseAmountToUi(mint, item?.amount);
         return { mint, amount };
       })).then((items) => items.filter(Boolean) as { mint: string; amount: number }[]);
 

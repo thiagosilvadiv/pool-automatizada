@@ -509,16 +509,36 @@
                   <th>Ação</th>
                   <th>Market</th>
                   <th>Mensagem</th>
+                  <th>Detalhes</th>
                 </tr>
               </thead>
               <tbody id="kaminoLogBody">
-                <tr><td colspan="5">Sem eventos ainda</td></tr>
+                <tr><td colspan="6">Sem eventos ainda</td></tr>
               </tbody>
             </table>
           </div>
         </div>
       </section>
     </main>
+    <div id="kaminoLogModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="kaminoLogTitle">
+      <div class="modal-backdrop" data-close="kamino-log"></div>
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="kaminoLogTitle">Detalhes do log Kamino</h3>
+          <button type="button" class="icon-btn" data-close="kamino-log">x</button>
+        </div>
+        <div class="kv-grid cols-2">
+          <div class="kv"><span>Data/Hora</span><span id="kaminoLogDetailTime">-</span></div>
+          <div class="kv"><span>Nível</span><span id="kaminoLogDetailLevel">-</span></div>
+          <div class="kv"><span>Ação</span><span id="kaminoLogDetailAction">-</span></div>
+          <div class="kv"><span>Market</span><span id="kaminoLogDetailMarket">-</span></div>
+        </div>
+        <div class="log-detail">
+          <label>Mensagem completa</label>
+          <pre id="kaminoLogDetailMessage">-</pre>
+        </div>
+      </div>
+    </div>
     <div id="editPoolModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editPoolTitle">
       <div class="modal-backdrop" data-close="edit"></div>
       <div class="modal-card">

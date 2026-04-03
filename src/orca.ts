@@ -1344,8 +1344,34 @@ export class OrcaBot {
       usableB = Math.min(usableB, this.config.maxTokenB);
     }
 
+    const minA = this.poolState.decimalsA != null ? Math.pow(10, -this.poolState.decimalsA) : 0;
+    const minB = this.poolState.decimalsB != null ? Math.pow(10, -this.poolState.decimalsB) : 0;
+
     if (usableA <= 0 && usableB <= 0) {
-      logger.warn("insufficient token balances to open position");
+      this.logOpenPositionContext("insufficient-balance", {
+        balances,
+        targetA,
+        targetB,
+        usableA,
+        usableB,
+        maxTokenA: options?.maxTokenA ?? null,
+        maxTokenB: options?.maxTokenB ?? null
+      });
+      return "insufficient-balance";
+    }
+
+    if (usableA < minA && usableB < minB) {
+      this.logOpenPositionContext("amount-below-minimum", {
+        balances,
+        targetA,
+        targetB,
+        usableA,
+        usableB,
+        minA,
+        minB,
+        maxTokenA: options?.maxTokenA ?? null,
+        maxTokenB: options?.maxTokenB ?? null
+      });
       return "insufficient-balance";
     }
 
@@ -1384,7 +1410,17 @@ export class OrcaBot {
 
     let quote = buildQuote();
     if (!quote) {
-      logger.warn("unable to build liquidity quote with available balances");
+      this.logOpenPositionContext("quote-failed", {
+        balances,
+        targetA,
+        targetB,
+        usableA,
+        usableB,
+        minA,
+        minB,
+        maxTokenA: options?.maxTokenA ?? null,
+        maxTokenB: options?.maxTokenB ?? null
+      });
       return "quote-failed";
     }
 
@@ -1529,7 +1565,23 @@ export class OrcaBot {
 
         currentAmount = currentAmount.mul(scale * 0.98);
       } catch (err) {
-        logger.warn({ err, attempt }, "failed to build liquidity quote");
+        const message = stringifyError(err);
+        logger.warn(
+          { err: message, attempt, amount: currentAmount?.toString?.() ?? String(currentAmount), usableA, usableB },
+          "failed to build liquidity quote"
+        );
+        if (
+          message.toLowerCase().includes("tokenamount is zero")
+          || message.toLowerCase().includes("provided tokenamount is zero")
+        ) {
+          if (this.config.kaminoRebalanceEnabled || this.kaminoState?.active) {
+            this.queueKaminoLog(
+              "quote-zero",
+              `TokenAmount zero ao calcular quote (A=${usableA.toFixed(6)}, B=${usableB.toFixed(6)}).`,
+              "warn"
+            );
+          }
+        }
         return null;
       }
     }
@@ -2021,6 +2073,21 @@ export class OrcaBot {
     const logs = this.pendingKaminoLogs;
     this.pendingKaminoLogs = [];
     return logs;
+  }
+
+  private logOpenPositionContext(reason: string, context: Record<string, any>): void {
+    const payload = { reason, ...context };
+    logger.warn(payload, "open-position diagnostics");
+    if (this.config.kaminoRebalanceEnabled || this.kaminoState?.active) {
+      const summary = [
+        `${reason}`,
+        `A=${Number(context.usableA ?? 0).toFixed(6)}`,
+        `B=${Number(context.usableB ?? 0).toFixed(6)}`,
+        `tA=${Number(context.targetA ?? 0).toFixed(6)}`,
+        `tB=${Number(context.targetB ?? 0).toFixed(6)}`
+      ].join(" ");
+      this.queueKaminoLog("open-context", summary, "warn");
+    }
   }
 
   drainHistoryActions(): BotStatus[] {

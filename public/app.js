@@ -49,6 +49,12 @@ const kaminoTestBtn = document.getElementById("kaminoTestBtn");
 const kaminoTestResult = document.getElementById("kaminoTestResult");
 const historyBody = document.getElementById("historyBody");
 const kaminoLogBody = document.getElementById("kaminoLogBody");
+const kaminoLogModal = document.getElementById("kaminoLogModal");
+const kaminoLogDetailTime = document.getElementById("kaminoLogDetailTime");
+const kaminoLogDetailLevel = document.getElementById("kaminoLogDetailLevel");
+const kaminoLogDetailAction = document.getElementById("kaminoLogDetailAction");
+const kaminoLogDetailMarket = document.getElementById("kaminoLogDetailMarket");
+const kaminoLogDetailMessage = document.getElementById("kaminoLogDetailMessage");
 const poolNameLabel = document.getElementById("poolNameLabel");
 const poolNameLabelTop = document.getElementById("poolNameLabelTop");
 const hedgeSymbolsList = document.getElementById("hedgeSymbolsList");
@@ -129,6 +135,7 @@ const swapErrorCopy = document.getElementById("swapErrorCopy");
 let cachedPools = [];
 let cachedConfig = null;
 let cachedHistory = [];
+let cachedKaminoLogs = [];
 let activeActionMenu = null;
 let swapErrorDetails = [];
 let historyEditState = null;
@@ -1431,24 +1438,55 @@ function renderKaminoLogs(items) {
     return;
   }
   const list = Array.isArray(items) ? items.slice(0, MAX_KAMINO_LOG_ROWS) : [];
+  cachedKaminoLogs = list;
   if (list.length === 0) {
-    kaminoLogBody.innerHTML = "<tr><td colspan=\"5\">Sem eventos ainda</td></tr>";
+    kaminoLogBody.innerHTML = "<tr><td colspan=\"6\">Sem eventos ainda</td></tr>";
     return;
   }
-  const rows = list.map((entry) => {
+  const rows = list.map((entry, idx) => {
     const level = kaminoLogLevelLabels[entry.level] ?? entry.level ?? "-";
     const market = entry.marketAddress ? shortMint(entry.marketAddress) : "-";
+    const message = truncateText(entry.message ?? "-", 80);
     return `
       <tr>
         <td>${formatTimestamp(entry.timestamp)}</td>
-        <td>${escapeHtml(level)}</td>
+        <td><span class="log-level ${escapeHtml(entry.level ?? "")}">${escapeHtml(level)}</span></td>
         <td>${escapeHtml(entry.action ?? "-")}</td>
         <td>${escapeHtml(market)}</td>
-        <td>${escapeHtml(entry.message ?? "-")}</td>
+        <td>${escapeHtml(message)}</td>
+        <td><button class="ghost tiny" data-kamino-log="${idx}">Ver</button></td>
       </tr>
     `;
   });
   kaminoLogBody.innerHTML = rows.join("");
+}
+
+function openKaminoLogModal(entry) {
+  if (!kaminoLogModal || !entry) return;
+  if (kaminoLogDetailTime) {
+    kaminoLogDetailTime.textContent = formatTimestamp(entry.timestamp);
+  }
+  if (kaminoLogDetailLevel) {
+    const level = kaminoLogLevelLabels[entry.level] ?? entry.level ?? "-";
+    kaminoLogDetailLevel.textContent = level;
+    applyStatusTone(kaminoLogDetailLevel, level);
+  }
+  if (kaminoLogDetailAction) {
+    kaminoLogDetailAction.textContent = entry.action ?? "-";
+  }
+  if (kaminoLogDetailMarket) {
+    kaminoLogDetailMarket.textContent = entry.marketAddress ?? "-";
+  }
+  if (kaminoLogDetailMessage) {
+    kaminoLogDetailMessage.textContent = entry.message ?? "-";
+  }
+  kaminoLogModal.classList.remove("hidden");
+}
+
+function closeKaminoLogModal() {
+  if (kaminoLogModal) {
+    kaminoLogModal.classList.add("hidden");
+  }
 }
 
 function renderPools(data, config) {
@@ -2700,8 +2738,24 @@ document.addEventListener("click", (event) => {
     closeSwapResultModal();
   } else if (closeType === "swap-error") {
     closeSwapErrorModal();
+  } else if (closeType === "kamino-log") {
+    closeKaminoLogModal();
   }
 });
+
+if (kaminoLogBody) {
+  kaminoLogBody.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const button = target.closest("[data-kamino-log]");
+    if (!button) return;
+    const index = Number(button.getAttribute("data-kamino-log"));
+    const entry = Number.isFinite(index) ? cachedKaminoLogs[index] : null;
+    if (entry) {
+      openKaminoLogModal(entry);
+    }
+  });
+}
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
