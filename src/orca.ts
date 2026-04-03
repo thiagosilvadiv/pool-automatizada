@@ -3164,6 +3164,7 @@ export class OrcaBot {
     let debtRemaining = input.debtAmount;
     let performed = false;
     let lastFailure: string | null = null;
+    const maxRepayChunkUi = 5; // limite de 5 unidades de stable por chunk para evitar tx grandes
 
     const refreshPosition = async (): Promise<void> => {
       try {
@@ -3207,7 +3208,10 @@ export class OrcaBot {
           continue;
         }
         try {
-          const repayAmount = Math.min(debtRemaining, maxChunk);
+          const repayAmount = Math.min(debtRemaining, maxChunk, maxRepayChunkUi);
+          if (repayAmount <= epsilon) {
+            continue;
+          }
           this.queueKaminoLog(
             "repay-with-collateral",
             `Tentando repay de ${repayAmount.toFixed(8)} com colateral ${candidate.mint}.`,
@@ -3519,7 +3523,7 @@ export class OrcaBot {
                 stableDecimals: stable.decimals
               });
               const required = priceUsd && priceUsd > 0 ? shortfall / priceUsd * 1.05 : shortfall;
-              let withdrawAmount = Math.min(pick.amount, required);
+              let withdrawAmount = Math.min(pick.amount, required, 0.05); // limita inicio a 0.05 unidades do colateral
               let attempts = 0;
               const maxAttempts = 10;
               while (withdrawAmount > epsilon && attempts < maxAttempts) {
