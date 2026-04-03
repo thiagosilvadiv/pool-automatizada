@@ -248,7 +248,7 @@ class RealKaminoClient implements KaminoClient {
     );
     const signed = await signTransactionMessageWithSigners(txMessage);
     const signature = getSignatureFromTransaction(signed);
-    await this.sendAndConfirm(signed as any, { commitment: "confirmed", skipPreflight: false });
+    await this.sendAndConfirmSafe(signed as any, signature);
     return signature;
   }
 
@@ -286,8 +286,46 @@ class RealKaminoClient implements KaminoClient {
     }
     const signed = await signTransactionMessageWithSigners(txMessage);
     const signature = getSignatureFromTransaction(signed);
-    await this.sendAndConfirm(signed as any, { commitment: "confirmed", skipPreflight: false });
+    await this.sendAndConfirmSafe(signed as any, signature);
     return signature;
+  }
+
+  private async sendAndConfirmSafe(
+    signed: any,
+    signature: string,
+    opts: { commitment?: "confirmed" | "finalized"; skipPreflight?: boolean } = {
+      commitment: "confirmed",
+      skipPreflight: false
+    }
+  ): Promise<void> {
+    try {
+      await this.sendAndConfirm(signed, opts);
+    } catch (err) {
+      const msg = String(err?.message ?? err);
+      if (msg.toLowerCase().includes("not confirmed")) {
+        logger.warn({ signature, err: msg }, "tx not confirmed in time; polling status");
+        await this.confirmSignatureWithRetry(signature);
+        return;
+      }
+      throw err;
+    }
+  }
+
+  private async confirmSignatureWithRetry(signature: string, timeoutMs = 60_000, pollMs = 1500): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const statusResp = await (this.rpc as any).getSignatureStatuses({ signatures: [signature] }).send();
+      const info = statusResp?.value?.[0];
+      if (info?.err) {
+        throw new Error(`Transaction ${signature} failed: ${JSON.stringify(info.err)}`);
+      }
+      const conf = info?.confirmationStatus;
+      if (conf === "confirmed" || conf === "finalized") {
+        return;
+      }
+      await sleep(pollMs);
+    }
+    throw new Error(`Transaction ${signature} not confirmed after ${timeoutMs / 1000}s`);
   }
 
   private async jupiterRequest(url: string, init: RequestInit, retries = 2): Promise<{ res: Response; text: string }> {
