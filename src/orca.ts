@@ -28,6 +28,7 @@ const DEFAULT_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const KAMINO_REPAY_CHUNK_FACTOR = 0.5;
 const KAMINO_REPAY_MIN_STABLE = 0.1; // unidade do stable
 const KAMINO_WITHDRAW_MIN = 0.000001;
+const KAMINO_REBALANCE_RETRY_SEC = 10;
 
 export type BotContext = {
   connection: Connection;
@@ -4021,9 +4022,29 @@ export class OrcaBot {
     try {
       await kamino.ensureObligation();
       for (const entry of deposits) {
-        await kamino.depositCollateral({ mint: entry.mint, amount: entry.depositAmount });
-        depositedEntries.push({ mint: entry.mint, amount: entry.depositAmount });
-        this.queueHistoryAction("kamino-deposit");
+        let attempts = 0;
+        const maxAttempts = 3;
+        while (attempts < maxAttempts) {
+          attempts += 1;
+          try {
+            await kamino.depositCollateral({ mint: entry.mint, amount: entry.depositAmount });
+            depositedEntries.push({ mint: entry.mint, amount: entry.depositAmount });
+            this.queueHistoryAction("kamino-deposit");
+            break;
+          } catch (err) {
+            const message = stringifyError(err);
+            if (this.isKaminoRetryableError(message) && attempts < maxAttempts) {
+              this.queueKaminoLog(
+                "rebalance-wait",
+                `Deposit rate-limited; nova tentativa em ${KAMINO_REBALANCE_RETRY_SEC}s.`,
+                "warn"
+              );
+              await this.sleep(KAMINO_REBALANCE_RETRY_SEC * 1000);
+              continue;
+            }
+            throw err;
+          }
+        }
       }
       deposited = depositedEntries.length > 0;
     } catch (err) {
@@ -4059,7 +4080,27 @@ export class OrcaBot {
       return "kamino-rebalance-failed";
     }
     try {
-      await kamino.borrow({ mint: stable.mint, amount: borrowUsd });
+      let attempts = 0;
+      const maxAttempts = 3;
+      while (attempts < maxAttempts) {
+        attempts += 1;
+        try {
+          await kamino.borrow({ mint: stable.mint, amount: borrowUsd });
+          break;
+        } catch (err) {
+          const message = stringifyError(err);
+          if (this.isKaminoRetryableError(message) && attempts < maxAttempts) {
+            this.queueKaminoLog(
+              "rebalance-wait",
+              `Borrow rate-limited; nova tentativa em ${KAMINO_REBALANCE_RETRY_SEC}s.`,
+              "warn"
+            );
+            await this.sleep(KAMINO_REBALANCE_RETRY_SEC * 1000);
+            continue;
+          }
+          throw err;
+        }
+      }
       const previous = this.kaminoState;
       const existingCollaterals = Array.isArray(previous?.collaterals) && previous.collaterals.length
         ? previous.collaterals.map((item) => ({ ...item }))
