@@ -3166,6 +3166,7 @@ export class OrcaBot {
     let onChainDeposits = new Map(input.onChainDeposits);
     let debtRemaining = input.debtAmount;
     let performed = false;
+    let lastFailure: string | null = null;
 
     const refreshPosition = async (): Promise<void> => {
       try {
@@ -3234,6 +3235,7 @@ export class OrcaBot {
           break;
         } catch (err) {
           const message = stringifyError(err);
+          lastFailure = message;
           if (message.toLowerCase().includes("too large")) {
             if (chunkAdjustments < maxChunkAdjustments) {
               chunkAdjustments += 1;
@@ -3285,6 +3287,16 @@ export class OrcaBot {
         onChainDeposits,
         error: lastQuoteError,
         retryable: true
+      };
+    }
+
+    if (!performed && debtRemaining > epsilon && lastFailure) {
+      return {
+        performed,
+        debtAmount: debtRemaining,
+        onChainDeposits,
+        error: lastFailure,
+        retryable: this.isKaminoRetryableError(lastFailure)
       };
     }
 
