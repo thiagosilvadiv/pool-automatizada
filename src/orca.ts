@@ -3845,9 +3845,6 @@ export class OrcaBot {
             } catch {
               // ignorar falha no decode
             }
-            if (kaminoMaxWithdrawUsd != null) {
-              lastKaminoMaxWithdrawUsd = kaminoMaxWithdrawUsd;
-            }
             const adjusted: number = (() => {
               if (kaminoMaxWithdrawUsd != null) {
                 const safeUsd = kaminoMaxWithdrawUsd * 0.85;
@@ -3857,11 +3854,6 @@ export class OrcaBot {
                 ? Math.max(KAMINO_REPAY_MIN_STABLE, maxChunkOverride * 0.5)
                 : Math.max(KAMINO_REPAY_MIN_STABLE, debtRemaining / 12);
             })();
-            if (adjusted <= epsilon || adjusted < KAMINO_REPAY_MIN_STABLE) {
-              const wait = this.scheduleKaminoRepayRetry(state, message, mode);
-              if (wait) return false;
-              break;
-            }
             this.queueKaminoLog(
               "repay-with-collateral",
               `Transacao recusada por tamanho; ajustando chunk max para ${adjusted.toFixed(8)}. Detalhe: ${message}`,
@@ -3947,7 +3939,6 @@ export class OrcaBot {
     }
     // Reset camflag to try repayWithCollateral before falling to split.
     this.kaminoTooLargeSeen = false;
-    let lastKaminoMaxWithdrawUsd: number | null = null;
     if (!this.isKaminoOwner(state)) {
       const owner = state.ownerPoolName ?? state.ownerPoolId ?? "outra pool";
       throw new Error(`Kamino pertence a pool ${owner}`);
@@ -4564,13 +4555,6 @@ export class OrcaBot {
     }
 
     if (debtAmount > epsilon) {
-      if (lastKaminoMaxWithdrawUsd != null) {
-        this.queueKaminoLog(
-          "withdraw-blocked",
-          `WithdrawTooLarge repetido; max_withdraw_value=${lastKaminoMaxWithdrawUsd.toFixed(4)} debt=${debtAmount.toFixed(8)}`,
-          "error"
-        );
-      }
       const message = `Divida remanescente (${debtAmount.toFixed(8)}); saque bloqueado.`;
       this.setKaminoState({ ...state, lastError: message });
       this.queueKaminoLog("withdraw-blocked", message, "error");
