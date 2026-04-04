@@ -268,19 +268,23 @@ export class PoolManager {
       let trendTimeframe: "1m" | "5m" | "15m" | "30m" | "1h" | null = trendRequested ? poolConfig.trendTimeframe : null;
       let trendStale = false;
       if (trendRequested) {
-        try {
-          const snapshot = await getTrendSnapshot({
+        const trendTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
+        const snapshot = await Promise.race([
+          getTrendSnapshot({
             networkId: poolConfig.trendNetworkId,
             poolAddress: entry.whirlpoolAddress,
             timeframe: poolConfig.trendTimeframe,
             staleSec: poolConfig.trendStaleSec,
             cacheSec: poolConfig.trendCacheSec
-          });
-          trendDirection = snapshot?.direction ?? null;
-          trendUpdatedAt = snapshot?.updatedAt ?? null;
-          trendTimeframe = snapshot?.timeframe ?? poolConfig.trendTimeframe ?? null;
-          trendStale = snapshot?.stale ?? false;
-        } catch (err) {
+          }),
+          trendTimeout
+        ]).catch(() => null);
+        if (snapshot) {
+          trendDirection = snapshot.direction ?? null;
+          trendUpdatedAt = snapshot.updatedAt ?? null;
+          trendTimeframe = snapshot.timeframe ?? poolConfig.trendTimeframe ?? null;
+          trendStale = snapshot.stale ?? false;
+        } else {
           trendDirection = null;
           trendUpdatedAt = null;
           trendTimeframe = poolConfig.trendTimeframe ?? null;

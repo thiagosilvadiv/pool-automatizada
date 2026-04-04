@@ -497,6 +497,13 @@ export class OrcaBot {
     if (!err) return false;
     if (this.isRateLimitError(err)) return true;
     const message = String(err?.message ?? err).toLowerCase();
+    if (
+      message.includes("custom program error: 0x1") ||
+      message.includes("\"0x1\"") ||
+      message.includes("insufficient funds")
+    ) {
+      return false;
+    }
     return message.includes("-32002")
       || message.includes("-32602")
       || message.includes("invalid params")
@@ -560,6 +567,7 @@ export class OrcaBot {
       try {
         return await fn();
       } catch (err) {
+        const prevErr = lastErr;
         lastErr = err;
         if (this.isRateLimitError(err)) {
           const waitMs = 2000 * (attempt + 1);
@@ -568,6 +576,10 @@ export class OrcaBot {
           continue;
         }
         if (this.isKaminoRetryableError(err) && attempt < 2) {
+          const prevMsg = String((prevErr as any)?.message ?? "").toLowerCase();
+          if (prevMsg.includes("0x1") || prevMsg.includes("insufficient funds")) {
+            throw err;
+          }
           const msg = String((err as any)?.message ?? err);
           const waitMs = msg.includes("-32002") ? 15000 : 5000;
           logger.warn({ err, attempt, label, waitMs }, "kamino call retryable (blockhash/rpc); aguardando");
@@ -3830,44 +3842,52 @@ export class OrcaBot {
                   kaminoMaxWithdrawUsd = parsed;
                 }
               }
-          } catch {
-            // ignorar falha no decode
-          }
-          const adjusted: number = (() => {
-            if (kaminoMaxWithdrawUsd != null) {
-              const safeUsd = kaminoMaxWithdrawUsd * 0.85;
-              return Math.max(KAMINO_REPAY_MIN_STABLE, safeUsd);
+            } catch {
+              // ignorar falha no decode
             }
-            return maxChunkOverride != null
-              ? Math.max(KAMINO_REPAY_MIN_STABLE, maxChunkOverride * 0.5)
-              : Math.max(KAMINO_REPAY_MIN_STABLE, debtRemaining / 12);
-          })();
-          this.queueKaminoLog(
-            "repay-with-collateral",
-            `Transacao recusada por tamanho; ajustando chunk max para ${adjusted.toFixed(8)}. Detalhe: ${message}`,
-            "warn"
-          );
-          usedCandidate = true;
-          if (chunkReductions <= maxChunkReductions) {
-            maxChunkOverride = adjusted;
+            if (kaminoMaxWithdrawUsd != null) {
+              lastKaminoMaxWithdrawUsd = kaminoMaxWithdrawUsd;
+            }
+            const adjusted: number = (() => {
+              if (kaminoMaxWithdrawUsd != null) {
+                const safeUsd = kaminoMaxWithdrawUsd * 0.85;
+                return Math.max(KAMINO_REPAY_MIN_STABLE, safeUsd);
+              }
+              return maxChunkOverride != null
+                ? Math.max(KAMINO_REPAY_MIN_STABLE, maxChunkOverride * 0.5)
+                : Math.max(KAMINO_REPAY_MIN_STABLE, debtRemaining / 12);
+            })();
+            if (adjusted <= epsilon || adjusted < KAMINO_REPAY_MIN_STABLE) {
+              const wait = this.scheduleKaminoRepayRetry(state, message, mode);
+              if (wait) return false;
+              break;
+            }
+            this.queueKaminoLog(
+              "repay-with-collateral",
+              `Transacao recusada por tamanho; ajustando chunk max para ${adjusted.toFixed(8)}. Detalhe: ${message}`,
+              "warn"
+            );
+            usedCandidate = true;
+            if (chunkReductions <= maxChunkReductions) {
+              maxChunkOverride = adjusted;
+            }
+            break;
           }
-          break;
-        }
           if (this.isKaminoRetryableError(message)) {
-          this.queueKaminoLog("repay-with-collateral-failed", message, "warn");
-          await refreshPosition();
-          this.queueKaminoLog(
-            "repay-with-collateral-refresh",
-            `Retryable erro apos falha de repay; debt agora ${debtRemaining.toFixed(8)}, deposits ${onChainDeposits.size}`,
-            "info"
-          );
-          return {
-            performed: performed,
-            debtAmount: debtRemaining,
-            onChainDeposits,
-            retryable: true,
-            error: message
-          };
+            this.queueKaminoLog("repay-with-collateral-failed", message, "warn");
+            await refreshPosition();
+            this.queueKaminoLog(
+              "repay-with-collateral-refresh",
+              `Retryable erro apos falha de repay; debt agora ${debtRemaining.toFixed(8)}, deposits ${onChainDeposits.size}`,
+              "info"
+            );
+            return {
+              performed: performed,
+              debtAmount: debtRemaining,
+              onChainDeposits,
+              retryable: true,
+              error: message
+            };
           }
           if (this.isKaminoQuoteError(message)) {
             lastQuoteError = message;
@@ -3927,6 +3947,7 @@ export class OrcaBot {
     }
     // Reset camflag to try repayWithCollateral before falling to split.
     this.kaminoTooLargeSeen = false;
+    let lastKaminoMaxWithdrawUsd: number | null = null;
     if (!this.isKaminoOwner(state)) {
       const owner = state.ownerPoolName ?? state.ownerPoolId ?? "outra pool";
       throw new Error(`Kamino pertence a pool ${owner}`);
@@ -4269,6 +4290,17 @@ export class OrcaBot {
               );
               debtAmount = 0;
               stableBalance = await this.getWalletTokenBalance(stable.mint);
+            } else if (
+              repayWalletMsg.includes("0x1") ||
+              repayWalletMsg.includes("custom program error: 0x1") ||
+              repayWalletMsg.includes("insufficient funds")
+            ) {
+              stableBalance = await this.getWalletTokenBalance(stable.mint);
+              this.queueKaminoLog(
+                "repay-wallet",
+                `Saldo insuficiente para repay (0x1); saldo real: ${stableBalance.toFixed(8)}`,
+                "warn"
+              );
             } else {
               throw repayWalletErr;
             }
@@ -4532,6 +4564,13 @@ export class OrcaBot {
     }
 
     if (debtAmount > epsilon) {
+      if (lastKaminoMaxWithdrawUsd != null) {
+        this.queueKaminoLog(
+          "withdraw-blocked",
+          `WithdrawTooLarge repetido; max_withdraw_value=${lastKaminoMaxWithdrawUsd.toFixed(4)} debt=${debtAmount.toFixed(8)}`,
+          "error"
+        );
+      }
       const message = `Divida remanescente (${debtAmount.toFixed(8)}); saque bloqueado.`;
       this.setKaminoState({ ...state, lastError: message });
       this.queueKaminoLog("withdraw-blocked", message, "error");

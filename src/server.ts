@@ -6,7 +6,7 @@ import { randomUUID } from "crypto";
 import { Config } from "./config.js";
 import { buildConnection, buildWallet, loadKeypair } from "./solana.js";
 import { logger } from "./logger.js";
-import { PoolManager } from "./pool-manager.js";
+import { PoolManager, type PoolSummary } from "./pool-manager.js";
 import { getTrendSeries } from "./trend.js";
 import { listLinearSymbols } from "./bybit.js";
 import type { HistoryEvent } from "./runner.js";
@@ -36,11 +36,21 @@ type PoolSummaryRouteService = Pick<PoolManager, "listSummaries" | "getSelectedP
 
 export function registerPoolsSummaryRoute(app: Express, poolManager: PoolSummaryRouteService): void {
   app.get("/api/pools", async (_req: Request, res: Response) => {
-    const pools = await poolManager.listSummaries();
+    const timeoutPromise = new Promise<PoolSummary[]>((_, reject) =>
+      setTimeout(() => reject(new Error("listSummaries timeout")), 5000)
+    );
+    let pools: PoolSummary[] = [];
+    let error: string | null = null;
+    try {
+      pools = await Promise.race([poolManager.listSummaries(), timeoutPromise]);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
     res.json({
       selectedPoolId: poolManager.getSelectedPoolId(),
       autoResume: poolManager.getAutoResumeStatus(),
-      pools
+      pools,
+      error: error ?? undefined
     });
   });
 }
