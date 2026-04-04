@@ -818,42 +818,42 @@ export class OrcaBot {
           // de quanto foi emprestado. O borrow pode já existir on-chain.
           // Verifica se há saldo na wallet para abrir a pool diretamente.
           const walletBal = await this.getTokenBalances().catch(() => ({ tokenA: 0, tokenB: 0 }));
-        if (walletBal.tokenA <= 0 && walletBal.tokenB <= 0) {
-          const pendingDebtWallet = Number(this.kaminoState?.debtAmount ?? 0);
-          if (pendingDebtWallet > 1e-8) {
+      if (walletBal.tokenA <= 0 && walletBal.tokenB <= 0) {
+        const pendingDebtWallet = Number(this.kaminoState?.debtAmount ?? 0);
+        if (pendingDebtWallet > 1e-8) {
+          this.queueKaminoLog(
+            "wait-funds",
+            `Tentando quitar divida Kamino (${pendingDebtWallet.toFixed(4)}) via colateral depositado.`,
+            "warn"
+          );
+          try {
+            const closed = await this.closeKaminoCycle("target");
+            if (closed) {
+              this.lastStatus.lastAction = "kamino-close";
+              this.lastStatus.positionRange = null;
+              this.lastStatus.positionMint = this.currentPositionMint;
+              return this.getStatus();
+            }
+          } catch (err) {
             this.queueKaminoLog(
               "wait-funds",
-              `Tentando quitar divida Kamino (${pendingDebtWallet.toFixed(4)}) via colateral depositado.`,
+              `Falha ao fechar ciclo Kamino: ${err instanceof Error ? err.message : String(err)}. Aguardando proximo tick.`,
               "warn"
             );
-            try {
-              const closed = await this.closeKaminoCycle("target");
-              if (closed) {
-                this.lastStatus.lastAction = "kamino-close";
-                this.lastStatus.positionRange = null;
-                this.lastStatus.positionMint = this.currentPositionMint;
-                return this.getStatus();
-              }
-            } catch (err) {
-              this.queueKaminoLog(
-                "wait-funds",
-                `Falha ao fechar ciclo Kamino: ${err instanceof Error ? err.message : String(err)}. Aguardando proximo tick.`,
-                "warn"
-              );
-            }
-            this.lastStatus.lastAction = "kamino-wait-funds";
-            this.lastStatus.positionRange = null;
-            this.lastStatus.positionMint = this.currentPositionMint;
-            return this.getStatus();
-          }
-          if (this.lastStatus.lastAction !== "kamino-wait-funds") {
-            this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
           }
           this.lastStatus.lastAction = "kamino-wait-funds";
           this.lastStatus.positionRange = null;
           this.lastStatus.positionMint = this.currentPositionMint;
           return this.getStatus();
         }
+        if (this.lastStatus.lastAction !== "kamino-wait-funds") {
+          this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
+        }
+        this.lastStatus.lastAction = "kamino-wait-funds";
+        this.lastStatus.positionRange = null;
+        this.lastStatus.positionMint = this.currentPositionMint;
+        return this.getStatus();
+      }
         const pendingDebt = Number(this.kaminoState?.debtAmount ?? 0);
         if (pendingDebt > 1e-8) {
           this.queueKaminoLog(
@@ -2945,6 +2945,29 @@ export class OrcaBot {
     );
   }
     } catch (err) {
+      const reconcileMsg = String((err as any)?.message ?? err).toLowerCase();
+      if (
+        reconcileMsg.includes("obligationborrowsempty") ||
+        reconcileMsg.includes("obligation borrows are empty") ||
+        reconcileMsg.includes("obligation has no borrows") ||
+        reconcileMsg.includes("0x1785") ||
+        reconcileMsg.includes("6021")
+      ) {
+        if (this.kaminoState?.active) {
+          this.setKaminoState({
+            ...this.kaminoState,
+            debtAmount: 0,
+            lastError: "Dívida zerada on-chain detectada via erro de repay.",
+            updatedAt: new Date().toISOString()
+          });
+          this.queueKaminoLog(
+            "debt-zero",
+            "ObligationBorrowsEmpty detectado; dívida zerada localmente.",
+            "warn"
+          );
+        }
+        return;
+      }
       logger.warn({ err }, "falha ao reconciliar estado Kamino");
     }
   }
@@ -4222,13 +4245,34 @@ export class OrcaBot {
       if (stableBalance > epsilon && debtAmount > epsilon) {
         const repayChunk = Math.min(stableBalance, repayTarget);
         if (repayChunk > epsilon) {
-          await this.kaminoCallWithRetry(
-            () => kamino.repay({ mint: stable.mint, amount: repayChunk }),
-            "kamino-repay-wallet"
-          );
-          this.queueHistoryAction("kamino-repay");
-          debtAmount = Math.max(0, debtAmount - repayChunk);
-          stableBalance = await this.getWalletTokenBalance(stable.mint);
+          try {
+            await this.kaminoCallWithRetry(
+              () => kamino.repay({ mint: stable.mint, amount: repayChunk }),
+              "kamino-repay-wallet"
+            );
+            this.queueHistoryAction("kamino-repay");
+            debtAmount = Math.max(0, debtAmount - repayChunk);
+            stableBalance = await this.getWalletTokenBalance(stable.mint);
+          } catch (repayWalletErr) {
+            const repayWalletMsg = String((repayWalletErr as any)?.message ?? repayWalletErr).toLowerCase();
+            if (
+              repayWalletMsg.includes("obligationborrowsempty") ||
+              repayWalletMsg.includes("obligation borrows are empty") ||
+              repayWalletMsg.includes("obligation has no borrows") ||
+              repayWalletMsg.includes("0x1785") ||
+              repayWalletMsg.includes("6021")
+            ) {
+              this.queueKaminoLog(
+                "repay-wallet",
+                "Dívida já quitada on-chain (ObligationBorrowsEmpty); zerando estado local.",
+                "warn"
+              );
+              debtAmount = 0;
+              stableBalance = await this.getWalletTokenBalance(stable.mint);
+            } else {
+              throw repayWalletErr;
+            }
+          }
         }
       }
 
@@ -4459,14 +4503,30 @@ export class OrcaBot {
           stableBalance = await this.getWalletTokenBalance(stable.mint);
         } catch (err) {
           const message = stringifyError(err);
-          if (this.isKaminoRetryableError(message)) {
+          const msgLower = message.toLowerCase();
+          if (
+            msgLower.includes("obligationborrowsempty") ||
+            msgLower.includes("obligation borrows are empty") ||
+            msgLower.includes("obligation has no borrows") ||
+            msgLower.includes("0x1785") ||
+            msgLower.includes("6021")
+          ) {
+            this.queueKaminoLog(
+              "repay-wallet",
+              "Dívida já quitada on-chain (ObligationBorrowsEmpty); zerando estado local.",
+              "warn"
+            );
+            debtAmount = 0;
+            stableBalance = await this.getWalletTokenBalance(stable.mint);
+          } else if (this.isKaminoRetryableError(message)) {
             const wait = this.scheduleKaminoRepayRetry(state, message, mode);
             if (wait) {
               return false;
             }
+          } else {
+            this.queueKaminoLog("repay-failed", message, "error");
+            throw err;
           }
-          this.queueKaminoLog("repay-failed", message, "error");
-          throw err;
         }
       }
     }
