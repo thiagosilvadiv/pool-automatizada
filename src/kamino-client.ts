@@ -800,25 +800,59 @@ class RealKaminoClient implements KaminoClient {
       ];
     };
 
-    const responses = await getRepayWithCollIxs({
-      repayAmount: new Decimal(input.repayAmount),
-      isClosingPosition: true,
-      budgetAndPriorityFeeIxs: undefined,
-      collTokenMint: address(input.collateralMint),
-      debtTokenMint: address(input.debtMint),
-      kaminoMarket: market,
-      owner: this.signer,
-      obligation,
-      referrer: none(),
-      currentSlot,
-      scopeRefreshIx: [],
-      useV2Ixs: true,
-      quoter,
-      swapper,
-      logger: (msg: string, ...extra: any[]) => {
-        logger.info({ msg, extra }, "kamino repay-with-collateral");
+    let responses: Awaited<ReturnType<typeof getRepayWithCollIxs>>;
+    try {
+      responses = await getRepayWithCollIxs({
+        repayAmount: new Decimal(input.repayAmount),
+        isClosingPosition: true,
+        budgetAndPriorityFeeIxs: undefined,
+        collTokenMint: address(input.collateralMint),
+        debtTokenMint: address(input.debtMint),
+        kaminoMarket: market,
+        owner: this.signer,
+        obligation,
+        referrer: none(),
+        currentSlot,
+        scopeRefreshIx: [],
+        useV2Ixs: true,
+        quoter,
+        swapper,
+        logger: (msg: string, ...extra: any[]) => {
+          logger.info({ msg, extra }, "kamino repay-with-collateral");
+        }
+      });
+    } catch (err) {
+      const msg = String((err as any)?.message ?? err);
+      // Se o erro é "reserveAddress" ou "reserve nao encontrada", o market
+      // está com cache desatualizado (ex: após troca de token de dívida).
+      // Invalida o cache e tenta novamente com um market recarregado.
+      if (msg.includes("reserveAddress") || msg.includes("reserve") || msg.includes("Reserve")) {
+        logger.warn({ err }, "repayWithCollateral falhou por reserve ausente; recarregando market e tentando novamente");
+        this.marketPromise = null;
+        const freshMarket = await this.loadMarket();
+        responses = await getRepayWithCollIxs({
+          repayAmount: new Decimal(input.repayAmount),
+          isClosingPosition: true,
+          budgetAndPriorityFeeIxs: undefined,
+          collTokenMint: address(input.collateralMint),
+          debtTokenMint: address(input.debtMint),
+          kaminoMarket: freshMarket,
+          owner: this.signer,
+          obligation,
+          referrer: none(),
+          currentSlot,
+          scopeRefreshIx: [],
+          useV2Ixs: true,
+          quoter,
+          swapper,
+          logger: (msg: string, ...extra: any[]) => {
+            logger.info({ msg, extra }, "kamino repay-with-collateral");
+          }
+        });
+      } else {
+        throw err;
       }
-    });
+    }
 
     if (!responses.length) {
       throw new Error("Nenhuma instrucao para repay-with-collateral");

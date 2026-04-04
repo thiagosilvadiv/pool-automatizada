@@ -4163,7 +4163,8 @@ export class OrcaBot {
                   // resolvido reduzindo o chunk — precisa de uma nova tx com novo blockhash.
                   const wait = this.scheduleKaminoRepayRetry(state, msg, mode);
                   if (wait) return false;
-                  // Se tentativas esgotadas, reduz chunk como último recurso.
+                  // Tentativas esgotadas: sair do loop sem reduzir chunk.
+                  break;
                 }
                 withdrawAmount *= KAMINO_REPAY_CHUNK_FACTOR;
                 this.queueKaminoLog(
