@@ -195,6 +195,7 @@ export class BotRunner {
   private hedgeDecisionByMint = new Map<string, { status: "opened" | "skipped" | "failed"; reason: string | null }>();
   private pendingClose = false;
   private pendingCloseMode: "manual" = "manual";
+  private pendingKaminoClose = false;
   private rateLimitUntil: number | null = null;
   private pendingCloseRequestedAt: string | null = null;
   private autoAddRequestedByMint = new Set<string>();
@@ -254,7 +255,9 @@ export class BotRunner {
 
   async closeKaminoCycleNow(): Promise<{ ok: boolean; reason?: string; status: RunnerStatus }> {
     if (this.inFlight) {
-      return { ok: false, reason: "busy", status: this.getStatus() };
+      this.pendingKaminoClose = true;
+      logger.info("closeKaminoCycleNow: bot ocupado, agendando fechamento para próximo tick");
+      return { ok: true, reason: "scheduled", status: this.getStatus() };
     }
     this.inFlight = true;
     try {
@@ -679,6 +682,24 @@ export class BotRunner {
       return;
     }
     if (this.rateLimitUntil && Date.now() < this.rateLimitUntil) {
+      return;
+    }
+    if (this.pendingKaminoClose) {
+      this.pendingKaminoClose = false;
+      this.inFlight = true;
+      try {
+        const result = await this.bot.closeKaminoCycleNow();
+        this.lastTickAt = new Date().toISOString();
+        this.flushKaminoLogs();
+        if (!result.ok) {
+          logger.warn({ reason: result.reason }, "pendingKaminoClose falhou");
+        }
+      } catch (err) {
+        logger.error({ err }, "pendingKaminoClose erro");
+        this.bot.setError(err);
+      } finally {
+        this.inFlight = false;
+      }
       return;
     }
     if (this.pendingClose) {

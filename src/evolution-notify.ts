@@ -10,7 +10,10 @@ export async function sendEvolutionMessage(params: {
   message: string;
 }): Promise<void> {
   const { apiUrl, apiKey, instance, phone, message } = params;
-  const url = `${apiUrl.replace(/\/$/, "")}/message/sendText/${instance}`;
+  const normalizedUrl = apiUrl.startsWith("http://") || apiUrl.startsWith("https://")
+    ? apiUrl
+    : `https://${apiUrl}`;
+  const url = `${normalizedUrl.replace(/\/$/, "")}/message/sendText/${encodeURIComponent(instance)}`;
   const body = {
     number: phone,
     text: message
@@ -48,13 +51,13 @@ export async function notifyKaminoFundsNeeded(params: {
   if (!apiUrl || !apiKey || !instance || !phone) return;
 
   const msg =
-    `⚠️ *Pool Automatizada — Kamino: Fundos Necessários*\\n\\n` +
-    `O ciclo Kamino não conseguiu pagar a dívida automaticamente.\\n\\n` +
-    `*Wallet:* \`${params.walletAddress}\`\\n` +
-    `*Dívida total:* ${params.debtAmount.toFixed(6)} ${params.debtSymbol}\\n` +
-    `*Mínimo para enviar:* ${params.minAmountNeeded.toFixed(6)} ${params.debtSymbol}\\n` +
-    `*Token (mint):* \`${params.debtMint}\`\\n\\n` +
-    `Envie o valor acima para a wallet indicada.\\n` +
+    `⚠️ *Pool Automatizada — Kamino: Fundos Necessários*\n\n` +
+    `O ciclo Kamino não conseguiu pagar a dívida automaticamente.\n\n` +
+    `*Wallet:* \`${params.walletAddress}\`\n` +
+    `*Dívida total:* ${params.debtAmount.toFixed(6)} ${params.debtSymbol}\n` +
+    `*Mínimo para enviar:* ${params.minAmountNeeded.toFixed(6)} ${params.debtSymbol}\n` +
+    `*Token (mint):* \`${params.debtMint}\`\n\n` +
+    `Envie o valor acima para a wallet indicada.\n` +
     `Assim que o saldo for detectado, o bot quitará a dívida automaticamente e registrará a devolução pendente na interface.`;
 
   try {
