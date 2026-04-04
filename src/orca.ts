@@ -3539,7 +3539,7 @@ export class OrcaBot {
     let debtRemaining = input.debtAmount;
     let performed = false;
     let lastFailure: string | null = null;
-    const capacityBuffer = 0.7;
+    const capacityBuffer = 0.95;
     let maxChunkOverride: number | null = null;
     let chunkReductions = 0;
     const maxChunkReductions = 10;
@@ -3827,6 +3827,8 @@ export class OrcaBot {
       this.setError("Nenhum ciclo Kamino ativo");
       return false;
     }
+    // Reset camflag to try repayWithCollateral before falling to split.
+    this.kaminoTooLargeSeen = false;
     if (!this.isKaminoOwner(state)) {
       const owner = state.ownerPoolName ?? state.ownerPoolId ?? "outra pool";
       throw new Error(`Kamino pertence a pool ${owner}`);
@@ -4182,7 +4184,7 @@ export class OrcaBot {
             const required = priceUsd && priceUsd > 0 ? shortfall / priceUsd * 1.05 : shortfall;
             let withdrawAmount = Math.min(pick.amount, required);
             let attempts = 0;
-            const maxAttempts = 10;
+            const maxAttempts = 3;
             while (withdrawAmount > KAMINO_WITHDRAW_MIN && attempts < maxAttempts && debtAmount > epsilon) {
               attempts += 1;
               try {
@@ -4190,7 +4192,7 @@ export class OrcaBot {
                   collateralMint: pick.mint,
                   debtMint: stable.mint,
                   repayAmountUi: debtAmount,
-                  bufferPct: 0.7
+                  bufferPct: 0.95
                 });
                 const quoteOutStable = await this.estimateStableOutForCollateral({
                   collMint: pick.mint,
