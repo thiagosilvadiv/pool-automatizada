@@ -497,10 +497,16 @@ export class OrcaBot {
     if (!err) return false;
     if (this.isRateLimitError(err)) return true;
     const message = String(err?.message ?? err).toLowerCase();
+    // Verifica erro original embutido (quando sendAction encapsula 0x1 em retryable)
+    const originalErr = (err as any)?.__originalErr ?? (err as any)?.cause;
+    const originalMsg = originalErr ? String(originalErr?.message ?? originalErr).toLowerCase() : "";
     if (
       message.includes("custom program error: 0x1") ||
       message.includes("\"0x1\"") ||
-      message.includes("insufficient funds")
+      message.includes("insufficient funds") ||
+      originalMsg.includes("custom program error: 0x1") ||
+      originalMsg.includes("insufficient funds") ||
+      originalMsg.includes("\"0x1\"")
     ) {
       return false;
     }
@@ -578,13 +584,18 @@ export class OrcaBot {
         if (this.isKaminoRetryableError(err) && attempt < 2) {
           const prevMsg = String((prevErr as any)?.message ?? "").toLowerCase();
           const currMsg = String((err as any)?.message ?? "").toLowerCase();
-          // Se o erro atual OU o anterior indicam fundos insuficientes, não fazer retry.
+          const origErr = (err as any)?.__originalErr ?? (err as any)?.cause;
+          const origMsg = origErr ? String(origErr?.message ?? origErr).toLowerCase() : "";
+          // Se o erro atual, anterior OU o erro original embutido indicam 0x1, não fazer retry.
           if (
             prevMsg.includes("0x1") ||
             prevMsg.includes("insufficient funds") ||
             currMsg.includes("0x1") ||
             currMsg.includes("insufficient funds") ||
-            currMsg.includes("custom program error: 0x1")
+            currMsg.includes("custom program error: 0x1") ||
+            origMsg.includes("0x1") ||
+            origMsg.includes("insufficient funds") ||
+            origMsg.includes("custom program error: 0x1")
           ) {
             throw err;
           }
@@ -2962,6 +2973,13 @@ export class OrcaBot {
               collaterals: recoveredCollaterals,
               updatedAt: new Date().toISOString()
             });
+            const retryAt = this.kaminoState?.repayRetryUntil
+              ? Date.parse(this.kaminoState.repayRetryUntil)
+              : 0;
+            if (Number.isFinite(retryAt) && retryAt > Date.now()) {
+              // Ainda em espera de retry — não chamar closeKaminoCycle agora
+              return;
+            }
             try {
               await this.closeKaminoCycle("target");
             } catch (closeErr) {
@@ -3069,6 +3087,12 @@ export class OrcaBot {
         "Ciclo recuperado sem divida; sacando colateral residual imediatamente.",
         "warn"
       );
+      const retryAtRecover = this.kaminoState?.repayRetryUntil
+        ? Date.parse(this.kaminoState.repayRetryUntil)
+        : 0;
+      if (Number.isFinite(retryAtRecover) && retryAtRecover > Date.now()) {
+        return;
+      }
       try {
         await this.closeKaminoCycle("target");
       } catch (err) {
@@ -4440,7 +4464,12 @@ export class OrcaBot {
           debtAmount,
           onChainDeposits
         });
-        if (repayAttempt.retryable && repayAttempt.error) {
+        const repayErrLower = (repayAttempt.error ?? "").toLowerCase();
+        const repayIsInsufficientFunds =
+          repayErrLower.includes("0x1") ||
+          repayErrLower.includes("insufficient funds") ||
+          repayErrLower.includes("custom program error: 0x1");
+        if (repayAttempt.retryable && repayAttempt.error && !repayIsInsufficientFunds) {
           const wait = this.scheduleKaminoRepayRetry(state, repayAttempt.error, mode);
           if (wait) {
             return false;

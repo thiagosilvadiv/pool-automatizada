@@ -198,6 +198,55 @@ export function isBlockhashError(err: any): boolean {
   );
 }
 
+/**
+ * Verifica se um erro Solana contém "insufficient funds" (0x1) em qualquer
+ * camada: mensagem principal, logs internos, ou payload codificado.
+ * O erro de simulação retorna -32002 mas o motivo real está nos logs.
+ */
+export function isInsufficientFundsError(err: any): boolean {
+  if (!err) return false;
+  const msg = String(err?.message ?? err).toLowerCase();
+  // Verificação direta na mensagem principal
+  if (
+    msg.includes("insufficient funds") ||
+    msg.includes("custom program error: 0x1") ||
+    msg.includes("\"0x1\"") ||
+    msg.includes("error: insufficient funds")
+  ) {
+    return true;
+  }
+  // Verificação nos logs internos do erro de simulação (SolanaError context)
+  const context = err?.context ?? err?.cause ?? err?.__context;
+  const logs: string[] = context?.logs ?? err?.logs ?? err?.data?.logs ?? [];
+  if (Array.isArray(logs)) {
+    for (const log of logs) {
+      const l = String(log).toLowerCase();
+      if (l.includes("insufficient funds") || l.includes("custom program error: 0x1")) {
+        return true;
+      }
+    }
+  }
+  // Verificação no payload base64 decodificado do -32002 (heurística)
+  // O payload contém a string "insufficient%20funds" codificada em URL dentro do base64
+  const data = err?.data ?? context?.data;
+  if (typeof data === "string" && data.length > 0) {
+    try {
+      const decoded = Buffer.from(data, "base64").toString("utf8");
+      const decodedLower = decoded.toLowerCase();
+      if (decodedLower.includes("insufficient%20funds") || decodedLower.includes("insufficient funds")) {
+        return true;
+      }
+    } catch {
+      // ignora falha de decode
+    }
+  }
+  // Verificação recursiva na causa do erro
+  if (err?.cause && err.cause !== err) {
+    return isInsufficientFundsError(err.cause);
+  }
+  return false;
+}
+
 async function loadSignerFromEnv(wallet: WalletLike): Promise<TransactionSigner> {
   const keypair = loadKeypair();
   const signer = await createKeyPairSignerFromBytes(keypair.secretKey);
@@ -323,19 +372,12 @@ class RealKaminoClient implements KaminoClient {
         lastErr = err;
         const decoded = decodeRpcError(err);
         const isBlockhash = isBlockhashError(err);
-        // Detectar erro de fundos insuficientes (0x1) ANTES de tratar como blockhash.
-        // O erro de simulação pode conter -32002 no envelope JSON-RPC, mascarando o
-        // erro real do programa SPL/Kamino que é "insufficient funds" (0x1).
-        const errMsg = String((err as any)?.message ?? err).toLowerCase();
-        const isInsufficientFunds =
-          errMsg.includes("insufficient funds") ||
-          errMsg.includes("custom program error: 0x1") ||
-          errMsg.includes("\"0x1\"") ||
-          errMsg.includes("error: insufficient funds");
-        if (isInsufficientFunds) {
+        // Detecta fundos insuficientes (0x1) incluindo logs internos de simulação.
+        if (isInsufficientFundsError(err)) {
           logger.error({ err: decoded, attempt }, "kamino tx falhou por fundos insuficientes (0x1); abortando sem retry");
           throw err;
         }
+        const errMsg = String((err as any)?.message ?? err).toLowerCase();
         const isSimulation = isBlockhash && errMsg.includes("simulation failed");
         if (isBlockhash && lastSignature && !isSimulation) {
           try {
@@ -355,6 +397,8 @@ class RealKaminoClient implements KaminoClient {
           const retryable = new Error("blockhash not found/expired (-32002) - retryable");
           (retryable as any).__code = -32002;
           (retryable as any).__retryable = true;
+          (retryable as any).__originalErr = lastErr;
+          (retryable as any).cause = lastErr;
           logger.warn({ attempt, err: decoded }, "kamino tx blockhash erro; tentativas esgotadas, devolvendo para retry");
           throw retryable;
         }
@@ -420,19 +464,12 @@ class RealKaminoClient implements KaminoClient {
         lastErr = err;
         const decoded = decodeRpcError(err);
         const isBlockhash = isBlockhashError(err);
-        // Detectar erro de fundos insuficientes (0x1) ANTES de tratar como blockhash.
-        // O erro de simulação pode conter -32002 no envelope JSON-RPC, mascarando o
-        // erro real do programa SPL/Kamino que é "insufficient funds" (0x1).
-        const errMsg = String((err as any)?.message ?? err).toLowerCase();
-        const isInsufficientFunds =
-          errMsg.includes("insufficient funds") ||
-          errMsg.includes("custom program error: 0x1") ||
-          errMsg.includes("\"0x1\"") ||
-          errMsg.includes("error: insufficient funds");
-        if (isInsufficientFunds) {
+        // Detecta fundos insuficientes (0x1) incluindo logs internos de simulação.
+        if (isInsufficientFundsError(err)) {
           logger.error({ err: decoded, attempt }, "kamino instructions falharam por fundos insuficientes (0x1); abortando sem retry");
           throw err;
         }
+        const errMsg = String((err as any)?.message ?? err).toLowerCase();
         const isSimulation = isBlockhash && errMsg.includes("simulation failed");
         if (isBlockhash && lastSignature && !isSimulation) {
           try {
@@ -452,6 +489,8 @@ class RealKaminoClient implements KaminoClient {
           const retryable = new Error("blockhash not found/expired (-32002) - retryable");
           (retryable as any).__code = -32002;
           (retryable as any).__retryable = true;
+          (retryable as any).__originalErr = lastErr;
+          (retryable as any).cause = lastErr;
           logger.warn({ attempt, err: decoded }, "kamino instructions blockhash erro; tentativas esgotadas");
           throw retryable;
         }
