@@ -779,15 +779,28 @@ export class OrcaBot {
       if (this.kaminoState?.active) {
         const reservedA = Number(this.kaminoState.reservedTokenA ?? 0);
         const reservedB = Number(this.kaminoState.reservedTokenB ?? 0);
-        if (reservedA <= 0 && reservedB <= 0) {
-          if (this.lastStatus.lastAction !== "kamino-wait-funds") {
-            this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
-          }
-          this.lastStatus.lastAction = "kamino-wait-funds";
-          this.lastStatus.positionRange = null;
-          this.lastStatus.positionMint = this.currentPositionMint;
-          return this.getStatus();
+    if (reservedA <= 0 && reservedB <= 0) {
+      // Antes de travar em wait-funds, verifica se há saldo livre na wallet
+      // que possa ser usado para reabrir a pool sem precisar do borrow.
+      let walletHasBalance = false;
+      try {
+        const walletBal = await this.getTokenBalances();
+        walletHasBalance = walletBal.tokenA > 0 || walletBal.tokenB > 0;
+      } catch {
+        walletHasBalance = false;
+      }
+      if (!walletHasBalance) {
+        if (this.lastStatus.lastAction !== "kamino-wait-funds") {
+          this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
         }
+        this.lastStatus.lastAction = "kamino-wait-funds";
+        this.lastStatus.positionRange = null;
+        this.lastStatus.positionMint = this.currentPositionMint;
+        return this.getStatus();
+      }
+      // Há saldo na wallet — usa ele e não bloqueia a abertura.
+      this.queueKaminoLog("wait-funds", "Usando saldo da wallet para reabrir a pool (sem empréstimo).", "warn");
+    }
         const caps: { maxTokenA?: number; maxTokenB?: number } = {};
         if (reservedA > 0) caps.maxTokenA = reservedA;
         if (reservedB > 0) caps.maxTokenB = reservedB;
@@ -2679,8 +2692,29 @@ export class OrcaBot {
       const position = await kamino.getPositionState();
       const hasDebt = (position?.debtAmount ?? 0) > 0;
       const hasCollateral = (position?.collateralAmount ?? 0) > 0;
-      if (!position || (!hasDebt && !hasCollateral)) {
-        if (this.kaminoState?.active) {
+    if (!position || (!hasDebt && !hasCollateral)) {
+      if (this.kaminoState?.active) {
+        // Posição sumiu on-chain após fechamento — desativa o ciclo localmente
+        // em vez de manter active=true com estado inconsistente.
+        const wasJustClosed =
+          !this.kaminoState.collateralAmount ||
+          Number(this.kaminoState.collateralAmount) <= 0;
+        if (wasJustClosed) {
+          this.setKaminoState({
+            ...this.kaminoState,
+            active: false,
+            reservedTokenA: null,
+            reservedTokenB: null,
+            lastError: null,
+            updatedAt: new Date().toISOString()
+          });
+          this.releaseKaminoLockIfOwned();
+          this.queueKaminoLog(
+            "not-found",
+            "Posicao Kamino nao encontrada no market; ciclo desativado.",
+            "warn"
+          );
+        } else {
           this.setKaminoState({
             ...this.kaminoState,
             lastError: "Posicao Kamino nao encontrada no market; mantendo ciclo salvo."
@@ -2691,8 +2725,9 @@ export class OrcaBot {
             "warn"
           );
         }
-        return;
       }
+      return;
+    }
 
       const deposits = Array.isArray(position.deposits) ? position.deposits : [];
       const borrows = Array.isArray(position.borrows) ? position.borrows : [];
@@ -2757,39 +2792,48 @@ export class OrcaBot {
         }
       }
 
-      if (!this.kaminoState?.active) {
-        const previous = this.kaminoState;
-        const ownerPoolId = this.poolId ?? previous?.ownerPoolId ?? null;
-        const ownerPoolName = this.poolName ?? previous?.ownerPoolName ?? null;
-        const nextState: KaminoCycleState = {
-          active: true,
-          ownerPoolId,
-          ownerPoolName,
-          marketAddress: this.getKaminoMarketAddress(),
-          baselineTokenA: null,
-          baselineTokenB: null,
-          reservedTokenA: null,
-          reservedTokenB: null,
-          collateralMint: position?.collateralMint ?? null,
-          collateralAmount: position?.collateralAmount ?? 0,
-          collateralUsd: null,
-          debtMint: position?.debtMint ?? null,
-          debtAmount: position?.debtAmount ?? 0,
-          debtUsd: null,
-          avgPriceUsdc: null,
-          targetPriceUsdc: null,
-          collaterals: recoveredCollaterals,
-          cycleCount: Math.max(previous?.cycleCount ?? 0, 1),
-          updatedAt: new Date().toISOString(),
-          lastError: "Ciclo Kamino recuperado do market (sem historico)."
-        };
-        this.kaminoState = this.normalizeKaminoState(nextState);
-        this.queueKaminoLog(
-          "recover",
-          "Emprestimo Kamino recuperado do market; ciclo reconstruido automaticamente.",
-          "warn"
-        );
-      }
+  if (!this.kaminoState?.active) {
+    const previous = this.kaminoState;
+    // Só reconstrói o ciclo se realmente há dívida ou colateral on-chain.
+    // Sem dívida E sem colateral = ciclo foi fechado, não há nada a recuperar.
+    const onChainDebt = Number(position?.debtAmount ?? 0);
+    const onChainCollateral = Number(position?.collateralAmount ?? 0);
+    const epsilon = 1e-8;
+    if (onChainDebt <= epsilon && onChainCollateral <= epsilon) {
+      // Nada on-chain — não reconstruir o ciclo.
+      return;
+    }
+    const ownerPoolId = this.poolId ?? previous?.ownerPoolId ?? null;
+    const ownerPoolName = this.poolName ?? previous?.ownerPoolName ?? null;
+    const nextState: KaminoCycleState = {
+      active: true,
+      ownerPoolId,
+      ownerPoolName,
+      marketAddress: this.getKaminoMarketAddress(),
+      baselineTokenA: null,
+      baselineTokenB: null,
+      reservedTokenA: null,
+      reservedTokenB: null,
+      collateralMint: position?.collateralMint ?? null,
+      collateralAmount: position?.collateralAmount ?? 0,
+      collateralUsd: null,
+      debtMint: position?.debtMint ?? null,
+      debtAmount: position?.debtAmount ?? 0,
+      debtUsd: null,
+      avgPriceUsdc: null,
+      targetPriceUsdc: null,
+      collaterals: recoveredCollaterals,
+      cycleCount: Math.max(previous?.cycleCount ?? 0, 1),
+      updatedAt: new Date().toISOString(),
+      lastError: "Ciclo Kamino recuperado do market (sem historico)."
+    };
+    this.kaminoState = this.normalizeKaminoState(nextState);
+    this.queueKaminoLog(
+      "recover",
+      "Emprestimo Kamino recuperado do market; ciclo reconstruido automaticamente.",
+      "warn"
+    );
+  }
     } catch (err) {
       logger.warn({ err }, "falha ao reconciliar estado Kamino");
     }
