@@ -4645,6 +4645,25 @@ export class OrcaBot {
         } catch (err) {
           const message = stringifyError(err);
           const msgLower = message.toLowerCase();
+
+          // 0x1784 = ObligationDepositsEmpty (6020): a obrigação já está vazia.
+          // Isso ocorre quando um withdraw anterior (ex: retry após blockhash error
+          // ou saque parcial do 0x17cc) já esvaziou os depósitos.
+          // Tratar como sucesso silencioso — não há nada a sacar, o fechamento pode continuar.
+          if (
+            msgLower.includes("0x1784") ||
+            msgLower.includes("obligationdepositsempty") ||
+            msgLower.includes("obligation deposits are empty") ||
+            msgLower.includes("has no deposits") ||
+            msgLower.includes("6020")
+          ) {
+            this.queueKaminoLog(
+              "withdraw-already-empty",
+              `Withdraw ignorado: obrigacao ja sem depositos (${message}); prosseguindo com fechamento.`,
+              "warn"
+            );
+            continue;
+          }
           // 0x1776 = InvalidAccountInput: market stale apos repay que zerou divida.
           if (
             msgLower.includes("0x1776") ||
