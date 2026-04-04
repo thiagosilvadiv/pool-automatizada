@@ -4238,12 +4238,6 @@ export class OrcaBot {
         if (debtAmount <= epsilon) break;
         const remainingShortfall = Math.max(0, debtAmount - stableBalance);
         if (remainingShortfall <= epsilon) break;
-        const priceUsd = (await this.getTokenUsdPrice({
-          mint: pick.mint,
-          decimals,
-          stableMint: stable.mint,
-          stableDecimals: stable.decimals
-        }));
         const newNeeded = priceUsd && priceUsd > 0
           ? remainingShortfall / priceUsd * 1.05
           : remainingShortfall;
