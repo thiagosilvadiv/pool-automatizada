@@ -819,7 +819,33 @@ export class OrcaBot {
           // Verifica se há saldo na wallet para abrir a pool diretamente.
           const walletBal = await this.getTokenBalances().catch(() => ({ tokenA: 0, tokenB: 0 }));
         if (walletBal.tokenA <= 0 && walletBal.tokenB <= 0) {
-          // Sem saldo na wallet — aguarda o borrow chegar.
+          const pendingDebtWallet = Number(this.kaminoState?.debtAmount ?? 0);
+          if (pendingDebtWallet > 1e-8) {
+            this.queueKaminoLog(
+              "wait-funds",
+              `Tentando quitar divida Kamino (${pendingDebtWallet.toFixed(4)}) via colateral depositado.`,
+              "warn"
+            );
+            try {
+              const closed = await this.closeKaminoCycle("target");
+              if (closed) {
+                this.lastStatus.lastAction = "kamino-close";
+                this.lastStatus.positionRange = null;
+                this.lastStatus.positionMint = this.currentPositionMint;
+                return this.getStatus();
+              }
+            } catch (err) {
+              this.queueKaminoLog(
+                "wait-funds",
+                `Falha ao fechar ciclo Kamino: ${err instanceof Error ? err.message : String(err)}. Aguardando proximo tick.`,
+                "warn"
+              );
+            }
+            this.lastStatus.lastAction = "kamino-wait-funds";
+            this.lastStatus.positionRange = null;
+            this.lastStatus.positionMint = this.currentPositionMint;
+            return this.getStatus();
+          }
           if (this.lastStatus.lastAction !== "kamino-wait-funds") {
             this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
           }
@@ -830,10 +856,23 @@ export class OrcaBot {
         }
         const pendingDebt = Number(this.kaminoState?.debtAmount ?? 0);
         if (pendingDebt > 1e-8) {
-          if (this.lastStatus.lastAction !== "kamino-wait-funds") {
+          this.queueKaminoLog(
+            "wait-funds",
+            `Tentando quitar divida Kamino (${pendingDebt.toFixed(4)}) para reabrir a pool.`,
+            "warn"
+          );
+          try {
+            const closed = await this.closeKaminoCycle("target");
+            if (closed) {
+              this.lastStatus.lastAction = "kamino-close";
+              this.lastStatus.positionRange = null;
+              this.lastStatus.positionMint = this.currentPositionMint;
+              return this.getStatus();
+            }
+          } catch (err) {
             this.queueKaminoLog(
               "wait-funds",
-              `Aguardando quitacao da divida Kamino (${pendingDebt.toFixed(4)}) antes de reabrir a pool.`,
+              `Falha ao fechar ciclo Kamino: ${err instanceof Error ? err.message : String(err)}. Aguardando proximo tick.`,
               "warn"
             );
           }
