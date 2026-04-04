@@ -1124,12 +1124,9 @@ export class OrcaBot {
       const baseUsd = avgMode === "reset" ? 0 : (previous?.collateralUsd ?? 0);
       const baseDebtUsd = avgMode === "reset" ? 0 : (previous?.debtUsd ?? 0);
       const nextAmount = baseAmount + amount;
-      const depositedUsd = await this.getTokenUsdPrice({
-        mint,
-        decimals: await this.getCollateralDecimals(mint),
-        stableMint: await this.resolveStableMintForPricing(),
-        stableDecimals: await this.resolveStableDecimalsForPricing(),
-      }).then((price) => (price != null ? price * amount : null));
+      // Estima USD do novo depósito usando o preço já disponível (fallback seguro para UI)
+      const currentPrice = this.lastStatus?.lastPrice ?? null;
+      const depositedUsd = currentPrice != null ? currentPrice * amount : null;
       const nextUsd = baseUsd + (depositedUsd ?? 0);
       const nextDebtUsd = baseDebtUsd + (borrowSig ? borrowUsd : 0);
       const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
