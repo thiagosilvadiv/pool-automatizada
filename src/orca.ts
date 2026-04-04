@@ -34,7 +34,8 @@ const KAMINO_WITHDRAW_MIN = 0.000001;
 const KAMINO_REBALANCE_RETRY_SEC = 10;
 const DEFAULT_TX_SIZE_THRESHOLD = 1200;
 const FORCE_SPLIT_SOL = true;
-const JUPITER_DIRECT_ONLY = true;
+const JUPITER_DIRECT_ONLY = false;
+const KAMINO_SWAP_SLIPPAGE_BPS = 100;
 
 export function computeRiskAwareRepayChunk(params: {
   debtRemaining: number;
@@ -509,6 +510,13 @@ export class OrcaBot {
       originalMsg.includes("\"0x1\"")
     ) {
       return false;
+    }
+    if (
+      message.includes("0x1553") ||
+      message.includes("sqrtpriceoutofbounds") ||
+      message.includes("sqrt price out of bounds")
+    ) {
+      return true;
     }
     return message.includes("-32002")
       || message.includes("-32602")
@@ -3366,28 +3374,55 @@ export class OrcaBot {
     if (!isValidU64(input.amountStableRaw)) {
       throw new Error("amountStable fora do range");
     }
-    const quote = await this.fetchJupiterQuoteExactInDetailed(
-      input.stableMint,
-      input.outputMint,
-      input.amountStableRaw.toString(),
-      this.config.slippageBps ?? 50
-    );
-    if (!quote.quote) {
-      throw new Error(`Sem rota Jupiter para ${input.label ?? "swap"}`);
+    const baseSlippage = this.config.slippageBps ?? 50;
+    const labelLower = (input.label ?? "").toLowerCase();
+    const effectiveSlippage = (labelLower.includes("repay") || labelLower.includes("kamino"))
+      ? Math.max(baseSlippage, KAMINO_SWAP_SLIPPAGE_BPS)
+      : baseSlippage;
+    let lastError: string | null = null;
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const quote = await this.fetchJupiterQuoteExactInDetailed(
+        input.stableMint,
+        input.outputMint,
+        input.amountStableRaw.toString(),
+        effectiveSlippage
+      );
+      if (!quote.quote) {
+        lastError = `Sem rota Jupiter para ${input.label ?? "swap"}`;
+        break;
+      }
+      const result = await this.executeJupiterSwapDetailed(quote.quote);
+      if (result.sig) {
+        const outAmount = parseU64(quote.quote.outAmount ?? "0");
+        if (!outAmount) {
+          return null;
+        }
+        const outNumber = toSafeNumber(outAmount);
+        if (outNumber == null) {
+          return null;
+        }
+        return outNumber / Math.pow(10, input.outputDecimals);
+      }
+      lastError = result.error ?? "Falha na swap Jupiter";
+      const lower = lastError.toLowerCase();
+      const isJupiterRetryable =
+        this.isKaminoRetryableError(lastError) ||
+        lower.includes("0x1771") ||
+        lower.includes("0x1553") ||
+        lower.includes("sqrtprice") ||
+        lower.includes("sqrt_price") ||
+        lower.includes("price out of bounds") ||
+        lower.includes("priceoutofbounds") ||
+        lower.includes("simulation failed");
+      if (attempt < maxAttempts && isJupiterRetryable) {
+        logger.warn({ attempt, err: lastError }, "swap jupiter retry after transient/slippage/price-bounds error");
+        await this.sleep(KAMINO_REBALANCE_RETRY_SEC * 1000);
+        continue;
+      }
+      break;
     }
-    const result = await this.executeJupiterSwapDetailed(quote.quote);
-    if (!result.sig) {
-      throw new Error(result.error ?? "Falha na swap Jupiter");
-    }
-    const outAmount = parseU64(quote.quote.outAmount ?? "0");
-    if (!outAmount) {
-      return null;
-    }
-    const outNumber = toSafeNumber(outAmount);
-    if (outNumber == null) {
-      return null;
-    }
-    return outNumber / Math.pow(10, input.outputDecimals);
+    throw new Error(lastError ?? "Falha na swap Jupiter");
   }
 
   private async swapTokenToStable(input: {
@@ -3408,28 +3443,55 @@ export class OrcaBot {
     if (!isValidU64(amountRaw)) {
       throw new Error("amountIn fora do range");
     }
-    const quote = await this.fetchJupiterQuoteExactInDetailed(
-      input.inputMint,
-      input.stableMint,
-      amountRaw.toString(),
-      this.config.slippageBps ?? 50
-    );
-    if (!quote.quote) {
-      throw new Error(`Sem rota Jupiter para ${input.label ?? "swap"}`);
+    const baseSlippage = this.config.slippageBps ?? 50;
+    const labelLower = (input.label ?? "").toLowerCase();
+    const effectiveSlippage = (labelLower.includes("repay") || labelLower.includes("kamino"))
+      ? Math.max(baseSlippage, KAMINO_SWAP_SLIPPAGE_BPS)
+      : baseSlippage;
+    let lastError: string | null = null;
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const quote = await this.fetchJupiterQuoteExactInDetailed(
+        input.inputMint,
+        input.stableMint,
+        amountRaw.toString(),
+        effectiveSlippage
+      );
+      if (!quote.quote) {
+        lastError = `Sem rota Jupiter para ${input.label ?? "swap"}`;
+        break;
+      }
+      const result = await this.executeJupiterSwapDetailed(quote.quote);
+      if (result.sig) {
+        const outAmount = parseU64(quote.quote.outAmount ?? "0");
+        if (!outAmount) {
+          return null;
+        }
+        const outNumber = toSafeNumber(outAmount);
+        if (outNumber == null) {
+          return null;
+        }
+        return outNumber / Math.pow(10, input.stableDecimals);
+      }
+      lastError = result.error ?? "Falha na swap Jupiter";
+      const lower = lastError.toLowerCase();
+      const isJupiterRetryable =
+        this.isKaminoRetryableError(lastError) ||
+        lower.includes("0x1771") ||
+        lower.includes("0x1553") ||
+        lower.includes("sqrtprice") ||
+        lower.includes("sqrt_price") ||
+        lower.includes("price out of bounds") ||
+        lower.includes("priceoutofbounds") ||
+        lower.includes("simulation failed");
+      if (attempt < maxAttempts && isJupiterRetryable) {
+        logger.warn({ attempt, err: lastError }, "swap jupiter retry after transient/slippage/price-bounds error");
+        await this.sleep(KAMINO_REBALANCE_RETRY_SEC * 1000);
+        continue;
+      }
+      break;
     }
-    const result = await this.executeJupiterSwapDetailed(quote.quote);
-    if (!result.sig) {
-      throw new Error(result.error ?? "Falha na swap Jupiter");
-    }
-    const outAmount = parseU64(quote.quote.outAmount ?? "0");
-    if (!outAmount) {
-      return null;
-    }
-    const outNumber = toSafeNumber(outAmount);
-    if (outNumber == null) {
-      return null;
-    }
-    return outNumber / Math.pow(10, input.stableDecimals);
+    throw new Error(lastError ?? "Falha na swap Jupiter");
   }
 
   private async pickExitTokenByUsd(input: {
@@ -4011,6 +4073,13 @@ export class OrcaBot {
           const message = stringifyError(err);
           lastFailure = message;
           const lower = message.toLowerCase();
+          if (lower.includes("0x1553") || lower.includes("sqrtprice")) {
+            this.queueKaminoLog(
+              "sqrt-price-bounds",
+              `Erro de preco fora dos limites (0x1553) durante swap; nova tentativa com quote atualizada. Detalhe: ${message}`,
+              "warn"
+            );
+          }
           if (
             lower.includes("too large") ||
             lower.includes("versionedtransaction too large") ||
@@ -4646,6 +4715,14 @@ export class OrcaBot {
         withdrawAmount = Math.min(currentOnChain, newNeeded);
               } catch (err) {
                 const msg = stringifyError(err);
+                const msgLower = msg.toLowerCase();
+                if (msgLower.includes("0x1553") || msgLower.includes("sqrtprice")) {
+                  this.queueKaminoLog(
+                    "sqrt-price-bounds",
+                    `Erro de preco fora dos limites (0x1553) durante swap; nova tentativa com quote atualizada. Detalhe: ${msg}`,
+                    "warn"
+                  );
+                }
                 if (this.isKaminoRetryableError(msg)) {
                   // Erro retryable no fallback manual: agendar retry do ciclo inteiro
                   // em vez de apenas reduzir o chunk. O blockhash expirado não é
@@ -6155,8 +6232,17 @@ export class OrcaBot {
         const message = formatErrorWithLogs(stringifyError(err), logs);
         lastError = message;
         const lower = message.toLowerCase();
-        if (attempt < maxAttempts && (this.isKaminoRetryableError(message) || lower.includes("0x1771"))) {
-          logger.warn({ attempt, err: message }, "swap jupiter retry after transient/slippage error");
+        const isJupiterRetryable =
+          this.isKaminoRetryableError(message) ||
+          lower.includes("0x1771") ||
+          lower.includes("0x1553") ||
+          lower.includes("sqrtprice") ||
+          lower.includes("sqrt_price") ||
+          lower.includes("price out of bounds") ||
+          lower.includes("priceoutofbounds") ||
+          lower.includes("simulation failed");
+        if (attempt < maxAttempts && isJupiterRetryable) {
+          logger.warn({ attempt, err: message }, "swap jupiter retry after transient/slippage/price-bounds error");
           await this.sleep(KAMINO_REBALANCE_RETRY_SEC * 1000);
           continue;
         }
