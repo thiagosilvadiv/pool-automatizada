@@ -537,15 +537,23 @@ export class OrcaBot {
         return await fn();
       } catch (err) {
         lastErr = err;
-        if (!this.isRateLimitError(err)) {
-          throw err;
+        if (this.isRateLimitError(err)) {
+          const waitMs = 2000 * (attempt + 1);
+          logger.warn({ err, attempt, label, waitMs }, "kamino call rate-limited; retrying");
+          await this.sleep(waitMs);
+          continue;
         }
-        const waitMs = 2000 * (attempt + 1);
-        logger.warn({ err, attempt, label, waitMs }, "kamino call rate-limited; retrying");
-        await this.sleep(waitMs);
+        if (this.isKaminoRetryableError(err) && attempt < 2) {
+          const msg = String((err as any)?.message ?? err);
+          const waitMs = msg.includes("-32002") ? 15000 : 5000;
+          logger.warn({ err, attempt, label, waitMs }, "kamino call retryable (blockhash/rpc); aguardando");
+          await this.sleep(waitMs);
+          continue;
+        }
+        throw err;
       }
     }
-    throw lastErr;
+    throw lastErr ?? new Error(`falha ao executar Kamino ${label}`);
   }
 
   private resolveTrendTarget(target: TrendTarget): "tokenA" | "tokenB" | null {
@@ -2740,23 +2748,31 @@ export class OrcaBot {
 
       const deposits = Array.isArray(position.deposits) ? position.deposits : [];
       const borrows = Array.isArray(position.borrows) ? position.borrows : [];
+      // Preserva campos históricos do estado anterior ao reconciliar colaterais on-chain.
+      // Nulls são usados apenas quando não há ciclo ativo ou sem histórico anterior.
+      const existingCollaterals = Array.isArray(this.kaminoState?.collaterals)
+        ? this.kaminoState!.collaterals
+        : [];
       const recoveredCollaterals: KaminoCollateralEntry[] = deposits.length
-        ? deposits.map((item) => ({
-          mint: item.mint ?? "",
-          amount: item.amount ?? 0,
-          usd: null,
-          debtUsd: null,
-          avgPriceUsdc: null,
-          targetPriceUsdc: null
-        }))
+        ? deposits.map((item) => {
+          const prev = existingCollaterals.find((e) => e.mint === item.mint);
+          return {
+            mint: item.mint ?? "",
+            amount: item.amount ?? 0,
+            usd: prev?.usd ?? null,
+            debtUsd: prev?.debtUsd ?? null,
+            avgPriceUsdc: prev?.avgPriceUsdc ?? null,
+            targetPriceUsdc: prev?.targetPriceUsdc ?? null
+          };
+        })
         : (position?.collateralMint && (position.collateralAmount ?? 0) > 0
           ? [{
             mint: position.collateralMint,
             amount: position.collateralAmount ?? 0,
-            usd: null,
-            debtUsd: null,
-            avgPriceUsdc: null,
-            targetPriceUsdc: null
+            usd: existingCollaterals[0]?.usd ?? null,
+            debtUsd: existingCollaterals[0]?.debtUsd ?? null,
+            avgPriceUsdc: existingCollaterals[0]?.avgPriceUsdc ?? null,
+            targetPriceUsdc: existingCollaterals[0]?.targetPriceUsdc ?? null
           }]
           : []);
 
@@ -2874,8 +2890,9 @@ export class OrcaBot {
     const override = typeof marketAddressOverride === "string" && marketAddressOverride.trim()
       ? marketAddressOverride.trim()
       : (this.kaminoState?.marketAddress ?? null);
-    const desiredMarket = override ?? this.getConfiguredKaminoMarketAddress();
-    if (!this.kaminoClient || (desiredMarket && this.kaminoClientMarket !== desiredMarket)) {
+    const desiredMarket = (override ?? this.getConfiguredKaminoMarketAddress())?.trim() ?? null;
+    const currentMarket = this.kaminoClientMarket?.trim() ?? null;
+    if (!this.kaminoClient || (desiredMarket && currentMarket !== desiredMarket)) {
       this.kaminoClient = await createKaminoClient(
         {
           connection: this.connection,
@@ -3731,7 +3748,12 @@ export class OrcaBot {
         }
       }
 
-      if (!usedCandidate) break;
+      if (!usedCandidate) {
+        if (debtRemaining > epsilon && !lastFailure) {
+          lastFailure = "Nenhum colateral disponivel para repay (todos filtrados ou sem saldo)";
+        }
+        break;
+      }
     }
 
     if (lastQuoteError) {

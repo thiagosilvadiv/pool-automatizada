@@ -459,7 +459,7 @@ class RealKaminoClient implements KaminoClient {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const statusResp = await (this.rpc as any)
-        .getSignatureStatuses({ signatures: [signature] })
+        .getSignatureStatuses([signature])
         .send();
       const info = statusResp?.value?.[0];
       if (info?.err) {
@@ -879,9 +879,24 @@ class RealKaminoClient implements KaminoClient {
     if (!Number.isFinite(input.repayAmountUi) || input.repayAmountUi <= 0) {
       throw new Error("Valor de repay invalido");
     }
-    const market = await this.loadMarket();
-    const obligation = await market.getObligationByWallet(this.signer.address, this.obligationType);
+    let market = await this.loadMarket();
+    // Se o reserve do debtMint não está no market cacheado, força reload.
+    if (!market.getReserveByMint(address(input.debtMint))) {
+      this.marketPromise = null;
+      market = await this.loadMarket();
+    }
+    let obligation = null;
+    for (let attempt = 0; attempt < 3 && !obligation; attempt += 1) {
+      obligation = await market.getObligationByWallet(
+        this.signer.address,
+        this.obligationType
+      ).catch(() => null);
+      if (!obligation && attempt < 2) {
+        await sleep(2000);
+      }
+    }
     if (!obligation) {
+      this.marketPromise = null;
       throw new Error("Posicao Kamino nao encontrada");
     }
     const slot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
