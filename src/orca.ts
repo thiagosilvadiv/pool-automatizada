@@ -18,6 +18,7 @@ import { getSolUsdPrice } from "./pyth.js";
 import { getTrendSnapshot } from "./trend.js";
 import type { TrendDirection, TrendTarget, TrendTimeframe } from "./trend.js";
 import type { KaminoCollateralEntry, KaminoCycleState } from "./kamino-types.js";
+import { notifyKaminoFundsNeeded } from "./evolution-notify.js";
 import type { KaminoPositionState } from "./kamino-client.js";
 import { BalanceCoordinator } from "./balance-coordinator.js";
 
@@ -3527,7 +3528,7 @@ export class OrcaBot {
     const capacityBuffer = 0.7;
     let maxChunkOverride: number | null = null;
     let chunkReductions = 0;
-    const maxChunkReductions = 6;
+    const maxChunkReductions = 10;
 
     const refreshPosition = async (): Promise<void> => {
       try {
@@ -3706,10 +3707,29 @@ export class OrcaBot {
           ) {
             this.kaminoTooLargeSeen = true;
             chunkReductions += 1;
-            const adjusted: number =
-              maxChunkOverride != null
+            let kaminoMaxWithdrawUsd: number | null = null;
+            try {
+              const decoded = decodeURIComponent(message);
+              const match = decoded.match(/max_withdraw_value[=\s:]+([0-9]+(?:\.[0-9]+)?)/i);
+              if (match) {
+                const parsed = parseFloat(match[1]);
+                if (Number.isFinite(parsed) && parsed > 0) {
+                  kaminoMaxWithdrawUsd = parsed;
+                }
+              }
+            } catch {
+              // ignorar falha no decode
+            }
+            const adjusted: number = (() => {
+              if (kaminoMaxWithdrawUsd != null) {
+                const safeUsd = kaminoMaxWithdrawUsd * 0.9;
+                const asStable = safeUsd;
+                return Math.max(KAMINO_REPAY_MIN_STABLE, asStable);
+              }
+              return maxChunkOverride != null
                 ? Math.max(KAMINO_REPAY_MIN_STABLE, maxChunkOverride / 2)
                 : Math.max(KAMINO_REPAY_MIN_STABLE, debtRemaining / 3);
+            })();
             this.queueKaminoLog(
               "repay-with-collateral",
               `Transacao recusada por tamanho; ajustando chunk max para ${adjusted.toFixed(8)}. Detalhe: ${message}`,
@@ -3993,9 +4013,24 @@ export class OrcaBot {
       const convertibleUsd = await estimateConvertibleUsd();
       if (stableBalance + convertibleUsd + epsilon < repayTarget) {
         const missing = repayTarget - (stableBalance + convertibleUsd);
-        const message = `Colateral insuficiente para quitar a divida (faltam ${missing.toFixed(8)}).`;
-        this.setKaminoState({ ...state, lastError: message });
-        this.queueKaminoLog("repay-insufficient", message, "error");
+      const message = `Colateral insuficiente para quitar a divida (faltam ${missing.toFixed(8)}).`;
+      this.setKaminoState({ ...state, lastError: message });
+      this.queueKaminoLog("repay-insufficient", message, "error");
+      if (this.config.evolutionApiUrl && this.config.evolutionPhone) {
+        const walletAddr = this.wallet?.publicKey?.toBase58?.() ?? "desconhecida";
+        const debtSymbol = stable.mint.startsWith("Es9v") ? "USDT" : "USDC";
+        notifyKaminoFundsNeeded({
+          apiUrl: this.config.evolutionApiUrl,
+          apiKey: this.config.evolutionApiKey,
+          instance: this.config.evolutionInstance,
+          phone: this.config.evolutionPhone,
+          walletAddress: walletAddr,
+          debtAmount: debtAmount,
+          debtMint: stable.mint,
+          debtSymbol,
+          minAmountNeeded: debtAmount * 1.01
+        }).catch(() => {});
+      }
         if (this.scheduleKaminoRepayRetry(state, message, mode) && mode === "target") {
           return false;
         }
@@ -4214,9 +4249,24 @@ export class OrcaBot {
       }
 
       if (debtAmount > epsilon && stableBalance + epsilon < debtAmount) {
-        const message = `Colateral insuficiente para quitar a divida (restante ${debtAmount.toFixed(8)}).`;
-        this.setKaminoState({ ...state, lastError: message });
-        this.queueKaminoLog("repay-insufficient", message, "error");
+      const message = `Colateral insuficiente para quitar a divida (restante ${debtAmount.toFixed(8)}).`;
+      this.setKaminoState({ ...state, lastError: message });
+      this.queueKaminoLog("repay-insufficient", message, "error");
+      if (this.config.evolutionApiUrl && this.config.evolutionPhone) {
+        const walletAddr = this.wallet?.publicKey?.toBase58?.() ?? "desconhecida";
+        const debtSymbol = stable.mint.startsWith("Es9v") ? "USDT" : "USDC";
+        notifyKaminoFundsNeeded({
+          apiUrl: this.config.evolutionApiUrl,
+          apiKey: this.config.evolutionApiKey,
+          instance: this.config.evolutionInstance,
+          phone: this.config.evolutionPhone,
+          walletAddress: walletAddr,
+          debtAmount: debtAmount,
+          debtMint: stable.mint,
+          debtSymbol,
+          minAmountNeeded: debtAmount * 1.01
+        }).catch(() => {});
+      }
         throw new Error(message);
       }
 
@@ -4227,6 +4277,21 @@ export class OrcaBot {
             const message = `Saldo stable insuficiente para repay (tem ${stableBalance.toFixed(8)}, precisa ${debtAmount.toFixed(8)}).`;
             this.setKaminoState({ ...state, lastError: message });
             this.queueKaminoLog("repay-insufficient", message, "error");
+            if (this.config.evolutionApiUrl && this.config.evolutionPhone) {
+              const walletAddr = this.wallet?.publicKey?.toBase58?.() ?? "desconhecida";
+              const debtSymbol = stable.mint.startsWith("Es9v") ? "USDT" : "USDC";
+              notifyKaminoFundsNeeded({
+                apiUrl: this.config.evolutionApiUrl,
+                apiKey: this.config.evolutionApiKey,
+                instance: this.config.evolutionInstance,
+                phone: this.config.evolutionPhone,
+                walletAddress: walletAddr,
+                debtAmount: debtAmount,
+                debtMint: stable.mint,
+                debtSymbol,
+                minAmountNeeded: debtAmount * 1.01
+              }).catch(() => {});
+            }
             throw new Error(message);
           }
           await this.kaminoCallWithRetry(
