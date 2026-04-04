@@ -2881,6 +2881,45 @@ export class OrcaBot {
         const epsilon = 1e-8;
 
         if (onChainDebt <= epsilon) {
+          if (onChainCollateral > epsilon) {
+            this.queueKaminoLog(
+              "debt-zero",
+              `Divida zerada com colateral residual (${onChainCollateral.toFixed(8)}); iniciando saque automatico.`,
+              "warn"
+            );
+            this.setKaminoState({
+              ...this.kaminoState,
+              collateralMint: position.collateralMint ?? this.kaminoState.collateralMint ?? null,
+              collateralAmount: onChainCollateral,
+              debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
+              debtAmount: 0,
+              collaterals: recoveredCollaterals,
+              updatedAt: new Date().toISOString()
+            });
+            try {
+              await this.closeKaminoCycle("target");
+            } catch (closeErr) {
+              this.queueKaminoLog(
+                "debt-zero-close-failed",
+                `Falha ao sacar colateral residual: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}. Sera tentado no proximo tick.`,
+                "error"
+              );
+              const updated: KaminoCycleState = {
+                ...this.kaminoState,
+                active: false,
+                collateralMint: position.collateralMint ?? this.kaminoState.collateralMint ?? null,
+                collateralAmount: onChainCollateral,
+                debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
+                debtAmount: 0,
+                collaterals: recoveredCollaterals,
+                lastError: `Colateral residual nao sacado: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`,
+                updatedAt: new Date().toISOString()
+              };
+              this.setKaminoState(updated);
+              this.releaseKaminoLockIfOwned();
+            }
+            return;
+          }
           const updated: KaminoCycleState = {
             ...this.kaminoState,
             active: false,
@@ -2955,6 +2994,25 @@ export class OrcaBot {
       "Emprestimo Kamino recuperado do market; ciclo reconstruido automaticamente.",
       "warn"
     );
+    if (
+      Number(nextState.debtAmount ?? 0) <= epsilon &&
+      Number(nextState.collateralAmount ?? 0) > epsilon
+    ) {
+      this.queueKaminoLog(
+        "recover-withdraw",
+        "Ciclo recuperado sem divida; sacando colateral residual imediatamente.",
+        "warn"
+      );
+      try {
+        await this.closeKaminoCycle("target");
+      } catch (err) {
+        this.queueKaminoLog(
+          "recover-withdraw-failed",
+          `Falha ao sacar colateral no recover: ${err instanceof Error ? err.message : String(err)}`,
+          "error"
+        );
+      }
+    }
   }
     } catch (err) {
       const reconcileMsg = String((err as any)?.message ?? err).toLowerCase();
@@ -3499,13 +3557,7 @@ export class OrcaBot {
       return false;
     }
     const rule = this.config.kaminoCloseRule ?? "avg-price";
-    if (rule === "manual") {
-      return false;
-    }
     const collaterals = Array.isArray(state.collaterals) ? state.collaterals : [];
-    if (!collaterals.length) {
-      return false;
-    }
 
     // Se a dívida já foi zerada mas ainda há colateral depositado,
     // fechar imediatamente sem aguardar o preço-alvo.
@@ -3513,10 +3565,10 @@ export class OrcaBot {
     // o colateral existe on-chain mas não há mais dívida a pagar.
     const epsilon = 1e-8;
     const currentDebt = Number(state.debtAmount ?? 0);
-    if (currentDebt <= epsilon) {
+    if (currentDebt <= epsilon && collaterals.length > 0) {
       this.queueKaminoLog(
         "close-debt-zero",
-        "Divida zerada com colateral residual; sacando colateral automaticamente.",
+        "Divida zerada com colateral residual; sacando colateral automaticamente (independe do kaminoCloseRule).",
         "warn"
       );
       const closed = await this.closeKaminoCycle("target");
@@ -3524,6 +3576,13 @@ export class OrcaBot {
         this.lastStatus.lastAction = "kamino-close";
       }
       return closed;
+    }
+    // Bloqueio "manual" so se aplica a fechamentos por criterio de preco.
+    if (rule === "manual") {
+      return false;
+    }
+    if (!collaterals.length) {
+      return false;
     }
     try {
       const stable = await this.getStableMintInfo();
