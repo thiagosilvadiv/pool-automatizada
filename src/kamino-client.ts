@@ -959,16 +959,17 @@ class RealKaminoClient implements KaminoClient {
   }
 
   async withdraw(input: { mint: string; amount: number }): Promise<string> {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    let currentInput = { ...input };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       const market = await this.loadMarket();
-      const amountRaw = await this.toRawAmountString(input.mint, input.amount);
+      const amountRaw = await this.toRawAmountString(currentInput.mint, currentInput.amount);
       try {
         const action = await this.buildActionWithFallback(
           () =>
             KaminoAction.buildWithdrawTxns(
               market,
               amountRaw,
-              address(input.mint),
+              address(currentInput.mint),
               this.signer,
               this.obligationType,
               true,
@@ -980,7 +981,7 @@ class RealKaminoClient implements KaminoClient {
             KaminoAction.buildWithdrawTxns(
               market,
               amountRaw,
-              address(input.mint),
+              address(currentInput.mint),
               this.signer,
               this.obligationType,
               false,
@@ -992,12 +993,14 @@ class RealKaminoClient implements KaminoClient {
         const sig = await this.sendAction(action);
         this.marketPromise = null; // invalida para proxima operacao
         logger.info(
-          { sig, mint: input.mint, amount: input.amount },
+          { sig, mint: currentInput.mint, amount: currentInput.amount },
           "kamino withdraw concluido"
         );
         return sig;
       } catch (err) {
         const msg = String((err as any)?.message ?? err).toLowerCase();
+
+        // Erro 1: market com cache desatualizado (0x1776 / InvalidAccountInput)
         const isStaleMarket =
           msg.includes("0x1776") ||
           msg.includes("invalidaccountinput") ||
@@ -1009,10 +1012,32 @@ class RealKaminoClient implements KaminoClient {
           this.marketPromise = null;
           continue;
         }
+
+        // Erro 2: NetValueRemainingTooSmall (0x17cc / 6092)
+        // O protocolo rejeita saque de 100% do colateral pois a obrigação
+        // ficaria com valor líquido zerado abaixo do mínimo permitido.
+        // Solução: reduzir o amount em 15% e tentar novamente.
+        // O dust restante (~15%) será sacado no próximo ciclo de reconciliação.
+        const isNetValueTooSmall =
+          msg.includes("0x17cc") ||
+          msg.includes("netvalueremainingtoosmall") ||
+          msg.includes("net value remaining too small") ||
+          msg.includes("6092");
+        if (isNetValueTooSmall && attempt < 2) {
+          const reducedAmount = currentInput.amount * 0.85;
+          logger.warn(
+            { err, originalAmount: currentInput.amount, reducedAmount },
+            "withdraw falhou com NetValueRemainingTooSmall (0x17cc); reduzindo amount em 15% e retentando"
+          );
+          currentInput = { ...currentInput, amount: reducedAmount };
+          this.marketPromise = null;
+          continue;
+        }
+
         throw err;
       }
     }
-    throw new Error("withdraw falhou apos reload de market");
+    throw new Error("withdraw falhou apos multiplas tentativas");
   }
 
   async getPositionState(): Promise<KaminoPositionState | null> {
