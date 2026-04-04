@@ -779,28 +779,79 @@ export class OrcaBot {
       if (this.kaminoState?.active) {
         const reservedA = Number(this.kaminoState.reservedTokenA ?? 0);
         const reservedB = Number(this.kaminoState.reservedTokenB ?? 0);
-    if (reservedA <= 0 && reservedB <= 0) {
-      // Antes de travar em wait-funds, verifica se há saldo livre na wallet
-      // que possa ser usado para reabrir a pool sem precisar do borrow.
-      let walletHasBalance = false;
-      try {
-        const walletBal = await this.getTokenBalances();
-        walletHasBalance = walletBal.tokenA > 0 || walletBal.tokenB > 0;
-      } catch {
-        walletHasBalance = false;
-      }
-      if (!walletHasBalance) {
-        if (this.lastStatus.lastAction !== "kamino-wait-funds") {
-          this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
+        if (reservedA <= 0 && reservedB <= 0) {
+          // reserved=0 significa que o ciclo Kamino está ativo mas o borrow
+          // ainda não foi executado neste ciclo de rebalance.
+          // Tenta executar o rebalance Kamino completo (deposit+borrow) agora,
+          // antes de abrir a pool, para usar o valor correto do budgetUsd.
+          if (this.config.kaminoRebalanceEnabled && this.config.jupiterApiKey) {
+            this.queueKaminoLog(
+              "wait-funds",
+              "Ciclo Kamino ativo sem borrow; tentando rebalance Kamino antes de abrir a pool.",
+              "warn"
+            );
+            // Retorna sem abrir a pool — o próximo tick vai cair no fluxo
+            // de rebalanceWithKamino que faz deposit+borrow+swap+open.
+            // Para forçar isso, precisamos que o bot entenda que há uma posição
+            // "fora de range" a ser rebalanceada. Como não há posição aberta,
+            // o caminho correto é resetar o kaminoState para inactive e deixar
+            // o ciclo de abertura normal acontecer na próxima oportunidade
+            // disparando rebalanceWithKamino pelo caminho padrão.
+            // 
+            // Na prática: desativa o ciclo local para que o próximo tick
+            // tente um novo deposit+borrow do zero com o saldo atual da wallet.
+            const walletBal = await this.getTokenBalances().catch(() => ({ tokenA: 0, tokenB: 0 }));
+            const hasWallet = walletBal.tokenA > 0 || walletBal.tokenB > 0;
+            if (!hasWallet) {
+              if (this.lastStatus.lastAction !== "kamino-wait-funds") {
+                this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
+              }
+              this.lastStatus.lastAction = "kamino-wait-funds";
+              this.lastStatus.positionRange = null;
+              this.lastStatus.positionMint = this.currentPositionMint;
+              return this.getStatus();
+            }
+            // Há saldo na wallet. Usa ele como colateral e tenta fazer um
+            // novo borrow Kamino para complementar até o budgetUsd.
+            // Para isso, despacha o rebalance Kamino completo:
+            // fecha o estado local (sem mexer on-chain) e deixa o fluxo
+            // de abertura iniciar um novo ciclo de deposit+borrow.
+            this.setKaminoState({
+              ...this.kaminoState,
+              active: false,
+              reservedTokenA: null,
+              reservedTokenB: null,
+              lastError: "Reativando ciclo Kamino para novo deposit+borrow.",
+              updatedAt: new Date().toISOString()
+            });
+            this.releaseKaminoLockIfOwned();
+            this.queueKaminoLog(
+              "wait-funds",
+              "Ciclo Kamino reativado para novo deposit+borrow com saldo atual da wallet.",
+              "warn"
+            );
+            // Sai sem abrir com valor baixo — no próximo tick o ciclo Kamino
+            // vai ser reconstruído corretamente via rebalanceWithKamino.
+            this.lastStatus.lastAction = "kamino-wait-funds";
+            this.lastStatus.positionRange = null;
+            this.lastStatus.positionMint = this.currentPositionMint;
+            return this.getStatus();
+          }
+
+          // Kamino não está habilitado ou sem Jupiter key — usa o saldo
+          // da wallet diretamente como fallback.
+          const walletBal = await this.getTokenBalances().catch(() => ({ tokenA: 0, tokenB: 0 }));
+          if (walletBal.tokenA <= 0 && walletBal.tokenB <= 0) {
+            if (this.lastStatus.lastAction !== "kamino-wait-funds") {
+              this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
+            }
+            this.lastStatus.lastAction = "kamino-wait-funds";
+            this.lastStatus.positionRange = null;
+            this.lastStatus.positionMint = this.currentPositionMint;
+            return this.getStatus();
+          }
+          this.queueKaminoLog("wait-funds", "Usando saldo da wallet para reabrir a pool (sem empréstimo).", "warn");
         }
-        this.lastStatus.lastAction = "kamino-wait-funds";
-        this.lastStatus.positionRange = null;
-        this.lastStatus.positionMint = this.currentPositionMint;
-        return this.getStatus();
-      }
-      // Há saldo na wallet — usa ele e não bloqueia a abertura.
-      this.queueKaminoLog("wait-funds", "Usando saldo da wallet para reabrir a pool (sem empréstimo).", "warn");
-    }
         const caps: { maxTokenA?: number; maxTokenB?: number } = {};
         if (reservedA > 0) caps.maxTokenA = reservedA;
         if (reservedB > 0) caps.maxTokenB = reservedB;
