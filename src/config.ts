@@ -35,6 +35,7 @@ export type Config = {
   autoSwapToSolExcludeMints: string[];
   autoSwapFeesToUsdcEnabled: boolean;
   autoSwapFeesToUsdcTargetMint: string;
+  autoSwapFeesToUsdcMinUsd: number;
   autoAddLiquidityEnabled: boolean;
   kaminoRebalanceEnabled: boolean;
   kaminoDepositPct: number;
@@ -542,6 +543,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     autoSwapFeesToUsdcTargetMint: envAutoSwapFeesToUsdcTargetMint
       ?? (data as any).autoSwapFeesToUsdcTargetMint
       ?? "",
+    autoSwapFeesToUsdcMinUsd: parseEnvNumber(process.env.AUTO_SWAP_FEES_TO_USDC_MIN_USD)
+      ?? Number((data as any).autoSwapFeesToUsdcMinUsd ?? 0.5),
     autoAddLiquidityEnabled: parseEnvBool(process.env.AUTO_ADD_LIQUIDITY_ENABLED)
       ?? Boolean((data as any).autoAddLiquidityEnabled ?? false),
     kaminoRebalanceEnabled: parseEnvBool(process.env.KAMINO_REBALANCE_ENABLED)
@@ -710,6 +713,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!config.autoSwapFeesToUsdcTargetMint || !config.autoSwapFeesToUsdcTargetMint.trim()) {
     config.autoSwapFeesToUsdcTargetMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  }
+  if (!Number.isFinite(config.autoSwapFeesToUsdcMinUsd) || config.autoSwapFeesToUsdcMinUsd < 0) {
+    throw new Error("autoSwapFeesToUsdcMinUsd must be >= 0");
   }
   if (!Number.isFinite(config.kaminoDepositPct) || config.kaminoDepositPct < 0 || config.kaminoDepositPct > 100) {
     throw new Error("kaminoDepositPct must be between 0 and 100");
