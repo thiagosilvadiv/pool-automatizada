@@ -1124,7 +1124,13 @@ export class OrcaBot {
       const baseUsd = avgMode === "reset" ? 0 : (previous?.collateralUsd ?? 0);
       const baseDebtUsd = avgMode === "reset" ? 0 : (previous?.debtUsd ?? 0);
       const nextAmount = baseAmount + amount;
-      const nextUsd = baseUsd;
+      const depositedUsd = await this.getTokenUsdPrice({
+        mint,
+        decimals: await this.getCollateralDecimals(mint),
+        stableMint: await this.resolveStableMintForPricing(),
+        stableDecimals: await this.resolveStableDecimalsForPricing(),
+      }).then((price) => (price != null ? price * amount : null));
+      const nextUsd = baseUsd + (depositedUsd ?? 0);
       const nextDebtUsd = baseDebtUsd + (borrowSig ? borrowUsd : 0);
       const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
       const avgPriceUsdc = nextAmount > 0 && avgNumerator > 0 ? avgNumerator / nextAmount : null;
