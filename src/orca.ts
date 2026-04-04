@@ -3685,7 +3685,13 @@ export class OrcaBot {
               performed = true;
               usedCandidate = true;
               debtRemaining = splitResult.debtRemaining ?? Math.max(0, debtRemaining - repayAmount);
+              if (maxChunkOverride != null) {
+                maxChunkOverride = Math.min(debtRemaining, maxChunkOverride * 2);
+              }
               await refreshPosition();
+              if (maxChunkOverride != null) {
+                maxChunkOverride = Math.min(debtRemaining, maxChunkOverride);
+              }
               break;
             }
             if (splitResult.retryable) {
@@ -3727,7 +3733,13 @@ export class OrcaBot {
           performed = true;
           lastQuoteError = null;
           usedCandidate = true;
+          if (maxChunkOverride != null) {
+            maxChunkOverride = Math.min(debtRemaining, maxChunkOverride * 2);
+          }
           await refreshPosition();
+          if (maxChunkOverride != null) {
+            maxChunkOverride = Math.min(debtRemaining, maxChunkOverride);
+          }
           break;
         } catch (err) {
           const message = stringifyError(err);
@@ -4113,7 +4125,13 @@ export class OrcaBot {
           const solMint = NATIVE_MINT.toBase58();
           const solDecimals = 9;
           const minSolReserve = Math.max(0, Number(this.config.minSolBalance ?? 0));
-          let solBalance = await this.getWalletTokenBalance(solMint);
+          let solBalance = 0;
+          try {
+            const lamports = await this.connection.getBalance(this.wallet.publicKey);
+            solBalance = lamports / 1e9;
+          } catch {
+            solBalance = await this.getWalletTokenBalance(solMint);
+          }
           const maxSolIterations = 6;
           let solAttempts = 0;
           const solPrice = await this.getTokenUsdPrice({
@@ -4149,7 +4167,12 @@ export class OrcaBot {
             stableBalance = swapped != null
               ? stableBalance + swapped
               : await this.getWalletTokenBalance(stable.mint);
-            solBalance = await this.getWalletTokenBalance(solMint);
+            try {
+              const lamports = await this.connection.getBalance(this.wallet.publicKey);
+              solBalance = lamports / 1e9;
+            } catch {
+              solBalance = await this.getWalletTokenBalance(solMint);
+            }
           }
         } catch (err) {
           logger.warn({ err }, "falha ao converter SOL livre para stable no fechamento");
