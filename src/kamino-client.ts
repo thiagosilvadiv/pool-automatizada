@@ -738,6 +738,8 @@ class RealKaminoClient implements KaminoClient {
         )
     );
     const sig = await this.sendAction(action);
+    // Invalida o cache do market para forcar reload da obligation atualizada.
+    this.marketPromise = null;
     logger.info(
       { sig, mint: input.mint, amount: input.amount },
       "kamino repay concluido"
@@ -872,6 +874,8 @@ class RealKaminoClient implements KaminoClient {
       throw new Error("Nenhuma instrucao para repay-with-collateral");
     }
     const signature = await this.sendInstructions(responses[0].ixs, lastLookupTables);
+    // Invalida o cache do market para refletir o novo estado da obligation.
+    this.marketPromise = null;
     logger.info(
       {
         sig: signature,
@@ -955,40 +959,60 @@ class RealKaminoClient implements KaminoClient {
   }
 
   async withdraw(input: { mint: string; amount: number }): Promise<string> {
-    const market = await this.loadMarket();
-    const amountRaw = await this.toRawAmountString(input.mint, input.amount);
-    const action = await this.buildActionWithFallback(
-      () =>
-        KaminoAction.buildWithdrawTxns(
-          market,
-          amountRaw,
-          address(input.mint),
-          this.signer,
-          this.obligationType,
-          true,
-          undefined,
-          undefined,
-          true
-        ),
-      () =>
-        KaminoAction.buildWithdrawTxns(
-          market,
-          amountRaw,
-          address(input.mint),
-          this.signer,
-          this.obligationType,
-          false,
-          undefined,
-          undefined,
-          true
-        )
-    );
-    const sig = await this.sendAction(action);
-    logger.info(
-      { sig, mint: input.mint, amount: input.amount },
-      "kamino withdraw concluido"
-    );
-    return sig;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const market = await this.loadMarket();
+      const amountRaw = await this.toRawAmountString(input.mint, input.amount);
+      try {
+        const action = await this.buildActionWithFallback(
+          () =>
+            KaminoAction.buildWithdrawTxns(
+              market,
+              amountRaw,
+              address(input.mint),
+              this.signer,
+              this.obligationType,
+              true,
+              undefined,
+              undefined,
+              true
+            ),
+          () =>
+            KaminoAction.buildWithdrawTxns(
+              market,
+              amountRaw,
+              address(input.mint),
+              this.signer,
+              this.obligationType,
+              false,
+              undefined,
+              undefined,
+              true
+            )
+        );
+        const sig = await this.sendAction(action);
+        this.marketPromise = null; // invalida para proxima operacao
+        logger.info(
+          { sig, mint: input.mint, amount: input.amount },
+          "kamino withdraw concluido"
+        );
+        return sig;
+      } catch (err) {
+        const msg = String((err as any)?.message ?? err).toLowerCase();
+        const isStaleMarket =
+          msg.includes("0x1776") ||
+          msg.includes("invalidaccountinput") ||
+          msg.includes("invalid account input") ||
+          msg.includes("6006") ||
+          msg.includes("expected_remaining_accounts");
+        if (isStaleMarket && attempt === 0) {
+          logger.warn({ err }, "withdraw falhou com market stale (0x1776); recarregando market e retentando");
+          this.marketPromise = null;
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error("withdraw falhou apos reload de market");
   }
 
   async getPositionState(): Promise<KaminoPositionState | null> {

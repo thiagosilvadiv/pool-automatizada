@@ -4585,6 +4585,25 @@ export class OrcaBot {
           this.queueHistoryAction("kamino-withdraw");
         } catch (err) {
           const message = stringifyError(err);
+          const msgLower = message.toLowerCase();
+          // 0x1776 = InvalidAccountInput: market stale apos repay que zerou divida.
+          if (
+            msgLower.includes("0x1776") ||
+            msgLower.includes("invalidaccountinput") ||
+            msgLower.includes("invalid account input") ||
+            msgLower.includes("6006") ||
+            msgLower.includes("expected_remaining_accounts")
+          ) {
+            this.queueKaminoLog(
+              "withdraw-stale-market",
+              `Withdraw falhou com market stale (${message}); market sera recarregado na proxima tentativa.`,
+              "warn"
+            );
+            const wait = this.scheduleKaminoRepayRetry(state, message, mode);
+            if (wait) {
+              return false;
+            }
+          }
           if (this.isKaminoRetryableError(message)) {
             const wait = this.scheduleKaminoRepayRetry(state, message, mode);
             if (wait) {
