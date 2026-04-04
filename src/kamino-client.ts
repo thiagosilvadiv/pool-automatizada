@@ -301,9 +301,9 @@ class RealKaminoClient implements KaminoClient {
       attempt += 1;
       try {
         const { value: latestBlockhash } = await (this.rpc as any)
-          .getLatestBlockhash({ commitment: "processed" })
+          .getLatestBlockhash({ commitment: "confirmed" })
           .send();
-        const slot = await (this.rpc as any).getSlot({ commitment: "processed" }).send();
+        const slot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
         const txMessage = pipe(
           createTransactionMessage({ version: 0 }),
           (tx) => appendTransactionMessageInstructions(ixs, tx),
@@ -323,8 +323,20 @@ class RealKaminoClient implements KaminoClient {
         lastErr = err;
         const decoded = decodeRpcError(err);
         const isBlockhash = isBlockhashError(err);
-        const isSimulation = isBlockhash &&
-          String((err as any)?.message ?? err).toLowerCase().includes("simulation failed");
+        // Detectar erro de fundos insuficientes (0x1) ANTES de tratar como blockhash.
+        // O erro de simulação pode conter -32002 no envelope JSON-RPC, mascarando o
+        // erro real do programa SPL/Kamino que é "insufficient funds" (0x1).
+        const errMsg = String((err as any)?.message ?? err).toLowerCase();
+        const isInsufficientFunds =
+          errMsg.includes("insufficient funds") ||
+          errMsg.includes("custom program error: 0x1") ||
+          errMsg.includes("\"0x1\"") ||
+          errMsg.includes("error: insufficient funds");
+        if (isInsufficientFunds) {
+          logger.error({ err: decoded, attempt }, "kamino tx falhou por fundos insuficientes (0x1); abortando sem retry");
+          throw err;
+        }
+        const isSimulation = isBlockhash && errMsg.includes("simulation failed");
         if (isBlockhash && lastSignature && !isSimulation) {
           try {
             await this.confirmSignatureWithRetry(lastSignature, 20_000, 1_000);
@@ -364,9 +376,9 @@ class RealKaminoClient implements KaminoClient {
       attempt += 1;
       try {
         const { value: latestBlockhash } = await (this.rpc as any)
-          .getLatestBlockhash({ commitment: "processed" })
+          .getLatestBlockhash({ commitment: "confirmed" })
           .send();
-        const slot = await (this.rpc as any).getSlot({ commitment: "processed" }).send();
+        const slot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
         let txMessage = pipe(
           createTransactionMessage({ version: 0 }),
           (tx) => appendTransactionMessageInstructions(ixs, tx),
@@ -408,8 +420,20 @@ class RealKaminoClient implements KaminoClient {
         lastErr = err;
         const decoded = decodeRpcError(err);
         const isBlockhash = isBlockhashError(err);
-        const isSimulation = isBlockhash &&
-          String((err as any)?.message ?? err).toLowerCase().includes("simulation failed");
+        // Detectar erro de fundos insuficientes (0x1) ANTES de tratar como blockhash.
+        // O erro de simulação pode conter -32002 no envelope JSON-RPC, mascarando o
+        // erro real do programa SPL/Kamino que é "insufficient funds" (0x1).
+        const errMsg = String((err as any)?.message ?? err).toLowerCase();
+        const isInsufficientFunds =
+          errMsg.includes("insufficient funds") ||
+          errMsg.includes("custom program error: 0x1") ||
+          errMsg.includes("\"0x1\"") ||
+          errMsg.includes("error: insufficient funds");
+        if (isInsufficientFunds) {
+          logger.error({ err: decoded, attempt }, "kamino instructions falharam por fundos insuficientes (0x1); abortando sem retry");
+          throw err;
+        }
+        const isSimulation = isBlockhash && errMsg.includes("simulation failed");
         if (isBlockhash && lastSignature && !isSimulation) {
           try {
             await this.confirmSignatureWithRetry(lastSignature, 20_000, 1_000);

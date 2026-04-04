@@ -577,7 +577,15 @@ export class OrcaBot {
         }
         if (this.isKaminoRetryableError(err) && attempt < 2) {
           const prevMsg = String((prevErr as any)?.message ?? "").toLowerCase();
-          if (prevMsg.includes("0x1") || prevMsg.includes("insufficient funds")) {
+          const currMsg = String((err as any)?.message ?? "").toLowerCase();
+          // Se o erro atual OU o anterior indicam fundos insuficientes, não fazer retry.
+          if (
+            prevMsg.includes("0x1") ||
+            prevMsg.includes("insufficient funds") ||
+            currMsg.includes("0x1") ||
+            currMsg.includes("insufficient funds") ||
+            currMsg.includes("custom program error: 0x1")
+          ) {
             throw err;
           }
           const msg = String((err as any)?.message ?? err);
@@ -4409,6 +4417,14 @@ export class OrcaBot {
                 `Saldo insuficiente para repay (0x1); saldo real: ${stableBalance.toFixed(8)}`,
                 "warn"
               );
+              // Saldo insuficiente é um estado terminal neste ciclo.
+              // Registrar e retornar false para que o chamador agende um retry
+              // apenas após rebalanceamento de saldo externo.
+              this.setKaminoState({
+                ...state,
+                lastError: `Saldo insuficiente para repay: wallet tem ${stableBalance.toFixed(8)} ${stable.mint}`
+              });
+              return false;
             } else {
               throw repayWalletErr;
             }
