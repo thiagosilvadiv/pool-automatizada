@@ -994,7 +994,7 @@ class RealKaminoClient implements KaminoClient {
   async getPositionState(): Promise<KaminoPositionState | null> {
     // Cache de curta duração: se leu com sucesso há menos de 8s, devolve o cache.
     // Isso evita travar o tick com 3 retries × 2s quando a RPC está lenta.
-    const CACHE_TTL_MS = 8_000;
+    const CACHE_TTL_MS = 60_000;
     if (this.lastState && (Date.now() - this.lastStateAt) < CACHE_TTL_MS) {
       return this.lastState;
     }

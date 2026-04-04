@@ -3845,13 +3845,38 @@ export class OrcaBot {
 
     const resolved = await this.resolveKaminoPositionWithFallback();
     const kamino = resolved.kamino;
-    const position = resolved.position;
+    let position = resolved.position;
     if (!position) {
-      const message = "Posicao Kamino nao encontrada no market; aguardando proxima leitura.";
-      this.setKaminoState({ ...state, lastError: message });
-      this.queueKaminoLog("not-found", message, "warn");
-      this.lastStatus.lastAction = "kamino-repay-wait";
-      return false;
+      const hasLocalDebt = (state.debtAmount ?? 0) > 0 && Boolean(state.debtMint);
+      const hasLocalCollateral = (state.collateralAmount ?? 0) > 0 && Boolean(state.collateralMint);
+      if (hasLocalDebt || hasLocalCollateral) {
+        this.queueKaminoLog(
+          "not-found",
+          "Posicao on-chain indisponivel (rate limit?); usando estado local para fechar.",
+          "warn"
+        );
+        position = {
+          collateralMint: state.collateralMint ?? null,
+          collateralAmount: state.collateralAmount ?? null,
+          debtMint: state.debtMint ?? null,
+          debtAmount: state.debtAmount ?? null,
+          ltv: null,
+          deposits: Array.isArray(state.collaterals) && state.collaterals.length
+            ? state.collaterals.map((c) => ({ mint: c.mint, amount: c.amount ?? 0 }))
+            : (state.collateralMint
+              ? [{ mint: state.collateralMint, amount: state.collateralAmount ?? 0 }]
+              : []),
+          borrows: state.debtMint
+            ? [{ mint: state.debtMint, amount: state.debtAmount ?? 0 }]
+            : []
+        };
+      } else {
+        const message = "Posicao Kamino nao encontrada no market; aguardando proxima leitura.";
+        this.setKaminoState({ ...state, lastError: message });
+        this.queueKaminoLog("not-found", message, "warn");
+        this.lastStatus.lastAction = "kamino-repay-wait";
+        return false;
+      }
     }
     const previousMarket = state.marketAddress ?? this.getConfiguredKaminoMarketAddress();
     if (resolved.marketAddress && previousMarket && resolved.marketAddress !== previousMarket) {
