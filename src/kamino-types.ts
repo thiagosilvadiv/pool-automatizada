@@ -41,3 +41,15 @@ export type KaminoCycleState = {
   updatedAt: string | null;
   lastError?: string | null;
 };
+
+export type PendingReturn = {
+  id: string;
+  walletAddress: string;
+  mint: string;
+  amount: number;
+  symbol: string;
+  createdAt: string;
+  confirmedAt: string | null;
+  txSig: string | null;
+  note: string | null;
+};

@@ -68,6 +68,10 @@ export type Config = {
   pythSolUsdFeedId: string | null;
   priceStaleMaxSec: number | null;
   trendEnabled: boolean;
+  evolutionApiUrl: string | null;
+  evolutionApiKey: string | null;
+  evolutionPhone: string | null;
+  evolutionInstance: string | null;
   trendTimeframe: TrendTimeframe;
   trendTargetUp: TrendTarget;
   trendTargetDown: TrendTarget;
@@ -484,6 +488,10 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const envBybitApiSecret = parseEnvString(process.env.BYBIT_API_SECRET);
   const envBybitBaseUrl = parseEnvString(process.env.BYBIT_BASE_URL);
   const envHedgeSymbol = parseEnvString(process.env.HEDGE_SYMBOL);
+  const envEvolutionApiUrl = parseEnvString(process.env.EVOLUTION_API_URL);
+  const envEvolutionApiKey = parseEnvString(process.env.EVOLUTION_API_KEY);
+  const envEvolutionPhone = parseEnvString(process.env.EVOLUTION_PHONE);
+  const envEvolutionInstance = parseEnvString(process.env.EVOLUTION_INSTANCE);
 
   const config: Config = {
     network: envNetwork ?? data.network ?? "mainnet-beta",
@@ -603,6 +611,10 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     pythSolUsdFeedId: process.env.PYTH_SOL_USD_FEED_ID ?? data.pythSolUsdFeedId ?? null,
     priceStaleMaxSec: parseEnvNumber(process.env.PRICE_STALE_MAX_SEC) ?? (data.priceStaleMaxSec == null ? 120 : Number(data.priceStaleMaxSec)),
     trendEnabled: parseEnvBool(process.env.TREND_ENABLED) ?? Boolean((data as any).trendEnabled ?? false),
+    evolutionApiUrl: envEvolutionApiUrl ?? (data as any).evolutionApiUrl ?? null,
+    evolutionApiKey: envEvolutionApiKey ?? (data as any).evolutionApiKey ?? null,
+    evolutionPhone: envEvolutionPhone ?? (data as any).evolutionPhone ?? null,
+    evolutionInstance: envEvolutionInstance ?? (data as any).evolutionInstance ?? null,
     trendTimeframe: resolvedTrendTimeframe,
     trendTargetUp: envTrendTargetUp
       ?? dataTrendTargetUp

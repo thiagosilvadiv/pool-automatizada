@@ -600,3 +600,50 @@ export async function createKaminoLoansStore(): Promise<KaminoLoansStore> {
   const filePath = defaultKaminoLoansFile();
   return new FileKaminoLoansStore(filePath);
 }
+
+// ── Pending Returns ────────────────────────────────────────────────────────
+
+export type PendingReturnEntry = {
+  id: string;
+  walletAddress: string;
+  mint: string;
+  amount: number;
+  symbol: string;
+  createdAt: string;
+  confirmedAt: string | null;
+  txSig: string | null;
+  note: string | null;
+};
+
+export type PendingReturnsState = {
+  returns: PendingReturnEntry[];
+  updatedAt: string | null;
+};
+
+export type PendingReturnsStore = {
+  load(): Promise<PendingReturnsState | null>;
+  save(state: PendingReturnsState): Promise<void>;
+};
+
+export function defaultPendingReturnsFile(name = "pending-returns.json"): string {
+  return path.join(__dirname, "..", "data", name);
+}
+
+export async function createPendingReturnsStore(): Promise<PendingReturnsStore> {
+  const file = defaultPendingReturnsFile();
+  return {
+    async load() {
+      try {
+        const raw = await fs.readFile(file, "utf-8");
+        const parsed = JSON.parse(raw);
+        const returns = Array.isArray(parsed?.returns) ? parsed.returns : [];
+        return { returns, updatedAt: parsed?.updatedAt ?? null };
+      } catch {
+        return null;
+      }
+    },
+    async save(state) {
+      await fs.writeFile(file, JSON.stringify({ ...state, updatedAt: new Date().toISOString() }, null, 2), "utf-8");
+    }
+  };
+}
