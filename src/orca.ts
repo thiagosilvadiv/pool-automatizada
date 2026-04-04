@@ -2621,8 +2621,26 @@ export class OrcaBot {
     this.lastStatus.kaminoOwnerPoolId = state?.ownerPoolId ?? null;
     this.lastStatus.kaminoOwnerPoolName = state?.ownerPoolName ?? null;
     this.lastStatus.kaminoMarketAddress = state?.marketAddress ?? null;
+    // Mescla os campos calculados (currentUsd, currentPriceUsdc, etc.)
+    // do lastStatus existente para não perdê-los quando setKaminoState
+    // é chamado após refreshKaminoCollateralMetrics().
+    const existingByMint = new Map<string, KaminoCollateralEntry>(
+      (Array.isArray(this.lastStatus.kaminoCollaterals)
+        ? this.lastStatus.kaminoCollaterals
+        : []
+      ).filter((e) => Boolean(e?.mint)).map((e) => [e.mint, e])
+    );
     const collaterals = Array.isArray(state?.collaterals)
-      ? state.collaterals.map((item) => ({ ...item }))
+      ? state.collaterals.map((item) => {
+        const existing = item?.mint ? existingByMint.get(item.mint) : undefined;
+        return {
+          ...item,
+          currentUsd: existing?.currentUsd ?? (item as any).currentUsd ?? null,
+          currentPriceUsdc: existing?.currentPriceUsdc ?? (item as any).currentPriceUsdc ?? null,
+          gapToTargetPct: existing?.gapToTargetPct ?? (item as any).gapToTargetPct ?? null,
+          pnlUsd: existing?.pnlUsd ?? (item as any).pnlUsd ?? null
+        };
+      })
       : [];
     const collateralUsd = collaterals.length
       ? collaterals.reduce((sum, item) => sum + (Number(item.usd ?? item.currentUsd ?? 0) || 0), 0)
@@ -4759,9 +4777,19 @@ export class OrcaBot {
       lastError: null
     };
     this.setKaminoState(nextState);
+    // Soma o PnL da pool encerrada ao kaminoNetUsd para refletir o
+    // resultado real do ciclo (perda da pool + recuperação via Kamino).
+    const poolExitUsd = this.lastStatus.eventPositionExitUsd ?? null;
+    const poolEntryUsd = this.lastStatus.eventPositionEntryUsd ?? null;
+    const poolPnlUsd = (poolExitUsd != null && poolEntryUsd != null)
+      ? poolExitUsd - poolEntryUsd
+      : null;
+    const combinedPnlUsd = (kaminoNetUsd != null && poolPnlUsd != null)
+      ? kaminoNetUsd + poolPnlUsd
+      : (kaminoNetUsd ?? poolPnlUsd);
     this.queueHistoryAction("kamino-close", {
       lastAction: "kamino-close",
-      positionPnlUsd: kaminoNetUsd,
+      positionPnlUsd: combinedPnlUsd,
       positionFeesUsd: 0,
       lastActionFeeLamports: null
     });

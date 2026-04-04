@@ -68,13 +68,14 @@ function resolveActionType(action: string | null): string | null {
     case "resume-position":
     case "skip-low-sol-position":
       return "monitorando";
+    case "kamino-reopen":
+      return "abertura";
     case "swap":
     case "manual-sol-topup":
     case "auto-sol-topup":
     case "manual-swap-to-sol":
     case "kamino-deposit":
     case "kamino-borrow":
-    case "kamino-reopen":
     case "kamino-repay":
     case "kamino-withdraw":
     case "kamino-rebalance-failed":
