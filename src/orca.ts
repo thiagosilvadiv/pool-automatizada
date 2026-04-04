@@ -1141,8 +1141,16 @@ export class OrcaBot {
       const nextDebtUsd = baseDebtUsd + (borrowSig ? borrowUsd : 0);
       const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
       const avgPriceUsdc = nextAmount > 0 && avgNumerator > 0 ? avgNumerator / nextAmount : null;
+      const poolLossUsd = (() => {
+        const pnl = this.lastStatus.positionPnlUsd ?? null;
+        if (pnl != null && Number.isFinite(pnl) && pnl < 0) return Math.abs(pnl);
+        return 0;
+      })();
+      const lossAdjPct = (avgPriceUsdc != null && nextUsd > 0 && poolLossUsd > 0)
+        ? (poolLossUsd / nextUsd) * 100
+        : 0;
       const targetPriceUsdc = avgPriceUsdc != null
-        ? avgPriceUsdc * (1 + (this.config.kaminoPriceBufferPct ?? 0) / 100)
+        ? avgPriceUsdc * (1 + ((this.config.kaminoPriceBufferPct ?? 0) + lossAdjPct) / 100)
         : null;
       const nextState: KaminoCycleState = {
         active: true,
@@ -4644,6 +4652,11 @@ export class OrcaBot {
       }
       const avgBasis = this.config.kaminoAvgPriceBasis ?? "deposit";
       const avgMode = this.config.kaminoAvgMode ?? "cumulative";
+      const poolLossUsd = (() => {
+        const pnl = this.lastStatus.positionPnlUsd ?? null;
+        if (pnl != null && Number.isFinite(pnl) && pnl < 0) return Math.abs(pnl);
+        return 0;
+      })();
       for (const entry of deposits) {
         const share = totalDepositUsd > 0 ? (entry.depositUsd ?? 0) / totalDepositUsd : 0;
         const debtUsd = borrowUsd * share;
@@ -4663,8 +4676,12 @@ export class OrcaBot {
         const nextDebtUsd = baseDebtUsd + debtUsd;
         const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
         const avgPriceUsdc = nextAmount > 0 ? avgNumerator / nextAmount : null;
+        const poolLossUsdForEntry = poolLossUsd * share;
+        const lossAdjPct = (avgPriceUsdc != null && nextUsd > 0 && poolLossUsdForEntry > 0)
+          ? (poolLossUsdForEntry / nextUsd) * 100
+          : 0;
         const targetPriceUsdc = avgPriceUsdc != null
-          ? avgPriceUsdc * (1 + (this.config.kaminoPriceBufferPct ?? 0) / 100)
+          ? avgPriceUsdc * (1 + ((this.config.kaminoPriceBufferPct ?? 0) + lossAdjPct) / 100)
           : null;
         nextMap.set(entry.mint, {
           mint: entry.mint,
