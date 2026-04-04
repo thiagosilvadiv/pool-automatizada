@@ -1068,7 +1068,14 @@ export class BotRunner {
     let mergedPositionPnlUsd = status.positionPnlUsd ?? null;
     let mergedPositionExitUsd: number | null = null;
 
-    if (action === "close-position") {
+    if (action === "open-position") {
+      // Na abertura não há PnL real ainda. Zera para evitar que valores
+      // residuais do fechamento anterior (ex: kaminoNetUsd) vaze para
+      // os registros de Abertura e Monitorando seguintes.
+      mergedPositionPnlUsd = null;
+      mergedPositionEntryUsd = status.positionEntryUsd ?? null;
+      mergedPositionFeesUsd = null;
+    } else if (action === "close-position") {
       mergedPositionMint = eventPositionMint ?? mergedPositionMint;
       mergedPositionEntryUsd = resolveEntryFallback(eventPositionEntryUsd ?? mergedPositionEntryUsd, mergedPositionMint);
       mergedPositionFeesUsd = eventPositionFeesUsd ?? mergedPositionFeesUsd;
