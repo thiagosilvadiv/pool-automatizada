@@ -795,19 +795,33 @@ export class OrcaBot {
           // de quanto foi emprestado. O borrow pode já existir on-chain.
           // Verifica se há saldo na wallet para abrir a pool diretamente.
           const walletBal = await this.getTokenBalances().catch(() => ({ tokenA: 0, tokenB: 0 }));
-          if (walletBal.tokenA <= 0 && walletBal.tokenB <= 0) {
-            // Sem saldo na wallet — aguarda o borrow chegar.
-            if (this.lastStatus.lastAction !== "kamino-wait-funds") {
-              this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
-            }
-            this.lastStatus.lastAction = "kamino-wait-funds";
-            this.lastStatus.positionRange = null;
-            this.lastStatus.positionMint = this.currentPositionMint;
-            return this.getStatus();
+        if (walletBal.tokenA <= 0 && walletBal.tokenB <= 0) {
+          // Sem saldo na wallet — aguarda o borrow chegar.
+          if (this.lastStatus.lastAction !== "kamino-wait-funds") {
+            this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
           }
-          // Há saldo na wallet — abre a pool com o que tem.
-          // Não tenta forçar novo deposit+borrow para não criar loop
-          // com o reconcileKaminoState que reativa o ciclo a cada tick.
+          this.lastStatus.lastAction = "kamino-wait-funds";
+          this.lastStatus.positionRange = null;
+          this.lastStatus.positionMint = this.currentPositionMint;
+          return this.getStatus();
+        }
+        const pendingDebt = Number(this.kaminoState?.debtAmount ?? 0);
+        if (pendingDebt > 1e-8) {
+          if (this.lastStatus.lastAction !== "kamino-wait-funds") {
+            this.queueKaminoLog(
+              "wait-funds",
+              `Aguardando quitacao da divida Kamino (${pendingDebt.toFixed(4)}) antes de reabrir a pool.`,
+              "warn"
+            );
+          }
+          this.lastStatus.lastAction = "kamino-wait-funds";
+          this.lastStatus.positionRange = null;
+          this.lastStatus.positionMint = this.currentPositionMint;
+          return this.getStatus();
+        }
+        // Há saldo na wallet — abre a pool com o que tem.
+        // Não tenta forçar novo deposit+borrow para não criar loop
+        // com o reconcileKaminoState que reativa o ciclo a cada tick.
           this.queueKaminoLog(
             "wait-funds",
             "Saldo disponivel na wallet; abrindo pool com saldo atual.",
@@ -4013,24 +4027,26 @@ export class OrcaBot {
       const convertibleUsd = await estimateConvertibleUsd();
       if (stableBalance + convertibleUsd + epsilon < repayTarget) {
         const missing = repayTarget - (stableBalance + convertibleUsd);
-      const message = `Colateral insuficiente para quitar a divida (faltam ${missing.toFixed(8)}).`;
-      this.setKaminoState({ ...state, lastError: message });
-      this.queueKaminoLog("repay-insufficient", message, "error");
-      if (this.config.evolutionApiUrl && this.config.evolutionPhone) {
-        const walletAddr = this.wallet?.publicKey?.toBase58?.() ?? "desconhecida";
-        const debtSymbol = stable.mint.startsWith("Es9v") ? "USDT" : "USDC";
-        notifyKaminoFundsNeeded({
-          apiUrl: this.config.evolutionApiUrl,
-          apiKey: this.config.evolutionApiKey,
-          instance: this.config.evolutionInstance,
-          phone: this.config.evolutionPhone,
-          walletAddress: walletAddr,
-          debtAmount: debtAmount,
-          debtMint: stable.mint,
-          debtSymbol,
-          minAmountNeeded: Math.max(0.01, (debtAmount - (stableBalance + convertibleUsd)) * 1.02)
-        }).catch(() => {});
-      }
+        const message = `Colateral insuficiente para quitar a divida (faltam ${missing.toFixed(8)}).`;
+        this.setKaminoState({ ...state, lastError: message });
+        this.queueKaminoLog("repay-insufficient", message, "error");
+        if (this.config.evolutionApiUrl && this.config.evolutionPhone) {
+          const walletAddr = this.wallet?.publicKey?.toBase58?.() ?? "desconhecida";
+          const debtSymbol = stable.mint.startsWith("Es9v") ? "USDT" : "USDC";
+          const convertibleAmount = Math.max(0, stableBalance + convertibleUsd);
+          notifyKaminoFundsNeeded({
+            apiUrl: this.config.evolutionApiUrl,
+            apiKey: this.config.evolutionApiKey,
+            instance: this.config.evolutionInstance,
+            phone: this.config.evolutionPhone,
+            walletAddress: walletAddr,
+            debtAmount: debtAmount,
+            debtMint: stable.mint,
+            debtSymbol,
+            botCanPayUsd: convertibleAmount,
+            minAmountNeeded: Math.max(0.01, (debtAmount - convertibleAmount) * 1.02)
+          }).catch(() => {});
+        }
         if (this.scheduleKaminoRepayRetry(state, message, mode) && mode === "target") {
           return false;
         }
@@ -4272,24 +4288,26 @@ export class OrcaBot {
       }
 
       if (debtAmount > epsilon && stableBalance + epsilon < debtAmount) {
-      const message = `Colateral insuficiente para quitar a divida (restante ${debtAmount.toFixed(8)}).`;
-      this.setKaminoState({ ...state, lastError: message });
-      this.queueKaminoLog("repay-insufficient", message, "error");
-      if (this.config.evolutionApiUrl && this.config.evolutionPhone) {
-        const walletAddr = this.wallet?.publicKey?.toBase58?.() ?? "desconhecida";
-        const debtSymbol = stable.mint.startsWith("Es9v") ? "USDT" : "USDC";
-        notifyKaminoFundsNeeded({
-          apiUrl: this.config.evolutionApiUrl,
-          apiKey: this.config.evolutionApiKey,
-          instance: this.config.evolutionInstance,
-          phone: this.config.evolutionPhone,
-          walletAddress: walletAddr,
-          debtAmount: debtAmount,
-          debtMint: stable.mint,
-          debtSymbol,
-          minAmountNeeded: Math.max(0.01, (debtAmount - stableBalance) * 1.02)
-        }).catch(() => {});
-      }
+        const message = `Colateral insuficiente para quitar a divida (restante ${debtAmount.toFixed(8)}).`;
+        this.setKaminoState({ ...state, lastError: message });
+        this.queueKaminoLog("repay-insufficient", message, "error");
+        if (this.config.evolutionApiUrl && this.config.evolutionPhone) {
+          const walletAddr = this.wallet?.publicKey?.toBase58?.() ?? "desconhecida";
+          const debtSymbol = stable.mint.startsWith("Es9v") ? "USDT" : "USDC";
+          const coverage = Math.max(0, stableBalance);
+          notifyKaminoFundsNeeded({
+            apiUrl: this.config.evolutionApiUrl,
+            apiKey: this.config.evolutionApiKey,
+            instance: this.config.evolutionInstance,
+            phone: this.config.evolutionPhone,
+            walletAddress: walletAddr,
+            debtAmount: debtAmount,
+            debtMint: stable.mint,
+            debtSymbol,
+            botCanPayUsd: coverage,
+            minAmountNeeded: Math.max(0.01, (debtAmount - coverage) * 1.02)
+          }).catch(() => {});
+        }
         throw new Error(message);
       }
 
@@ -4303,17 +4321,19 @@ export class OrcaBot {
             if (this.config.evolutionApiUrl && this.config.evolutionPhone) {
               const walletAddr = this.wallet?.publicKey?.toBase58?.() ?? "desconhecida";
               const debtSymbol = stable.mint.startsWith("Es9v") ? "USDT" : "USDC";
-            notifyKaminoFundsNeeded({
-              apiUrl: this.config.evolutionApiUrl,
-              apiKey: this.config.evolutionApiKey,
-              instance: this.config.evolutionInstance,
-              phone: this.config.evolutionPhone,
-              walletAddress: walletAddr,
-              debtAmount: debtAmount,
-              debtMint: stable.mint,
-              debtSymbol,
-              minAmountNeeded: Math.max(0.01, (debtAmount - stableBalance) * 1.02)
-            }).catch(() => {});
+              const coverage = Math.max(0, stableBalance);
+              notifyKaminoFundsNeeded({
+                apiUrl: this.config.evolutionApiUrl,
+                apiKey: this.config.evolutionApiKey,
+                instance: this.config.evolutionInstance,
+                phone: this.config.evolutionPhone,
+                walletAddress: walletAddr,
+                debtAmount: debtAmount,
+                debtMint: stable.mint,
+                debtSymbol,
+                botCanPayUsd: coverage,
+                minAmountNeeded: Math.max(0.01, (debtAmount - coverage) * 1.02)
+              }).catch(() => {});
             }
             throw new Error(message);
           }
@@ -4913,6 +4933,18 @@ export class OrcaBot {
         this.lastStatus.lastAction = "kamino-wait-funds";
         return "kamino-wait-funds";
       }
+      const pendingDebt2 = Number(this.kaminoState?.debtAmount ?? 0);
+      if (pendingDebt2 > 1e-8) {
+        this.queueKaminoLog(
+          "wait-funds",
+          `Divida pendente (${pendingDebt2.toFixed(4)}); aguardando quitacao.`,
+          "warn"
+        );
+        this.lastStatus.lastAction = "kamino-wait-funds";
+        this.lastStatus.positionRange = null;
+        this.lastStatus.positionMint = this.currentPositionMint;
+        return "kamino-wait-funds";
+      }
       reservedTokenA = walletBalances.tokenA;
       reservedTokenB = walletBalances.tokenB;
       this.queueKaminoLog("wait-funds", "Usando saldo da wallet para reabrir a pool (sem empréstimo).", "warn");
@@ -5209,6 +5241,10 @@ export class OrcaBot {
       return { performed: false, reason: "sol-ok" };
     }
 
+    const kaminoDebtMint = (this.kaminoState?.active && (this.kaminoState?.debtAmount ?? 0) > 0)
+      ? (this.kaminoState?.debtMint ?? null)
+      : null;
+
     OrcaBot.topupInFlight = true;
     try {
       const allTokens = await this.getWalletTokens();
@@ -5218,6 +5254,9 @@ export class OrcaBot {
           return false;
         }
         if (token.decimals === 0) {
+          return false;
+        }
+        if (kaminoDebtMint && token.mint === kaminoDebtMint) {
           return false;
         }
         return true;

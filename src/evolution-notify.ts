@@ -46,6 +46,7 @@ export async function notifyKaminoFundsNeeded(params: {
   debtMint: string;
   debtSymbol: string;
   minAmountNeeded: number;
+  botCanPayUsd: number;
 }): Promise<void> {
   const { apiUrl, apiKey, instance, phone } = params;
   if (!apiUrl || !apiKey || !instance || !phone) return;
@@ -55,7 +56,7 @@ export async function notifyKaminoFundsNeeded(params: {
     `O ciclo Kamino não conseguiu pagar a dívida automaticamente.\n\n` +
     `*Wallet:* \`${params.walletAddress}\`\n` +
     `*Dívida total:* ${params.debtAmount.toFixed(4)} ${params.debtSymbol}\n` +
-    `*Bot consegue pagar:* ${(params.debtAmount - params.minAmountNeeded).toFixed(4)} ${params.debtSymbol}\n` +
+    `*Bot consegue pagar:* ${params.botCanPayUsd.toFixed(4)} ${params.debtSymbol}\n` +
     `*Você precisa enviar:* ${params.minAmountNeeded.toFixed(4)} ${params.debtSymbol}\n` +
     `*Token (mint):* \`${params.debtMint}\`\n\n` +
     `Envie o valor acima para a wallet indicada.\n` +

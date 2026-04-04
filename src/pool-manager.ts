@@ -928,6 +928,27 @@ export class PoolManager {
           const borrows = Array.isArray(position.borrows) ? position.borrows : [];
           const owner = this.resolveKaminoLoanOwner(marketAddress, existing);
           const usd = await this.computeKaminoUsd(deposits, borrows);
+          const depositEntries: {
+            mint: string;
+            amount: number;
+            avgPriceUsdc: number | null;
+            targetPriceUsdc: number | null;
+          }[] = [];
+          for (const dep of deposits) {
+            const mint = String(dep?.mint ?? "").trim();
+            if (!mint) {
+              continue;
+            }
+            const prev = Array.isArray(existing?.deposits)
+              ? existing.deposits.find((item) => item.mint === mint)
+              : null;
+            depositEntries.push({
+              mint,
+              amount: Number(dep?.amount ?? 0),
+              avgPriceUsdc: prev?.avgPriceUsdc ?? null,
+              targetPriceUsdc: prev?.targetPriceUsdc ?? null
+            });
+          }
           const updated: KaminoLoanEntry = {
             id: existing?.id ?? marketAddress,
             marketAddress,
@@ -935,7 +956,9 @@ export class PoolManager {
             ownerPoolName: owner.name ?? null,
             collateralUsd: usd.collateralUsd,
             debtUsd: usd.debtUsd,
-            deposits,
+            avgPriceUsdc: existing?.avgPriceUsdc ?? null,
+            targetPriceUsdc: existing?.targetPriceUsdc ?? null,
+            deposits: depositEntries,
             borrows,
             lastSeenAt: now,
             lastError: null

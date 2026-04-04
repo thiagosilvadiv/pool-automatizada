@@ -473,7 +473,14 @@ export type KaminoLoanEntry = {
   ownerPoolName: string | null;
   collateralUsd: number | null;
   debtUsd: number | null;
-  deposits: { mint: string; amount: number }[];
+  avgPriceUsdc: number | null;
+  targetPriceUsdc: number | null;
+  deposits: {
+    mint: string;
+    amount: number;
+    avgPriceUsdc?: number | null;
+    targetPriceUsdc?: number | null;
+  }[];
   borrows: { mint: string; amount: number }[];
   lastSeenAt: string;
   lastError: string | null;
@@ -508,10 +515,14 @@ function normalizeKaminoLoansState(input: unknown): KaminoLoansState {
     const ownerPoolName = item?.ownerPoolName ? String(item.ownerPoolName) : null;
     const collateralUsd = item?.collateralUsd == null ? null : Number(item.collateralUsd);
     const debtUsd = item?.debtUsd == null ? null : Number(item.debtUsd);
+    const avgPriceUsdc = item?.avgPriceUsdc == null ? null : Number(item.avgPriceUsdc);
+    const targetPriceUsdc = item?.targetPriceUsdc == null ? null : Number(item.targetPriceUsdc);
     const deposits = Array.isArray(item?.deposits)
       ? item.deposits.map((dep: any) => ({
         mint: String(dep?.mint ?? "").trim(),
-        amount: Number(dep?.amount ?? 0)
+        amount: Number(dep?.amount ?? 0),
+        avgPriceUsdc: dep?.avgPriceUsdc == null ? null : Number(dep.avgPriceUsdc),
+        targetPriceUsdc: dep?.targetPriceUsdc == null ? null : Number(dep.targetPriceUsdc)
       })).filter((dep: any) => dep.mint)
       : [];
     const borrows = Array.isArray(item?.borrows)
@@ -531,6 +542,8 @@ function normalizeKaminoLoansState(input: unknown): KaminoLoansState {
       ownerPoolName,
       collateralUsd,
       debtUsd,
+      avgPriceUsdc,
+      targetPriceUsdc,
       deposits,
       borrows,
       lastSeenAt,
