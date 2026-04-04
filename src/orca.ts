@@ -142,7 +142,9 @@ export async function performSplitRepayWithCollateralHelper(params: {
         lastErr = err;
         const msg = stringifyError(err);
         if (isRetryable(msg) && attempt === 0) {
-          await sleep(1000);
+          // Blockhash expirado precisa de ~15s; rate-limit precisa de ~3s.
+          const waitMs = msg.includes("-32002") ? 15000 : 3000;
+          await sleep(waitMs);
           continue;
         }
         throw err;
@@ -496,7 +498,7 @@ export class OrcaBot {
     mode: "manual" | "target" | "token-change"
   ): boolean {
     const retrySec = Math.max(1, Number(this.config.kaminoRepayRetrySec ?? 15));
-    const maxAttempts = Math.max(0, Math.floor(Number(this.config.kaminoRepayMaxAttempts ?? 2)));
+    const maxAttempts = Math.max(0, Math.floor(Number(this.config.kaminoRepayMaxAttempts ?? 5)));
     const nextAttempts = Number(state.repayRetryAttempts ?? 0) + 1;
     if (maxAttempts === 0 || nextAttempts > maxAttempts) {
       this.setKaminoState({
@@ -518,7 +520,7 @@ export class OrcaBot {
       lastError: message
     });
     this.queueKaminoLog("repay-wait", message, "warn");
-    if (mode === "target") {
+    if (mode === "target" || mode === "manual") {
       return true;
     }
     throw new Error(message);
