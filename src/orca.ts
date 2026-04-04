@@ -4028,7 +4028,7 @@ export class OrcaBot {
           debtAmount: debtAmount,
           debtMint: stable.mint,
           debtSymbol,
-          minAmountNeeded: debtAmount * 1.01
+          minAmountNeeded: Math.max(0.01, (debtAmount - (stableBalance + convertibleUsd)) * 1.02)
         }).catch(() => {});
       }
         if (this.scheduleKaminoRepayRetry(state, message, mode) && mode === "target") {
@@ -4203,23 +4203,52 @@ export class OrcaBot {
                   `Sacando ${withdrawAmount.toFixed(8)} de ${pick.mint} para quitar divida (tentativa ${attempts}).`,
                   "warn"
                 );
-                await this.kaminoCallWithRetry(
-                  () => kamino.withdraw({ mint: pick.mint, amount: withdrawAmount }),
-                  "kamino-withdraw"
-                );
-                onChainDeposits.set(pick.mint, Math.max(0, (onChainDeposits.get(pick.mint) ?? pick.amount) - withdrawAmount));
-                const swappedOut = await this.swapTokenToStable({
-                  inputMint: pick.mint,
-                  inputDecimals: decimals,
-                  amountUi: withdrawAmount,
-                  stableMint: stable.mint,
-                  stableDecimals: stable.decimals,
-                  label: "kamino-fallback-collateral->stable"
-                });
-                stableBalance = swappedOut != null
-                  ? stableBalance + swappedOut
-                  : await this.getWalletTokenBalance(stable.mint);
-                break;
+        await this.kaminoCallWithRetry(
+          () => kamino.withdraw({ mint: pick.mint, amount: withdrawAmount }),
+          "kamino-withdraw"
+        );
+        onChainDeposits.set(pick.mint, Math.max(0, (onChainDeposits.get(pick.mint) ?? pick.amount) - withdrawAmount));
+        const swappedOut = await this.swapTokenToStable({
+          inputMint: pick.mint,
+          inputDecimals: decimals,
+          amountUi: withdrawAmount,
+          stableMint: stable.mint,
+          stableDecimals: stable.decimals,
+          label: "kamino-fallback-collateral->stable"
+        });
+        stableBalance = swappedOut != null
+          ? stableBalance + swappedOut
+          : await this.getWalletTokenBalance(stable.mint);
+        if (stableBalance > epsilon && debtAmount > epsilon) {
+          const repayNow = Math.min(stableBalance, debtAmount * (1 + repayBufferPct / 100));
+          if (repayNow > epsilon) {
+            try {
+              await this.kaminoCallWithRetry(
+                () => kamino.repay({ mint: stable.mint, amount: repayNow }),
+                "kamino-repay-fallback"
+              );
+              this.queueHistoryAction("kamino-repay");
+              debtAmount = Math.max(0, debtAmount - repayNow);
+              stableBalance = await this.getWalletTokenBalance(stable.mint);
+            } catch (repayErr) {
+              logger.warn({ err: repayErr }, "repay intermediário no fallback falhou; continuando");
+            }
+          }
+        }
+        if (debtAmount <= epsilon) break;
+        const remainingShortfall = Math.max(0, debtAmount - stableBalance);
+        if (remainingShortfall <= epsilon) break;
+        const priceUsd = (await this.getTokenUsdPrice({
+          mint: pick.mint,
+          decimals,
+          stableMint: stable.mint,
+          stableDecimals: stable.decimals
+        }));
+        const newNeeded = priceUsd && priceUsd > 0
+          ? remainingShortfall / priceUsd * 1.05
+          : remainingShortfall;
+        const currentOnChain = Math.max(0, onChainDeposits.get(pick.mint) ?? 0);
+        withdrawAmount = Math.min(currentOnChain, newNeeded);
               } catch (err) {
                 const msg = stringifyError(err);
                 if (this.isKaminoRetryableError(msg)) {
@@ -4264,7 +4293,7 @@ export class OrcaBot {
           debtAmount: debtAmount,
           debtMint: stable.mint,
           debtSymbol,
-          minAmountNeeded: debtAmount * 1.01
+          minAmountNeeded: Math.max(0.01, (debtAmount - stableBalance) * 1.02)
         }).catch(() => {});
       }
         throw new Error(message);
@@ -4280,17 +4309,17 @@ export class OrcaBot {
             if (this.config.evolutionApiUrl && this.config.evolutionPhone) {
               const walletAddr = this.wallet?.publicKey?.toBase58?.() ?? "desconhecida";
               const debtSymbol = stable.mint.startsWith("Es9v") ? "USDT" : "USDC";
-              notifyKaminoFundsNeeded({
-                apiUrl: this.config.evolutionApiUrl,
-                apiKey: this.config.evolutionApiKey,
-                instance: this.config.evolutionInstance,
-                phone: this.config.evolutionPhone,
-                walletAddress: walletAddr,
-                debtAmount: debtAmount,
-                debtMint: stable.mint,
-                debtSymbol,
-                minAmountNeeded: debtAmount * 1.01
-              }).catch(() => {});
+            notifyKaminoFundsNeeded({
+              apiUrl: this.config.evolutionApiUrl,
+              apiKey: this.config.evolutionApiKey,
+              instance: this.config.evolutionInstance,
+              phone: this.config.evolutionPhone,
+              walletAddress: walletAddr,
+              debtAmount: debtAmount,
+              debtMint: stable.mint,
+              debtSymbol,
+              minAmountNeeded: Math.max(0.01, (debtAmount - stableBalance) * 1.02)
+            }).catch(() => {});
             }
             throw new Error(message);
           }

@@ -54,8 +54,9 @@ export async function notifyKaminoFundsNeeded(params: {
     `⚠️ *Pool Automatizada — Kamino: Fundos Necessários*\n\n` +
     `O ciclo Kamino não conseguiu pagar a dívida automaticamente.\n\n` +
     `*Wallet:* \`${params.walletAddress}\`\n` +
-    `*Dívida total:* ${params.debtAmount.toFixed(6)} ${params.debtSymbol}\n` +
-    `*Mínimo para enviar:* ${params.minAmountNeeded.toFixed(6)} ${params.debtSymbol}\n` +
+    `*Dívida total:* ${params.debtAmount.toFixed(4)} ${params.debtSymbol}\n` +
+    `*Bot consegue pagar:* ${(params.debtAmount - params.minAmountNeeded).toFixed(4)} ${params.debtSymbol}\n` +
+    `*Você precisa enviar:* ${params.minAmountNeeded.toFixed(4)} ${params.debtSymbol}\n` +
     `*Token (mint):* \`${params.debtMint}\`\n\n` +
     `Envie o valor acima para a wallet indicada.\n` +
     `Assim que o saldo for detectado, o bot quitará a dívida automaticamente e registrará a devolução pendente na interface.`;
