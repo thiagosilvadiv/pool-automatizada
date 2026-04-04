@@ -3682,16 +3682,23 @@ export class OrcaBot {
         this.setKaminoState({ ...state, lastError: "PnL da pool indisponivel; aguardando." });
         return false;
       }
-      let ready = true;
-      let currentCollateralUsd = 0;
-      let debtUsd = 0;
+      // ── Avaliação individual por colateral ────────────────────────────────
+      // Calcula quais colaterais atingiram o target e quais ainda não atingiram.
+      type EntryEval = {
+        entry: KaminoCollateralEntry;
+        priceUsd: number;
+        target: number;
+        ready: boolean;
+      };
+      const evaluated: EntryEval[] = [];
       for (const entry of collaterals) {
         const target = rule === "breakeven"
           ? entry.avgPriceUsdc
           : (entry.targetPriceUsdc ?? null);
         if (!target || target <= 0) {
-          ready = false;
-          break;
+          // Colateral sem target definido: nunca fecha sozinho, aguarda.
+          evaluated.push({ entry, priceUsd: 0, target: 0, ready: false });
+          continue;
         }
         const decimals = await this.getTokenDecimals(entry.mint);
         const priceUsd = await this.getTokenUsdPrice({
@@ -3700,40 +3707,52 @@ export class OrcaBot {
           stableMint: stable.mint,
           stableDecimals: stable.decimals
         });
-        if (priceUsd == null || priceUsd < target) {
-          ready = false;
-          break;
+        if (priceUsd == null) {
+          evaluated.push({ entry, priceUsd: 0, target, ready: false });
+          continue;
         }
-        currentCollateralUsd += priceUsd * (entry.amount ?? 0);
-        if (entry.debtUsd != null) {
-          debtUsd += entry.debtUsd;
-        }
+        evaluated.push({ entry, priceUsd, target, ready: priceUsd >= target });
       }
-      if (debtUsd <= 0 && state.debtUsd != null) {
-        debtUsd = state.debtUsd;
+
+      const readyEntries = evaluated.filter((e) => e.ready);
+      const pendingEntries = evaluated.filter((e) => !e.ready);
+      const allReady = pendingEntries.length === 0 && readyEntries.length > 0;
+
+      // ── Nenhum colateral atingiu o target → nada a fazer ─────────────────
+      if (readyEntries.length === 0) {
+        return false;
       }
-      if (ready && hasPosition) {
-        const kaminoNetUsd = currentCollateralUsd - debtUsd;
-        if (Number.isFinite(kaminoNetUsd) && poolPnlNoFeesUsd != null) {
-          const combinedNetUsd = kaminoNetUsd + poolPnlNoFeesUsd;
-          if (combinedNetUsd < 0) {
-            this.setKaminoState({
-              ...state,
-              lastError: `Fechamento Kamino bloqueado: PnL combinado negativo (${combinedNetUsd.toFixed(2)} USD)`
-            });
-            this.queueKaminoLog(
-              "close-blocked",
-              `Fechamento Kamino bloqueado: PnL combinado negativo (${combinedNetUsd.toFixed(2)} USD)`,
-              "warn"
-            );
-            return false;
+
+      // ── TODOS atingiram → fecha o ciclo inteiro (caminho original) ────────
+      if (allReady) {
+        const currentCollateralUsd = readyEntries.reduce(
+          (sum, e) => sum + e.priceUsd * (e.entry.amount ?? 0), 0
+        );
+        const debtUsd = evaluated.reduce(
+          (sum, e) => sum + (e.entry.debtUsd ?? 0), 0
+        ) || (state.debtUsd ?? 0);
+
+        if (hasPosition) {
+          const kaminoNetUsd = currentCollateralUsd - debtUsd;
+          if (Number.isFinite(kaminoNetUsd) && poolPnlNoFeesUsd != null) {
+            const combinedNetUsd = kaminoNetUsd + poolPnlNoFeesUsd;
+            if (combinedNetUsd < 0) {
+              this.setKaminoState({
+                ...state,
+                lastError: `Fechamento Kamino bloqueado: PnL combinado negativo (${combinedNetUsd.toFixed(2)} USD)`
+              });
+              this.queueKaminoLog(
+                "close-blocked",
+                `Fechamento Kamino bloqueado: PnL combinado negativo (${combinedNetUsd.toFixed(2)} USD)`,
+                "warn"
+              );
+              return false;
+            }
           }
         }
-      }
-      if (ready) {
         logger.info(
           { rule, collaterals: collaterals.map((item) => item.mint) },
-          "kamino target atingido; fechando ciclo"
+          "kamino target atingido (todos); fechando ciclo completo"
         );
         const closed = await this.closeKaminoCycle("target");
         if (closed) {
@@ -3742,6 +3761,30 @@ export class OrcaBot {
         }
         return false;
       }
+
+      // ── PARCIAL: apenas alguns colaterais atingiram o target ──────────────
+      // Não fecha colateral parcial se a pool ainda está aberta com posição ativa,
+      // pois o closeKaminoCycle fecha a posição antes de repagar.
+      // Fechamento parcial só é seguro quando não há posição aberta.
+      if (hasPosition) {
+        // Há posição aberta e nem todos atingiram: aguarda todos para fechar junto.
+        return false;
+      }
+
+      // Sem posição aberta → pode fechar cada colateral que atingiu o target.
+      let anyPartialClosed = false;
+      for (const ev of readyEntries) {
+        logger.info(
+          { rule, mint: ev.entry.mint, priceUsd: ev.priceUsd, target: ev.target },
+          "kamino partial close: colateral atingiu target"
+        );
+        const partialClosed = await this.closeKaminoCollateralPartial(ev.entry.mint);
+        if (partialClosed) {
+          anyPartialClosed = true;
+          this.lastStatus.lastAction = "kamino-partial-close";
+        }
+      }
+      return anyPartialClosed;
     } catch (err) {
       logger.warn({ err }, "falha ao avaliar fechamento kamino");
       this.setKaminoState({ ...state, lastError: stringifyError(err) });
@@ -4881,6 +4924,234 @@ export class OrcaBot {
     this.releaseKaminoLockIfOwned();
     this.queueKaminoLog("close", "Ciclo Kamino fechado (repay + withdraw).", "info");
     logger.info({ mode }, "kamino cycle closed");
+    return true;
+  }
+
+  /**
+   * Fecha apenas UM colateral específico do ciclo Kamino.
+   *
+   * Fluxo:
+   * 1. Calcula quanto da dívida total corresponde a este colateral (proporcional ao debtUsd).
+   * 2. Obtém USDT da wallet para pagar (ou usa repayWithCollateral se wallet insuficiente).
+   * 3. Chama kamino.repay() com o valor proporcional.
+   * 4. Chama kamino.withdraw() para sacar apenas este token.
+   * 5. Atualiza o kaminoState removendo este colateral do array e reduzindo debtAmount.
+   * 6. Se não houver mais colaterais, define active: false.
+   *
+   * Pré-condição: não deve ser chamado com posição de pool aberta.
+   */
+  private async closeKaminoCollateralPartial(mintToClose: string): Promise<boolean> {
+    const state = this.kaminoState;
+    if (!state || !state.active) {
+      logger.warn({ mintToClose }, "closeKaminoCollateralPartial: sem ciclo ativo");
+      return false;
+    }
+
+    const collaterals = Array.isArray(state.collaterals) ? [...state.collaterals] : [];
+    const entryIndex = collaterals.findIndex((c) => c.mint === mintToClose);
+    if (entryIndex === -1) {
+      logger.warn({ mintToClose }, "closeKaminoCollateralPartial: colateral nao encontrado no estado");
+      return false;
+    }
+    const entry = collaterals[entryIndex];
+    const epsilon = 1e-8;
+
+    // ── 1. Calcular proporção da dívida atribuída a este colateral ────────
+    const totalDebtUsdRecorded = collaterals.reduce(
+      (sum, c) => sum + (c.debtUsd ?? 0), 0
+    );
+    // Se não há debtUsd por colateral, distribuir proporcionalmente pelo valor USD.
+    let debtProportion: number;
+    if (totalDebtUsdRecorded > epsilon) {
+      debtProportion = (entry.debtUsd ?? 0) / totalDebtUsdRecorded;
+    } else {
+      // Fallback: proporção pelo valor USD depositado
+      const totalUsd = collaterals.reduce((sum, c) => sum + (c.usd ?? 0), 0);
+      debtProportion = totalUsd > epsilon ? (entry.usd ?? 0) / totalUsd : 1 / collaterals.length;
+    }
+    debtProportion = Math.min(1, Math.max(0, debtProportion));
+
+    // ── 2. Resolver quanto de dívida on-chain corresponde a este colateral ─
+    const resolved = await this.resolveKaminoPositionWithFallback();
+    const kamino = resolved.kamino;
+    const position = resolved.position;
+
+    const onChainBorrows = new Map<string, number>();
+    (position?.borrows ?? []).forEach((item) => {
+      if (!item?.mint) return;
+      onChainBorrows.set(item.mint, (onChainBorrows.get(item.mint) ?? 0) + Number(item.amount ?? 0));
+    });
+    const onChainDeposits = new Map<string, number>();
+    (position?.deposits ?? []).forEach((item) => {
+      if (!item?.mint) return;
+      onChainDeposits.set(item.mint, (onChainDeposits.get(item.mint) ?? 0) + Number(item.amount ?? 0));
+    });
+
+    const debtMint = state.debtMint ?? position?.debtMint ?? null;
+    if (!debtMint) {
+      logger.warn({ mintToClose }, "closeKaminoCollateralPartial: debtMint nao encontrado");
+      return false;
+    }
+
+    const totalOnChainDebt = onChainBorrows.get(debtMint) ?? Number(state.debtAmount ?? 0);
+    const repayAmount = totalOnChainDebt * debtProportion;
+
+    this.queueKaminoLog(
+      "partial-close-start",
+      `Iniciando fechamento parcial: ${mintToClose} | proporcao divida: ${(debtProportion * 100).toFixed(2)}% | repay: ${repayAmount.toFixed(8)} ${debtMint}`,
+      "info"
+    );
+
+    // ── 3. Quitar a parte proporcional da dívida ──────────────────────────
+    if (repayAmount > epsilon) {
+      const stable = await this.getStableMintInfoByMint(debtMint, this.getStableLabelForMint(debtMint));
+      let stableBalance = await this.getWalletTokenBalance(stable.mint);
+
+      // 3a. Tentar pagar com saldo da wallet primeiro
+      if (stableBalance >= repayAmount - epsilon) {
+        try {
+          await this.kaminoCallWithRetry(
+            () => kamino.repay({ mint: stable.mint, amount: repayAmount }),
+            "kamino-partial-repay"
+          );
+          this.queueHistoryAction("kamino-repay");
+          this.queueKaminoLog(
+            "partial-repay-done",
+            `Repay parcial concluido: ${repayAmount.toFixed(8)} ${stable.mint}`,
+            "info"
+          );
+        } catch (repayErr) {
+          const msg = stringifyError(repayErr);
+          this.queueKaminoLog("partial-repay-failed", `Repay parcial falhou: ${msg}`, "error");
+          this.setKaminoState({ ...state, lastError: `Repay parcial falhou: ${msg}` });
+          return false;
+        }
+      } else {
+        // 3b. Saldo insuficiente na wallet — tentar repayWithCollateral do próprio token
+        this.queueKaminoLog(
+          "partial-repay-coll",
+          `Saldo wallet insuficiente (${stableBalance.toFixed(8)}); tentando repay com colateral ${mintToClose}.`,
+          "warn"
+        );
+        const onChainCollAmount = onChainDeposits.get(mintToClose) ?? (entry.amount ?? 0);
+        if (onChainCollAmount <= epsilon) {
+          this.queueKaminoLog("partial-repay-failed", "Colateral on-chain zerado; abortando fechamento parcial.", "error");
+          this.setKaminoState({ ...state, lastError: "Colateral on-chain zerado para fechamento parcial" });
+          return false;
+        }
+        try {
+          await this.kaminoCallWithRetry(
+            () => kamino.repayWithCollateral({
+              collateralMint: mintToClose,
+              debtMint: stable.mint,
+              repayAmount,
+              slippageBps: this.config.slippageBps ?? 50
+            }),
+            "kamino-partial-repay-coll"
+          );
+          this.queueHistoryAction("kamino-repay");
+          this.queueKaminoLog(
+            "partial-repay-done",
+            `Repay parcial com colateral concluido: ${repayAmount.toFixed(8)} ${stable.mint}`,
+            "info"
+          );
+        } catch (repayErr) {
+          const msg = stringifyError(repayErr);
+          this.queueKaminoLog("partial-repay-failed", `Repay parcial com colateral falhou: ${msg}`, "error");
+          this.setKaminoState({ ...state, lastError: `Repay parcial com colateral falhou: ${msg}` });
+          return false;
+        }
+      }
+    }
+
+    // ── 4. Sacar apenas este colateral ────────────────────────────────────
+    const withdrawAmount = Math.min(
+      entry.amount ?? 0,
+      onChainDeposits.get(mintToClose) ?? (entry.amount ?? 0)
+    );
+    if (withdrawAmount > epsilon) {
+      try {
+        await this.kaminoCallWithRetry(
+          () => kamino.withdraw({ mint: mintToClose, amount: withdrawAmount }),
+          "kamino-partial-withdraw"
+        );
+        this.queueHistoryAction("kamino-withdraw");
+        this.queueKaminoLog(
+          "partial-withdraw-done",
+          `Saque parcial concluido: ${withdrawAmount.toFixed(8)} ${mintToClose}`,
+          "info"
+        );
+      } catch (withdrawErr) {
+        const msg = stringifyError(withdrawErr);
+        const msgLower = msg.toLowerCase();
+        // Obrigação já vazia on-chain (outro retry ou tx anterior confirmada) → ok
+        if (
+          msgLower.includes("0x1784") ||
+          msgLower.includes("obligationdepositsempty") ||
+          msgLower.includes("has no deposits") ||
+          msgLower.includes("6020")
+        ) {
+          this.queueKaminoLog("partial-withdraw-done", "Withdraw parcial ignorado: obrigacao ja vazia.", "warn");
+        } else {
+          this.queueKaminoLog("partial-withdraw-failed", `Saque parcial falhou: ${msg}`, "error");
+          this.setKaminoState({ ...state, lastError: `Saque parcial falhou: ${msg}` });
+          return false;
+        }
+      }
+    }
+
+    // ── 5. Atualizar o estado removendo este colateral ────────────────────
+    const remainingCollaterals = collaterals.filter((_, idx) => idx !== entryIndex);
+    const remainingDebtAmount = Math.max(0, Number(state.debtAmount ?? 0) - repayAmount);
+    const remainingDebtUsd = Math.max(0,
+      remainingCollaterals.reduce((sum, c) => sum + (c.debtUsd ?? 0), 0)
+    );
+    const remainingCollateralUsd = remainingCollaterals.reduce(
+      (sum, c) => sum + (c.usd ?? 0), 0
+    );
+    const single = remainingCollaterals.length === 1 ? remainingCollaterals[0] : null;
+
+    // ── 6. Definir active: false se não houver mais colaterais ────────────
+    const stillActive = remainingCollaterals.length > 0;
+
+    const nextState: KaminoCycleState = {
+      ...state,
+      active: stillActive,
+      collateralMint: single ? single.mint : (stillActive ? (state.collateralMint ?? null) : null),
+      collateralAmount: single ? (single.amount ?? 0) : (stillActive ? state.collateralAmount : 0),
+      collateralUsd: remainingCollateralUsd > 0 ? remainingCollateralUsd : null,
+      debtAmount: remainingDebtAmount,
+      debtUsd: remainingDebtUsd > 0 ? remainingDebtUsd : null,
+      avgPriceUsdc: single ? single.avgPriceUsdc : null,
+      targetPriceUsdc: single ? single.targetPriceUsdc : null,
+      collaterals: remainingCollaterals,
+      repayRetryUntil: null,
+      repayRetryAttempts: 0,
+      repayRetryReason: null,
+      updatedAt: new Date().toISOString(),
+      lastError: null
+    };
+    this.setKaminoState(nextState);
+
+    if (!stillActive) {
+      this.releaseKaminoLockIfOwned();
+      this.queueKaminoLog(
+        "partial-close-done",
+        `Ultimo colateral fechado (${mintToClose}); ciclo Kamino encerrado.`,
+        "info"
+      );
+    } else {
+      this.queueKaminoLog(
+        "partial-close-done",
+        `Colateral ${mintToClose} fechado. Ciclo continua com ${remainingCollaterals.length} colateral(is) restante(s).`,
+        "info"
+      );
+    }
+
+    logger.info(
+      { mintToClose, remainingCollaterals: remainingCollaterals.map((c) => c.mint), stillActive },
+      "kamino partial close concluido"
+    );
     return true;
   }
 
