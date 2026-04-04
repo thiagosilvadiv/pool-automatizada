@@ -173,8 +173,31 @@ export async function performSplitRepayWithCollateralHelper(params: {
       withdrawAttempts += 1;
       const message = stringifyError(err);
       const lower = message.toLowerCase();
-      if (lower.includes("withdrawtoolarge") || lower.includes("withdraw too large") || lower.includes("6011")) {
-        collNeeded = Math.max(minWithdraw, collNeeded / 2);
+      if (
+        lower.includes("withdrawtoolarge") ||
+        lower.includes("withdraw too large") ||
+        lower.includes("6011") ||
+        lower.includes("0x177b")
+      ) {
+        let maxWithdrawFromError: number | null = null;
+        try {
+          const decoded = decodeURIComponent(message);
+          const matchMax = decoded.match(/max_withdraw_value[=\s:]+([0-9]+(?:\.[0-9]+)?)/i);
+          if (matchMax) {
+            const parsed = parseFloat(matchMax[1]);
+            if (Number.isFinite(parsed) && parsed > 0) {
+              maxWithdrawFromError = parsed;
+            }
+          }
+        } catch {
+          // ignore
+        }
+        if (maxWithdrawFromError != null) {
+          const priceFactor = priceCollToDebt > 0 ? priceCollToDebt : 1;
+          collNeeded = Math.max(minWithdraw, (maxWithdrawFromError * 0.85) / priceFactor);
+        } else {
+          collNeeded = Math.max(minWithdraw, collNeeded / 2);
+        }
         if (withdrawAttempts >= maxWithdrawAttempts) {
           return { performed: false, error: message };
         }
@@ -3542,7 +3565,7 @@ export class OrcaBot {
     const capacityBuffer = 0.95;
     let maxChunkOverride: number | null = null;
     let chunkReductions = 0;
-    const maxChunkReductions = 10;
+    const maxChunkReductions = 20;
 
     const refreshPosition = async (): Promise<void> => {
       try {
@@ -3714,10 +3737,12 @@ export class OrcaBot {
             lower.includes("too large") ||
             lower.includes("versionedtransaction too large") ||
             lower.includes("invalid params") ||
-            // Solana error #-32602 = RPC rejeitou a tx por tamanho ou params inválidos.
-            // O @solana/kit formata como "Solana error #-32602" sem a string "invalid params".
             lower.includes("-32602") ||
-            lower.includes("error #-32602")
+            lower.includes("error #-32602") ||
+            lower.includes("withdrawtoolarge") ||
+            lower.includes("withdraw too large") ||
+            lower.includes("6011") ||
+            lower.includes("0x177b")
           ) {
             this.kaminoTooLargeSeen = true;
             chunkReductions += 1;
@@ -3731,30 +3756,29 @@ export class OrcaBot {
                   kaminoMaxWithdrawUsd = parsed;
                 }
               }
-            } catch {
-              // ignorar falha no decode
-            }
-            const adjusted: number = (() => {
-              if (kaminoMaxWithdrawUsd != null) {
-                const safeUsd = kaminoMaxWithdrawUsd * 0.9;
-                const asStable = safeUsd;
-                return Math.max(KAMINO_REPAY_MIN_STABLE, asStable);
-              }
-              return maxChunkOverride != null
-                ? Math.max(KAMINO_REPAY_MIN_STABLE, maxChunkOverride / 2)
-                : Math.max(KAMINO_REPAY_MIN_STABLE, debtRemaining / 3);
-            })();
-            this.queueKaminoLog(
-              "repay-with-collateral",
-              `Transacao recusada por tamanho; ajustando chunk max para ${adjusted.toFixed(8)}. Detalhe: ${message}`,
-              "warn"
-            );
-            usedCandidate = true;
-            if (chunkReductions <= maxChunkReductions) {
-              maxChunkOverride = adjusted;
-            }
-            break;
+          } catch {
+            // ignorar falha no decode
           }
+          const adjusted: number = (() => {
+            if (kaminoMaxWithdrawUsd != null) {
+              const safeUsd = kaminoMaxWithdrawUsd * 0.85;
+              return Math.max(KAMINO_REPAY_MIN_STABLE, safeUsd);
+            }
+            return maxChunkOverride != null
+              ? Math.max(KAMINO_REPAY_MIN_STABLE, maxChunkOverride * 0.5)
+              : Math.max(KAMINO_REPAY_MIN_STABLE, debtRemaining / 12);
+          })();
+          this.queueKaminoLog(
+            "repay-with-collateral",
+            `Transacao recusada por tamanho; ajustando chunk max para ${adjusted.toFixed(8)}. Detalhe: ${message}`,
+            "warn"
+          );
+          usedCandidate = true;
+          if (chunkReductions <= maxChunkReductions) {
+            maxChunkOverride = adjusted;
+          }
+          break;
+        }
           if (this.isKaminoRetryableError(message)) {
           this.queueKaminoLog("repay-with-collateral-failed", message, "warn");
           await refreshPosition();
