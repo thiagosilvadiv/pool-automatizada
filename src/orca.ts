@@ -1491,7 +1491,47 @@ export class OrcaBot {
       return { ok: false, reason: message };
     }
 
-    this.resetPositionAnchors();
+    // Acumula o valor USD adicionado ao positionEntryUsd antes de resetar os anchors.
+    // Isso garante que o PnL no fechamento reflita o custo TOTAL depositado
+    // na posição (abertura + todos os add-liquidity), não apenas o inicial.
+    try {
+      const solUsd = solUsdPrice ?? null;
+      let addedUsd: number | null = null;
+      if (solUsd != null && this.poolState) {
+        if (this.poolState.isTokenBSol) {
+          addedUsd = (requiredB + requiredA * price) * solUsd;
+        } else if (this.poolState.isTokenASol) {
+          addedUsd = (requiredA + requiredB / price) * solUsd;
+        }
+      }
+      if (addedUsd != null && Number.isFinite(addedUsd) && addedUsd > 0) {
+        const previousEntry = this.positionEntryUsd ?? this.lastStatus.positionEntryUsd ?? null;
+        const accumulatedEntry = (previousEntry != null && Number.isFinite(previousEntry))
+          ? previousEntry + addedUsd
+          : addedUsd;
+        // Reseta apenas os anchors de valor interno (para que positionPnl seja
+        // calculado a partir do novo ponto), mas preserva o entry acumulado.
+        this.initialPositionValue = null;
+        this.initialPositionValueSol = null;
+        this.lastPositionValueUsdWithFees = null;
+        // Seta o entry acumulado antes de updatePortfolioSnapshot, que só
+        // atribuirá positionEntryUsd se this.positionEntryUsd for null.
+        // Como forçamos o valor acumulado aqui, ele será preservado.
+        this.positionEntryUsd = accumulatedEntry;
+        this.lastStatus.positionEntryUsd = accumulatedEntry;
+        this.lastStatus.positionPnlUsd = null;
+        logger.info(
+          { previousEntry, addedUsd, accumulatedEntry },
+          "add-liquidity: positionEntryUsd acumulado"
+        );
+      } else {
+        // Sem preço USD disponível: comportamento anterior (reset completo).
+        this.resetPositionAnchors();
+      }
+    } catch (anchorErr) {
+      logger.warn({ err: anchorErr }, "falha ao acumular positionEntryUsd no add-liquidity; usando reset");
+      this.resetPositionAnchors();
+    }
     await this.updatePortfolioSnapshot(price, solUsdPrice);
     this.lastStatus.lastAction = "add-liquidity";
     this.lastStatus.positionMint = this.currentPositionMint;
