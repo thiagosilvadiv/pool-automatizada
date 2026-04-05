@@ -1412,9 +1412,10 @@ export class OrcaBot {
       const avgBasis = this.config.kaminoAvgPriceBasis ?? "deposit";
       const avgMode = this.config.kaminoAvgMode ?? "cumulative";
       const previous = this.kaminoState;
-      const baseAmount = avgMode === "reset" ? 0 : (previous?.collateralAmount ?? 0);
-      const baseUsd = avgMode === "reset" ? 0 : (previous?.collateralUsd ?? 0);
-      const baseDebtUsd = avgMode === "reset" ? 0 : (previous?.debtUsd ?? 0);
+      const isNewCycle = !previous?.active || (previous?.collateralAmount ?? 0) === 0;
+      const baseAmount = avgMode === "reset" || isNewCycle ? 0 : (previous?.collateralAmount ?? 0);
+      const baseUsd = avgMode === "reset" || isNewCycle ? 0 : (previous?.collateralUsd ?? 0);
+      const baseDebtUsd = avgMode === "reset" || isNewCycle ? 0 : (previous?.debtUsd ?? 0);
       const nextAmount = baseAmount + amount;
       // Calcula USD do depósito usando o preço USD real do token de colateral.
       // Para SOL (NATIVE_MINT), usa solUsdPrice (Pyth). Para outros tokens,
@@ -1448,15 +1449,42 @@ export class OrcaBot {
       } catch (err) {
         logger.warn({ err }, "falha ao obter preco USD do colateral para avgPriceUsdc; usando fallback");
       }
-      // Fallback: se não conseguiu preço real, usa o borrowUsd como estimativa
-      // (só faz sentido se avgBasis === "debt")
-      if (depositedUsd == null && borrowSig && borrowUsd > 0) {
+      // Fallbacks robustos para SOL: tenta novamente buscar preço; depois usa cache; evita usar borrowUsd.
+      if (depositedUsd == null && mint === NATIVE_MINT.toBase58()) {
+        for (let attempt = 0; attempt < 3 && depositedUsd == null; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+          try {
+            const retryPrice = await this.tryGetSolUsdPrice();
+            if (retryPrice != null) {
+              depositedUsd = retryPrice * amount;
+            }
+          } catch {
+            // continua tentando
+          }
+        }
+      }
+      if (depositedUsd == null && mint === NATIVE_MINT.toBase58()) {
+        const cachedSolPrice = this.lastStatus.solUsdPrice;
+        if (cachedSolPrice != null && cachedSolPrice > 0) {
+          depositedUsd = cachedSolPrice * amount;
+          logger.warn({ cachedSolPrice, amount }, "avgPriceUsdc: usando solUsdPrice cacheado como fallback");
+        }
+      }
+      // Fallback de último recurso: usar borrowUsd apenas para tokens não-SOL
+      if (depositedUsd == null && borrowSig && borrowUsd > 0 && mint !== NATIVE_MINT.toBase58()) {
         depositedUsd = borrowUsd; // estimativa grosseira; será corrigida no próximo ciclo
       }
       const nextUsd = baseUsd + (depositedUsd ?? 0);
       const nextDebtUsd = baseDebtUsd + (borrowSig ? borrowUsd : 0);
       const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
       const avgPriceUsdc = nextAmount > 0 && avgNumerator > 0 ? avgNumerator / nextAmount : null;
+      // Sanidade: para SOL, preço médio precisa estar num range plausível
+      if (mint === NATIVE_MINT.toBase58() && avgPriceUsdc != null) {
+        if (avgPriceUsdc < 50 || avgPriceUsdc > 5000) {
+          logger.error({ avgPriceUsdc, depositedUsd, amount, nextUsd }, "avgPriceUsdc fora do range esperado para SOL; abortando ciclo");
+          throw new Error(`avgPriceUsdc inválido para SOL: ${avgPriceUsdc.toFixed(2)}`);
+        }
+      }
       const poolLossUsd = (() => {
         const pnl = this.lastStatus.positionPnlUsd ?? null;
         if (pnl != null && Number.isFinite(pnl) && pnl < 0) return Math.abs(pnl);
@@ -3073,6 +3101,19 @@ export class OrcaBot {
             stableMint: stable.mint,
             stableDecimals: stable.decimals
           });
+          if (entry.mint === NATIVE_MINT.toBase58() && currentPriceUsdc != null) {
+            const pythSolPrice = this.lastStatus.solUsdPrice;
+            if (pythSolPrice != null && pythSolPrice > 0) {
+              const deviation = Math.abs(currentPriceUsdc - pythSolPrice) / pythSolPrice;
+              if (deviation > 0.20) {
+                logger.warn(
+                  { currentPriceUsdc, pythSolPrice, deviation },
+                  "currentPriceUsdc para SOL desviou >20% do Pyth; usando preço Pyth"
+                );
+                currentPriceUsdc = pythSolPrice;
+              }
+            }
+          }
           const target = entry.targetPriceUsdc ?? null;
           if (currentPriceUsdc != null && target != null && target > 0) {
             const rawGap = (target - currentPriceUsdc) / target;
@@ -7060,6 +7101,14 @@ export class OrcaBot {
     } else if (this.poolState.isTokenASol && price > 0) {
       portfolioValueSol = totalA + totalB / price + (feesValueSol ?? 0);
     }
+    const MAX_SANE_PORTFOLIO_SOL = 10_000;
+    if (portfolioValueSol != null && portfolioValueSol > MAX_SANE_PORTFOLIO_SOL) {
+      logger.error(
+        { portfolioValueSol, totalA, totalB, price, feesValueSol },
+        "portfolioValueSol absurdo; descartando snapshot de portfolio"
+      );
+      portfolioValueSol = null;
+    }
 
     this.lastStatus.tokenABalance = walletBalances.tokenA;
     this.lastStatus.tokenBBalance = walletBalances.tokenB;
@@ -7073,9 +7122,19 @@ export class OrcaBot {
       }
       this.lastStatus.pnl = portfolioValueSol - this.initialPortfolioValueSol;
       this.lastStatus.portfolioUsd = solUsdPrice ? portfolioValueSol * solUsdPrice : null;
-      this.lastStatus.pnlUsd = solUsdPrice
-        ? (portfolioValueSol - this.initialPortfolioValueSol) * solUsdPrice
-        : null;
+      if (solUsdPrice) {
+        const rawPnlUsd = (portfolioValueSol - this.initialPortfolioValueSol) * solUsdPrice;
+        const maxSanePnlUsd = (this.config.budgetUsd ?? 100) * 10;
+        if (Math.abs(rawPnlUsd) <= maxSanePnlUsd) {
+          this.lastStatus.pnlUsd = rawPnlUsd;
+        } else {
+          logger.warn({ rawPnlUsd, maxSanePnlUsd }, "pnlUsd descartado por exceder range esperado");
+          this.lastStatus.pnlUsd = null;
+          this.initialPortfolioValueSol = null;
+        }
+      } else {
+        this.lastStatus.pnlUsd = null;
+      }
     } else {
       if (this.initialPortfolioValue === null) {
         this.initialPortfolioValue = portfolioValueTokenB;
@@ -7248,6 +7307,16 @@ export class OrcaBot {
       const rawFeeB = data.feeOwedB ?? data.feesOwedB ?? data.feeOwedTokenB ?? data.feeOwed1 ?? 0;
       feeA = normalizeTokenAmount(rawFeeA, this.poolState.decimalsA);
       feeB = normalizeTokenAmount(rawFeeB, this.poolState.decimalsB);
+    }
+    const maxSaneFeeA = Math.max(tokenA * 10, 1);
+    const maxSaneFeeB = Math.max(tokenB * 10, 1);
+    if (feeA > maxSaneFeeA) {
+      logger.warn({ rawFeeA: feeA, maxSaneFeeA, decimalsA: this.poolState.decimalsA }, "feeA fora do range; descartando");
+      feeA = 0;
+    }
+    if (feeB > maxSaneFeeB) {
+      logger.warn({ rawFeeB: feeB, maxSaneFeeB, decimalsB: this.poolState.decimalsB }, "feeB fora do range; descartando");
+      feeB = 0;
     }
     return { tokenA, tokenB, feeA, feeB };
   }
@@ -7756,7 +7825,13 @@ function toUiAmount(value: any, decimals: number): number {
     return 0;
   }
   if (typeof value === "number") {
+    if (Number.isInteger(value) && value >= 1000 && decimals > 0) {
+      return value / 10 ** decimals;
+    }
     return value;
+  }
+  if (typeof value === "bigint") {
+    return Number(value) / 10 ** decimals;
   }
   if (Decimal?.isDecimal?.(value)) {
     return value.toNumber();
