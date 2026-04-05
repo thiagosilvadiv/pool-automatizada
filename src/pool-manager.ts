@@ -8,7 +8,7 @@ import { createKaminoClient } from "./kamino-client.js";
 import { OrcaBot } from "./orca.js";
 import { BotRunner } from "./runner.js";
 import type { HistoryEvent } from "./runner.js";
-import { logger } from "./logger.js";
+import { logger, stringifyError } from "./logger.js";
 import { BalanceCoordinator } from "./balance-coordinator.js";
 import {
   createHistoryStore,
@@ -30,13 +30,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const DEFAULT_USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
-
-function stringifyError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
-}
 
 function isRateLimitError(err: unknown): boolean {
   const raw: any = err as any;

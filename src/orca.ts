@@ -8026,13 +8026,6 @@ function isUsdMagnitudeSane(value: number, budgetUsd: number | null, portfolioUs
   return isMagnitudeSane(value, reference);
 }
 
-function stringifyError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
-}
-
 const MAX_U64 = 18_446_744_073_709_551_615n;
 
 function isValidU64(value: bigint): boolean {
