@@ -3452,6 +3452,15 @@ export class OrcaBot {
         if (onChainDebt <= epsilon) {
           if (onChainCollateral > epsilon || dustAmount > epsilon) {
             const dustTotal = onChainCollateral > epsilon ? onChainCollateral : dustAmount;
+            let reconciledUsd: number | null = null;
+            try {
+              const mint = position.collateralMint ?? this.kaminoState.collateralMint ?? null;
+              if (mint) {
+                reconciledUsd = await this.tryPriceCollateral(mint, dustTotal);
+              }
+            } catch {
+              reconciledUsd = null;
+            }
             this.queueKaminoLog(
               "debt-zero",
               `Divida zerada com colateral residual (${dustTotal.toFixed(8)}); iniciando saque automatico.`,
@@ -3461,6 +3470,10 @@ export class OrcaBot {
               ...this.kaminoState,
               collateralMint: position.collateralMint ?? this.kaminoState.collateralMint ?? null,
               collateralAmount: onChainCollateral > epsilon ? onChainCollateral : dustTotal,
+              collateralUsd: reconciledUsd ?? this.kaminoState.collateralUsd ?? null,
+              avgPriceUsdc: reconciledUsd != null && dustTotal > 0
+                ? reconciledUsd / dustTotal
+                : this.kaminoState.avgPriceUsdc ?? null,
               debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
               debtAmount: 0,
               reservedCollateralDust: dustTotal,
@@ -3506,6 +3519,8 @@ export class OrcaBot {
             active: false,
             collateralMint: position.collateralMint ?? this.kaminoState.collateralMint ?? null,
             collateralAmount: onChainCollateral,
+            collateralUsd: this.kaminoState.collateralUsd ?? null,
+            avgPriceUsdc: this.kaminoState.avgPriceUsdc ?? null,
             debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
             debtAmount: 0,
             reservedCollateralDust: null,
@@ -3521,10 +3536,23 @@ export class OrcaBot {
         }
 
         if (onChainDebt + epsilon < recordedDebt || onChainCollateral + epsilon < recordedCollateral) {
+          let reconciledUsd: number | null = null;
+          try {
+            const mint = position.collateralMint ?? this.kaminoState.collateralMint ?? null;
+            if (mint) {
+              reconciledUsd = await this.tryPriceCollateral(mint, onChainCollateral);
+            }
+          } catch {
+            reconciledUsd = null;
+          }
           const updated: KaminoCycleState = {
             ...this.kaminoState,
             collateralMint: position.collateralMint ?? this.kaminoState.collateralMint ?? null,
             collateralAmount: onChainCollateral,
+            collateralUsd: reconciledUsd ?? this.kaminoState.collateralUsd ?? null,
+            avgPriceUsdc: reconciledUsd != null && onChainCollateral > 0
+              ? reconciledUsd / onChainCollateral
+              : this.kaminoState.avgPriceUsdc ?? null,
             debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
             debtAmount: onChainDebt,
             collaterals: recoveredCollaterals,
@@ -3549,6 +3577,21 @@ export class OrcaBot {
     }
     const ownerPoolId = this.poolId ?? previous?.ownerPoolId ?? null;
     const ownerPoolName = this.poolName ?? previous?.ownerPoolName ?? null;
+    let reconstructedUsd: number | null = null;
+    let reconstructedAvg: number | null = null;
+    try {
+      const mint = position?.collateralMint ?? null;
+      const amount = Number(position?.collateralAmount ?? 0);
+      if (mint && amount > 0) {
+        reconstructedUsd = await this.tryPriceCollateral(mint, amount);
+        if (reconstructedUsd != null) {
+          reconstructedAvg = reconstructedUsd / amount;
+        }
+      }
+    } catch {
+      reconstructedUsd = null;
+      reconstructedAvg = null;
+    }
     const nextState: KaminoCycleState = {
       active: true,
       ownerPoolId,
@@ -3561,11 +3604,11 @@ export class OrcaBot {
       reservedCollateralDust: previous?.reservedCollateralDust ?? null,
       collateralMint: position?.collateralMint ?? null,
       collateralAmount: position?.collateralAmount ?? 0,
-      collateralUsd: null,
+      collateralUsd: reconstructedUsd,
       debtMint: position?.debtMint ?? null,
       debtAmount: position?.debtAmount ?? 0,
       debtUsd: null,
-      avgPriceUsdc: null,
+      avgPriceUsdc: reconstructedAvg,
       targetPriceUsdc: null,
       collaterals: recoveredCollaterals,
       cycleCount: Math.max(previous?.cycleCount ?? 0, 1),
@@ -3820,6 +3863,27 @@ export class OrcaBot {
     stableDecimals: number;
   }): Promise<number | null> {
     return this.getTokenUsdValue({ ...input, amountUi: 1 });
+  }
+
+  private async tryPriceCollateral(mint: string, amountUi: number): Promise<number | null> {
+    if (!Number.isFinite(amountUi) || amountUi <= 0) return null;
+    try {
+      if (mint === NATIVE_MINT.toBase58()) {
+        const solPrice = await this.tryGetSolUsdPrice();
+        return solPrice != null ? solPrice * amountUi : null;
+      }
+      const decimals = await this.getTokenDecimals(mint);
+      const stable = await this.getStableMintInfo();
+      const price = await this.getTokenUsdPrice({
+        mint,
+        decimals,
+        stableMint: stable.mint,
+        stableDecimals: stable.decimals
+      });
+      return price != null ? price * amountUi : null;
+    } catch {
+      return null;
+    }
   }
 
   private async estimateStableOutForCollateral(input: {
