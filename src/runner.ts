@@ -430,8 +430,8 @@ export class BotRunner {
       amount: dep.amount,
       usd: null,
       debtUsd: null,
-      avgPriceUsdc: null,
-      targetPriceUsdc: null
+      avgPriceUsdc: dep.avgPriceUsdc ?? null,
+      targetPriceUsdc: dep.targetPriceUsdc ?? null
     }));
     const borrowMints = Array.from(new Set(borrows.map((bor) => bor.mint).filter(Boolean)));
     const debtMint = borrowMints.length === 1 ? borrowMints[0] : null;
@@ -448,8 +448,8 @@ export class BotRunner {
       debtMint,
       debtAmount: debtMint ? debtAmount : 0,
       debtUsd: loan.debtUsd ?? null,
-      avgPriceUsdc: null,
-      targetPriceUsdc: null,
+      avgPriceUsdc: loan.avgPriceUsdc ?? single?.avgPriceUsdc ?? null,
+      targetPriceUsdc: loan.targetPriceUsdc ?? single?.targetPriceUsdc ?? null,
       collaterals,
       cycleCount: Math.max(current?.cycleCount ?? 0, 1),
       updatedAt: new Date().toISOString(),

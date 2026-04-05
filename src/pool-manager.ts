@@ -953,6 +953,29 @@ export class PoolManager {
               targetPriceUsdc: prev?.targetPriceUsdc ?? null
             });
           }
+          // Tentar obter avgPriceUsdc/targetPriceUsdc do kaminoState
+          // interno da pool (mais preciso que o valor do loan anterior).
+          let liveAvgPriceUsdc: number | null = existing?.avgPriceUsdc ?? null;
+          let liveTargetPriceUsdc: number | null = existing?.targetPriceUsdc ?? null;
+          let ownerRecord: PoolRecord | undefined;
+          if (owner.id && this.pools.has(owner.id)) {
+            ownerRecord = this.pools.get(owner.id);
+            if (ownerRecord) {
+              const ownerStatus = ownerRecord.runner.getStatus();
+              if (
+                Number.isFinite(ownerStatus.kaminoAvgPriceUsdc ?? NaN) &&
+                (ownerStatus.kaminoAvgPriceUsdc ?? 0) > 0
+              ) {
+                liveAvgPriceUsdc = ownerStatus.kaminoAvgPriceUsdc!;
+              }
+              if (
+                Number.isFinite(ownerStatus.kaminoTargetPriceUsdc ?? NaN) &&
+                (ownerStatus.kaminoTargetPriceUsdc ?? 0) > 0
+              ) {
+                liveTargetPriceUsdc = ownerStatus.kaminoTargetPriceUsdc!;
+              }
+            }
+          }
           const updated: KaminoLoanEntry = {
             id: existing?.id ?? marketAddress,
             marketAddress,
@@ -960,8 +983,8 @@ export class PoolManager {
             ownerPoolName: owner.name ?? null,
             collateralUsd: usd.collateralUsd,
             debtUsd: usd.debtUsd,
-            avgPriceUsdc: existing?.avgPriceUsdc ?? null,
-            targetPriceUsdc: existing?.targetPriceUsdc ?? null,
+            avgPriceUsdc: liveAvgPriceUsdc,
+            targetPriceUsdc: liveTargetPriceUsdc,
             deposits: depositEntries,
             borrows,
             lastSeenAt: now,
@@ -970,8 +993,15 @@ export class PoolManager {
           nextByMarket.set(marketAddress, updated);
 
           if (owner.id && this.pools.has(owner.id)) {
-            const record = this.pools.get(owner.id);
-            record?.runner.recoverKaminoFromLoan(updated);
+            const record = ownerRecord ?? this.pools.get(owner.id);
+            if (record) {
+              // Não sobrescrever o kaminoState se o runner está executando
+              // uma operação (deposit/borrow em andamento). Isso evita que o
+              // scan sobrescreva avgPriceUsdc com null no meio de um ciclo.
+              if (!record.runner.isBusy()) {
+                record.runner.recoverKaminoFromLoan(updated);
+              }
+            }
           }
         } catch (err) {
           if (isRateLimitError(err)) {

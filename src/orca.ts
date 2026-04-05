@@ -4408,14 +4408,19 @@ export class OrcaBot {
     if (mismatchReasons.length > 0) {
       const canReconcile = borrowMints.length === 0;
       if (canReconcile) {
-        const reconciledCollaterals = Array.from(onChainDeposits.entries()).map(([mint, amount]) => ({
-          mint,
-          amount,
-          usd: null,
-          debtUsd: null,
-          avgPriceUsdc: null,
-          targetPriceUsdc: null
-        }));
+        const reconciledCollaterals = Array.from(onChainDeposits.entries()).map(([mint, amount]) => {
+          const prev = Array.isArray(state.collaterals)
+            ? state.collaterals.find((c) => c.mint === mint)
+            : null;
+          return {
+            mint,
+            amount,
+            usd: null,
+            debtUsd: null,
+            avgPriceUsdc: prev?.avgPriceUsdc ?? null,
+            targetPriceUsdc: prev?.targetPriceUsdc ?? null
+          };
+        });
         const updated: KaminoCycleState = {
           ...state,
           collateralMint: position.collateralMint ?? state.collateralMint ?? null,
@@ -5544,6 +5549,44 @@ export class OrcaBot {
         }
       }
       return "kamino-rebalance-failed";
+    }
+
+    // Marca ciclo como ativo logo após o deposit para evitar que o
+    // scanKaminoLoans sobrescreva o estado durante o retry do borrow.
+    // Este estado parcial (sem debtAmount/avgPriceUsdc) será substituído
+    // pelo estado completo após o borrow completar.
+    if (depositedEntries.length > 0 && !this.kaminoState?.active) {
+      const partialCollaterals = depositedEntries.map((entry) => ({
+        mint: entry.mint,
+        amount: entry.amount,
+        usd: null,
+        debtUsd: null,
+        avgPriceUsdc: null,
+        targetPriceUsdc: null
+      }));
+      const single = partialCollaterals.length === 1 ? partialCollaterals[0] : null;
+      this.setKaminoState({
+        active: true,
+        ownerPoolId: this.poolId ?? null,
+        ownerPoolName: this.poolName ?? null,
+        marketAddress: this.getKaminoMarketAddress(),
+        baselineTokenA: null,
+        baselineTokenB: null,
+        reservedTokenA: null,
+        reservedTokenB: null,
+        collateralMint: single ? single.mint : null,
+        collateralAmount: single ? single.amount : 0,
+        collateralUsd: null,
+        debtMint: null,
+        debtAmount: 0,
+        debtUsd: null,
+        avgPriceUsdc: null,
+        targetPriceUsdc: null,
+        collaterals: partialCollaterals,
+        cycleCount: (this.kaminoState?.cycleCount ?? 0) + 1,
+        updatedAt: new Date().toISOString(),
+        lastError: "Deposit realizado; aguardando borrow."
+      });
     }
 
     const totalDepositUsd = deposits.reduce((sum, entry) => sum + (entry.depositUsd ?? 0), 0);
