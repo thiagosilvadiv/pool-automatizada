@@ -1,7 +1,13 @@
-﻿import { Connection, LAMPORTS_PER_SOL, PublicKey, VersionedTransaction } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync, getMint, TOKEN_PROGRAM_ID, NATIVE_MINT } from "@solana/spl-token";
-import { Transaction } from "@solana/web3.js";
-import { createAssociatedTokenAccountInstruction } from "@solana/spl-token";
+﻿import { Connection, LAMPORTS_PER_SOL, PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
+import {
+  getAssociatedTokenAddressSync,
+  getMint,
+  TOKEN_PROGRAM_ID,
+  NATIVE_MINT,
+  createAssociatedTokenAccountInstruction,
+  createTransferInstruction,
+  getAccount
+} from "@solana/spl-token";
 import DecimalJs from "decimal.js";
 import * as whirlpoolsSdk from "@orca-so/whirlpools-sdk";
 import * as commonSdk from "@orca-so/common-sdk";
@@ -2487,6 +2493,14 @@ export class OrcaBot {
         await this.maybeSwapFeesToUsdc(feeA, feeB);
       } catch (err) {
         logger.warn({ err }, "swap-fees-to-usdc failed");
+      }
+      // Após o swap, transferir stablecoin para carteira destino se configurada
+      if (this.config.autoSwapFeesToUsdcDestWallet) {
+        try {
+          await this.maybeTransferFeesToDestWallet();
+        } catch (err) {
+          logger.warn({ err }, "transfer-fees-to-dest-wallet failed");
+        }
       }
     }
 
@@ -7136,6 +7150,100 @@ export class OrcaBot {
           "swap-fees-to-usdc executed"
         );
       }
+    }
+  }
+
+  /**
+   * Transfere o saldo de stablecoin (targetMint) para a carteira destino
+   * configurada em autoSwapFeesToUsdcDestWallet, após o swap das fees.
+   * Só é chamado se autoSwapFeesToUsdcDestWallet estiver definido.
+   */
+  private async maybeTransferFeesToDestWallet(): Promise<void> {
+    const destWalletStr = (this.config.autoSwapFeesToUsdcDestWallet ?? "").trim();
+    if (!destWalletStr) {
+      return;
+    }
+
+    const targetMint = (this.config.autoSwapFeesToUsdcTargetMint || "").trim();
+    if (!targetMint) {
+      return;
+    }
+
+    let destPubkey: PublicKey;
+    try {
+      destPubkey = new PublicKey(destWalletStr);
+    } catch {
+      logger.warn({ dest: destWalletStr }, "transfer-fees: endereço destino inválido");
+      return;
+    }
+
+    try {
+      const mintPubkey = new PublicKey(targetMint);
+      const sourceAta = getAssociatedTokenAddressSync(mintPubkey, this.wallet.publicKey);
+      const destAta = getAssociatedTokenAddressSync(mintPubkey, destPubkey);
+
+      // Lê saldo atual da ATA de origem
+      let sourceBalance = 0n;
+      try {
+        const accountInfo = await getAccount(this.connection, sourceAta);
+        sourceBalance = accountInfo.amount;
+      } catch {
+        // Conta não existe ou saldo zero — nada a transferir
+        return;
+      }
+
+      if (sourceBalance <= 0n) {
+        return;
+      }
+
+      const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash("confirmed");
+      const tx = new Transaction({ feePayer: this.wallet.publicKey, recentBlockhash: blockhash });
+
+      // Cria a ATA de destino se ainda não existir
+      let destAtaExists = false;
+      try {
+        await getAccount(this.connection, destAta);
+        destAtaExists = true;
+      } catch {
+        destAtaExists = false;
+      }
+
+      if (!destAtaExists) {
+        tx.add(
+          createAssociatedTokenAccountInstruction(
+            this.wallet.publicKey, // payer
+            destAta,               // ata a criar
+            destPubkey,            // owner da ata
+            mintPubkey             // mint
+          )
+        );
+      }
+
+      // Instrução de transferência
+      tx.add(
+        createTransferInstruction(
+          sourceAta,             // origem
+          destAta,               // destino
+          this.wallet.publicKey, // authority
+          sourceBalance          // quantidade (raw)
+        )
+      );
+
+      const signed = await this.wallet.signTransaction(tx);
+      const sig = await this.connection.sendRawTransaction(signed.serialize(), { maxRetries: 2 });
+      await this.connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
+
+      logger.info(
+        {
+          mint: targetMint,
+          dest: destWalletStr,
+          amount: sourceBalance.toString(),
+          sig
+        },
+        "transfer-fees-to-dest-wallet: transferência concluída"
+      );
+    } catch (err) {
+      logger.warn({ err, dest: destWalletStr }, "transfer-fees-to-dest-wallet: falhou");
     }
   }
 

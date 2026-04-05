@@ -36,6 +36,7 @@ export type Config = {
   autoSwapFeesToUsdcEnabled: boolean;
   autoSwapFeesToUsdcTargetMint: string;
   autoSwapFeesToUsdcMinUsd: number;
+  autoSwapFeesToUsdcDestWallet: string | null;
   autoAddLiquidityEnabled: boolean;
   kaminoRebalanceEnabled: boolean;
   kaminoDepositPct: number;
@@ -483,6 +484,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const envRpcUrl = parseEnvString(process.env.RPC_URL);
   const envWhirlpoolAddress = parseEnvString(process.env.WHIRLPOOL_ADDRESS);
   const envAutoSwapFeesToUsdcTargetMint = parseEnvString(process.env.AUTO_SWAP_FEES_TO_USDC_TARGET_MINT);
+  const envAutoSwapFeesToUsdcDestWallet = parseEnvString(process.env.AUTO_SWAP_FEES_TO_USDC_DEST_WALLET);
   const envJupiterApiKey = parseEnvString(process.env.JUPITER_API_KEY);
   const envJupiterApiUrl = parseEnvString(process.env.JUPITER_API_URL);
   const envKaminoScanIntervalSec = parseEnvNumber(process.env.KAMINO_SCAN_INTERVAL_SEC);
@@ -555,6 +557,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? "",
     autoSwapFeesToUsdcMinUsd: parseEnvNumber(process.env.AUTO_SWAP_FEES_TO_USDC_MIN_USD)
       ?? Number((data as any).autoSwapFeesToUsdcMinUsd ?? 0.5),
+    autoSwapFeesToUsdcDestWallet: envAutoSwapFeesToUsdcDestWallet
+      ?? (data as any).autoSwapFeesToUsdcDestWallet
+      ?? null,
     autoAddLiquidityEnabled: parseEnvBool(process.env.AUTO_ADD_LIQUIDITY_ENABLED)
       ?? Boolean((data as any).autoAddLiquidityEnabled ?? false),
     kaminoRebalanceEnabled: parseEnvBool(process.env.KAMINO_REBALANCE_ENABLED)
@@ -729,6 +734,17 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!config.autoSwapFeesToUsdcTargetMint || !config.autoSwapFeesToUsdcTargetMint.trim()) {
     config.autoSwapFeesToUsdcTargetMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  }
+  // Valida endereço da carteira destino das fees, se fornecido
+  if (config.autoSwapFeesToUsdcDestWallet) {
+    const dest = config.autoSwapFeesToUsdcDestWallet.trim();
+    // Validação básica: endereço Solana tem entre 32 e 44 chars base58
+    if (dest.length < 32 || dest.length > 44) {
+      throw new Error(
+        "AUTO_SWAP_FEES_TO_USDC_DEST_WALLET: endereço Solana inválido (deve ter 32-44 caracteres)"
+      );
+    }
+    config.autoSwapFeesToUsdcDestWallet = dest;
   }
   if (!Number.isFinite(config.autoSwapFeesToUsdcMinUsd) || config.autoSwapFeesToUsdcMinUsd < 0) {
     throw new Error("autoSwapFeesToUsdcMinUsd must be >= 0");
