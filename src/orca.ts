@@ -2927,6 +2927,7 @@ export class OrcaBot {
             lastError: null,
             updatedAt: new Date().toISOString()
           });
+          this.kaminoPoolOpenedAt = null;
           this.releaseKaminoLockIfOwned();
           this.queueKaminoLog(
             "not-found",
@@ -3028,6 +3029,7 @@ export class OrcaBot {
                 updatedAt: new Date().toISOString()
               };
               this.setKaminoState(updated);
+              this.kaminoPoolOpenedAt = null;
               this.releaseKaminoLockIfOwned();
             }
             return;
@@ -3044,6 +3046,7 @@ export class OrcaBot {
             updatedAt: new Date().toISOString()
           };
           this.setKaminoState(updated);
+          this.kaminoPoolOpenedAt = null;
           this.releaseKaminoLockIfOwned();
           this.queueKaminoLog("debt-zero", "Divida Kamino zerada; ciclo pausado localmente.", "warn");
           return;
@@ -5261,6 +5264,7 @@ export class OrcaBot {
     this.setKaminoState(nextState);
 
     if (!stillActive) {
+      this.kaminoPoolOpenedAt = null;
       this.releaseKaminoLockIfOwned();
       this.queueKaminoLog(
         "partial-close-done",
