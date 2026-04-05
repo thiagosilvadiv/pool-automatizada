@@ -4409,7 +4409,7 @@ export class OrcaBot {
       const canReconcile = borrowMints.length === 0;
       if (canReconcile) {
         const reconciledCollaterals = Array.from(onChainDeposits.entries()).map(([mint, amount]) => {
-          const prev = Array.isArray(state.collaterals)
+          const prev = Array.isArray(state?.collaterals)
             ? state.collaterals.find((c) => c.mint === mint)
             : null;
           return {
