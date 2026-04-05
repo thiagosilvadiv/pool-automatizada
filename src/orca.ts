@@ -2947,12 +2947,23 @@ export class OrcaBot {
     return this.getTokenBalances();
   }
 
-  setPositionEntryUsd(value: number | null): void {
-    this.positionEntryUsd = value;
-    this.lastStatus.positionEntryUsd = value;
-  }
+   setPositionEntryUsd(value: number | null): void {
+     this.positionEntryUsd = value;
+     this.lastStatus.positionEntryUsd = value;
+   }
 
-  setError(err: unknown): void {
+   // Correção Bug 2: método público para resetar apenas os anchors de valor
+   // sem apagar o positionEntryUsd restaurado do histórico.
+   // Chamado pelo runner após restaurar entry no auto-resume.
+   resetPositionAnchorsOnResume(): void {
+     this.initialPositionValue = null;
+     this.initialPositionValueSol = null;
+     this.lastPositionValueUsdWithFees = null;
+     this.lastStatus.positionPnlUsd = null;
+     // NÃO zera positionEntryUsd — ele foi restaurado intencionalmente
+   }
+
+   setError(err: unknown): void {
     this.lastStatus.lastError = stringifyError(err);
   }
 
