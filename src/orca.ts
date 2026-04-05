@@ -1382,15 +1382,22 @@ export class OrcaBot {
     // quote falhará. Nesse caso, o auto-add deve ser ignorado —
     // o tick principal do bot vai detectar o out-of-range e rebalancear.
     {
+      const poolState = this.poolState;
+      if (!poolState) {
+        const message = "poolState not initialized";
+        this.setError(message);
+        this.lastStatus.lastAction = "add-liquidity-failed";
+        return { ok: false, reason: message };
+      }
       const lowerPrice = whirlpools.PriceMath.tickIndexToPrice(
         lowerTick,
-        this.poolState.decimalsA,
-        this.poolState.decimalsB
+        poolState.decimalsA,
+        poolState.decimalsB
       );
       const upperPrice = whirlpools.PriceMath.tickIndexToPrice(
         upperTick,
-        this.poolState.decimalsA,
-        this.poolState.decimalsB
+        poolState.decimalsA,
+        poolState.decimalsB
       );
       const lowerNum = toNumber(lowerPrice);
       const upperNum = toNumber(upperPrice);
