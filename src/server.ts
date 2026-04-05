@@ -151,7 +151,14 @@ export async function startServer(config: Config): Promise<void> {
         kaminoSimulated: Boolean(config.dryRun || process.env.KAMINO_NOOP === "true"),
         kaminoOwnerPoolId: null,
         kaminoOwnerPoolName: null,
-        kaminoMarketAddress: null
+        kaminoMarketAddress: null,
+        kaminoHealth: {
+          stuck: false,
+          issues: [],
+          consecutiveErrors: 0,
+          lastProgressAt: null,
+          recentErrors: []
+        }
       });
       return;
     }
@@ -293,6 +300,20 @@ export async function startServer(config: Config): Promise<void> {
     res.json({ loans: poolManager.getKaminoLoans() });
   });
 
+  app.get("/api/pools/:poolId/kamino/health", (req: Request, res: Response) => {
+    try {
+      const rawId = String(req.params.poolId ?? "").trim();
+      const poolId = rawId === "selected" ? poolManager.getSelectedPoolId() : rawId;
+      if (!poolId || !poolManager.hasPool(poolId)) {
+        res.status(404).json({ error: "Pool not found" });
+        return;
+      }
+      res.json(poolManager.getKaminoHealth(poolId));
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   app.post("/api/kamino/markets", async (req: Request, res: Response) => {
     try {
       const name = String(req.body?.name ?? "").trim();
@@ -418,6 +439,7 @@ export async function startServer(config: Config): Promise<void> {
       kaminoMaxLtv: config.kaminoMaxLtv,
       kaminoCloseRule: config.kaminoCloseRule,
       kaminoPriceBufferPct: config.kaminoPriceBufferPct,
+      kaminoMinCombinedPnlUsd: config.kaminoMinCombinedPnlUsd,
       kaminoCollateralMode: config.kaminoCollateralMode,
       kaminoAutoCloseOnTokenChange: config.kaminoAutoCloseOnTokenChange,
       kaminoConvertToCollateral: config.kaminoConvertToCollateral,

@@ -28,6 +28,7 @@ export type KaminoCycleState = {
   baselineTokenB?: number | null;
   reservedTokenA?: number | null;
   reservedTokenB?: number | null;
+  reservedCollateralDust?: number | null;
   collateralMint: string | null;
   collateralAmount: number;
   collateralUsd: number | null;
@@ -40,6 +41,13 @@ export type KaminoCycleState = {
   cycleCount: number;
   updatedAt: string | null;
   lastError?: string | null;
+  lastSuccessfulOperation?: {
+    type: "deposit" | "borrow" | "repay" | "withdraw" | "repay-with-collateral";
+    signature: string;
+    timestamp: string;
+    mint: string;
+    amount: number;
+  } | null;
 };
 
 export type PendingReturn = {

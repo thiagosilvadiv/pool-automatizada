@@ -507,6 +507,10 @@ export class BotRunner {
     return [...this.kaminoLogs].reverse();
   }
 
+  getKaminoHealth(): ReturnType<OrcaBot["getKaminoHealth"]> {
+    return this.bot.getKaminoHealth();
+  }
+
   clearHedgeLogs(): void {
     this.hedgeLogs = [];
   }
@@ -723,7 +727,8 @@ export class BotRunner {
       this.flushKaminoLogs();
       const isRebalanced = status.lastAction === "rebalanced" || status.lastAction === "kamino-rebalanced";
       const currentMint = status.positionMint ?? null;
-      if (this.config.hedgeEnabled) {
+      const hedgeEnabled = false;
+      if (hedgeEnabled && this.config.hedgeEnabled) {
         const hedgeState = this.hedgeManager.getState();
         if (hedgeState?.active) {
           const hedgeMint = hedgeState.positionMint ?? null;
@@ -746,9 +751,9 @@ export class BotRunner {
         }
       }
       let hedgeCloseForRebalance: HedgeCloseResult | null = null;
-      let hadHedge = this.hedgeManager.getState()?.active ?? false;
+      let hadHedge = hedgeEnabled ? (this.hedgeManager.getState()?.active ?? false) : false;
 
-      if (isRebalanced && this.config.hedgeEnabled) {
+      if (isRebalanced && hedgeEnabled) {
         if (!hadHedge) {
           const synced = await this.hedgeManager.syncFromBybit();
           hadHedge = synced || (this.hedgeManager.getState()?.active ?? false);
@@ -808,7 +813,7 @@ export class BotRunner {
       }
 
       let hedgeCloseForClosePosition: HedgeCloseResult | null = null;
-      if (!isRebalanced && status.lastAction === "close-position" && this.config.hedgeEnabled) {
+      if (!isRebalanced && status.lastAction === "close-position" && hedgeEnabled) {
         const expectedMint = status.eventPositionMint ?? status.positionMint ?? null;
         hedgeCloseForClosePosition = await this.closeHedgeForPosition(expectedMint, status, "Hedge fechado junto da pool");
         this.lastHedgeClose = hedgeCloseForClosePosition;
@@ -819,7 +824,7 @@ export class BotRunner {
       const existingDecision = this.getHedgeDecision(currentMint);
       const lockedDecision = this.isHedgeDecisionLocked(existingDecision);
       const allowHedgeOpen = !isRebalanced || !hadHedge || hedgeCloseForRebalance != null;
-      if (this.config.hedgeEnabled && allowHedgeOpen && !lockedDecision) {
+      if (hedgeEnabled && allowHedgeOpen && !lockedDecision) {
         hedgeResult = await this.hedgeManager.ensureOpen(status);
         hedgeDecision = this.normalizeHedgeDecision(hedgeResult);
         this.rememberHedgeDecision(status.positionMint ?? null, hedgeDecision);
@@ -836,7 +841,7 @@ export class BotRunner {
         hedgeDecision = existingDecision;
       }
 
-      if (this.config.hedgeEnabled && status.positionMint && !this.hedgeManager.getState()?.active) {
+      if (hedgeEnabled && status.positionMint && !this.hedgeManager.getState()?.active) {
         if (hedgeResult.status === "failed") {
           const reason = hedgeResult.error ?? this.hedgeManager.getLastError() ?? "hedge failed";
           logger.error({ reason }, "hedge failed; closing position");

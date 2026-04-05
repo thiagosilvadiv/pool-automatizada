@@ -713,6 +713,11 @@ export class PoolManager {
     return record.runner.getKaminoLogs();
   }
 
+  getKaminoHealth(id: string): ReturnType<BotRunner["getKaminoHealth"]> {
+    const record = this.getRecord(id);
+    return record.runner.getKaminoHealth();
+  }
+
   getSelectedKaminoLogs(): ReturnType<BotRunner["getKaminoLogs"]> {
     if (!this.selectedPoolId) {
       return [];

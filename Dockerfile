@@ -1,7 +1,9 @@
 FROM node:20-slim AS deps
 WORKDIR /app
+RUN apt-get update && apt-get install -y build-essential python3 && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm install --include=dev
+RUN npm rebuild
 
 FROM node:20-slim AS build
 WORKDIR /app

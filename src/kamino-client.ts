@@ -55,13 +55,21 @@ export type KaminoPositionState = {
   borrows?: { mint: string; amount: number }[];
 };
 
+export type KaminoWithdrawResult = {
+  signature: string;
+  requestedAmount: number;
+  actualAmount: number;
+  wasReduced: boolean;
+  dustAmount: number;
+};
+
 export type KaminoClient = {
   ensureObligation(): Promise<void>;
   depositCollateral(input: { mint: string; amount: number }): Promise<string>;
   borrow(input: { mint: string; amount: number }): Promise<string>;
   repay(input: { mint: string; amount: number }): Promise<string>;
   repayWithCollateral(input: { collateralMint: string; debtMint: string; repayAmount: number; slippageBps?: number }): Promise<string>;
-  withdraw(input: { mint: string; amount: number }): Promise<string>;
+  withdraw(input: { mint: string; amount: number }): Promise<KaminoWithdrawResult>;
   getWithdrawCapacity(input: {
     collateralMint: string;
     debtMint: string;
@@ -69,6 +77,7 @@ export type KaminoClient = {
     bufferPct?: number;
   }): Promise<{ capacityUi: number; slot: number; blockhash?: string }>;
   getPositionState(): Promise<KaminoPositionState | null>;
+  invalidatePositionCache(): void;
   supportsCollateral(mint: string): Promise<boolean>;
   supportsBorrow(mint: string): Promise<{ ok: boolean; reason?: string }>;
 };
@@ -156,6 +165,37 @@ function isRateLimitError(err: any): boolean {
     || String(code) === "8100002"
     || message.includes("too many requests")
     || message.includes("429");
+}
+
+function isInvalidAccountInputError(err: any): boolean {
+  if (!err) return false;
+  const message = String(err?.message ?? err).toLowerCase();
+  return message.includes("0x1776")
+    || message.includes("invalidaccountinput")
+    || message.includes("invalid account input")
+    || message.includes("6006")
+    || message.includes("expected_remaining_accounts");
+}
+
+const KAMINO_ERROR_CODES: Record<string, string> = {
+  "0x1776": "InvalidAccountInput - market com cache desatualizado",
+  "0x17cc": "NetValueRemainingTooSmall - saque reduzido necessario",
+  "0x1": "InsufficientFunds - saldo insuficiente",
+  "6092": "NetValueRemainingTooSmall",
+  "6006": "InvalidAccountInput",
+  "0x1780": "BorrowingDisabled - borrow desativado para este ativo",
+  "0x1785": "ReserveStale - reserve desatualizado, reload necessario",
+  "0x178a": "UtilizationTooHigh - utilizacao do mercado muito alta"
+};
+
+function parseKaminoProtocolError(err: any): string | null {
+  const msg = String(err?.message ?? err).toLowerCase();
+  for (const [code, description] of Object.entries(KAMINO_ERROR_CODES)) {
+    if (msg.includes(code.toLowerCase())) {
+      return description;
+    }
+  }
+  return null;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -263,11 +303,14 @@ async function loadSignerFromEnv(wallet: WalletLike): Promise<TransactionSigner>
 class RealKaminoClient implements KaminoClient {
   private ctx: KaminoClientContext;
   private rpc: ReturnType<typeof createSolanaRpc>;
+  private rpcRead: ReturnType<typeof createSolanaRpc>;
   private rpcSubscriptions: ReturnType<typeof createSolanaRpcSubscriptions>;
   private signer: TransactionSigner;
   private marketAddress: Address;
   private obligationType: VanillaObligation;
   private marketPromise: Promise<KaminoMarket> | null = null;
+  private marketLoadedAt: number | null = null;
+  private readonly MARKET_TTL_MS = 45_000;
   private sendAndConfirm: ReturnType<typeof sendAndConfirmTransactionFactory>;
   private lastState: KaminoPositionState | null = null;
   private lastStateAt: number = 0;
@@ -275,12 +318,14 @@ class RealKaminoClient implements KaminoClient {
   constructor(options: {
     ctx: KaminoClientContext;
     rpc: ReturnType<typeof createSolanaRpc>;
+    rpcRead: ReturnType<typeof createSolanaRpc>;
     rpcSubscriptions: ReturnType<typeof createSolanaRpcSubscriptions>;
     signer: TransactionSigner;
     marketAddress: Address;
   }) {
     this.ctx = options.ctx;
     this.rpc = options.rpc;
+    this.rpcRead = options.rpcRead;
     this.rpcSubscriptions = options.rpcSubscriptions;
     this.signer = options.signer;
     this.marketAddress = options.marketAddress;
@@ -291,11 +336,22 @@ class RealKaminoClient implements KaminoClient {
     });
   }
 
+  private shouldInvalidateMarket(): boolean {
+    if (!this.marketLoadedAt) return false;
+    return (Date.now() - this.marketLoadedAt) > this.MARKET_TTL_MS;
+  }
+
+  private invalidateMarket(force = false): void {
+    if (force || this.shouldInvalidateMarket()) {
+      this.marketPromise = null;
+    }
+  }
+
   private async loadMarket(): Promise<KaminoMarket> {
-    if (!this.marketPromise) {
+    if (!this.marketPromise || this.shouldInvalidateMarket()) {
       this.marketPromise = (async () => {
         const market = await KaminoMarket.load(
-          this.rpc as any,
+          this.rpcRead as any,
           this.marketAddress,
           DEFAULT_RECENT_SLOT_DURATION_MS,
           PROGRAM_ID,
@@ -304,6 +360,7 @@ class RealKaminoClient implements KaminoClient {
         if (!market) {
           throw new Error("Kamino market nao encontrado");
         }
+        this.marketLoadedAt = Date.now();
         return market;
       })();
     }
@@ -370,8 +427,31 @@ class RealKaminoClient implements KaminoClient {
         return signature;
       } catch (err) {
         lastErr = err;
+        const attachAttempt = (error: any) => {
+          if (error && typeof error === "object") {
+            (error as any).__attempt = attempt;
+          }
+          return error;
+        };
+        attachAttempt(err);
         const decoded = decodeRpcError(err);
         const isBlockhash = isBlockhashError(err);
+        const protocolError = parseKaminoProtocolError(err);
+        if (isInvalidAccountInputError(err)) {
+          this.invalidateMarket(true);
+        }
+        logger.error({
+          err: decoded,
+          label: "sendAction",
+          attempt,
+          errorCode: decoded.code,
+          errorName: decoded.name,
+          logs: decoded.logs,
+          protocolError,
+          isRateLimit: isRateLimitError(err),
+          isInsufficientFunds: isInsufficientFundsError(err),
+          isBlockhash
+        }, "kamino sendAction falhou");
         // Detecta fundos insuficientes (0x1) incluindo logs internos de simulação.
         if (isInsufficientFundsError(err)) {
           logger.error({ err: decoded, attempt }, "kamino tx falhou por fundos insuficientes (0x1); abortando sem retry");
@@ -399,11 +479,28 @@ class RealKaminoClient implements KaminoClient {
           (retryable as any).__retryable = true;
           (retryable as any).__originalErr = lastErr;
           (retryable as any).cause = lastErr;
+          (retryable as any).__attempt = attempt;
           logger.warn({ attempt, err: decoded }, "kamino tx blockhash erro; tentativas esgotadas, devolvendo para retry");
           throw retryable;
         }
+        // Se temos uma signature, verificar se a tx confirmou antes de falhar
+        if (lastSignature) {
+          try {
+            const statusResp = await (this.rpc as any)
+              .getSignatureStatuses([lastSignature])
+              .send();
+            const info = statusResp?.value?.[0];
+            if (info && !info.err &&
+              (info.confirmationStatus === "confirmed" || info.confirmationStatus === "finalized")) {
+              logger.info({ sig: lastSignature }, "tx confirmada apesar do erro RPC; usando como bem-sucedida");
+              return lastSignature;
+            }
+          } catch {
+            // ignora falha ao verificar status
+          }
+        }
         logger.error({ err: decoded }, "falha ao enviar Kamino tx");
-        throw err;
+        throw attachAttempt(err);
       }
     }
     throw lastErr ?? new Error("falha ao enviar Kamino tx");
@@ -462,8 +559,31 @@ class RealKaminoClient implements KaminoClient {
         return signature;
       } catch (err) {
         lastErr = err;
+        const attachAttempt = (error: any) => {
+          if (error && typeof error === "object") {
+            (error as any).__attempt = attempt;
+          }
+          return error;
+        };
+        attachAttempt(err);
         const decoded = decodeRpcError(err);
         const isBlockhash = isBlockhashError(err);
+        const protocolError = parseKaminoProtocolError(err);
+        if (isInvalidAccountInputError(err)) {
+          this.invalidateMarket(true);
+        }
+        logger.error({
+          err: decoded,
+          label: "sendInstructions",
+          attempt,
+          errorCode: decoded.code,
+          errorName: decoded.name,
+          logs: decoded.logs,
+          protocolError,
+          isRateLimit: isRateLimitError(err),
+          isInsufficientFunds: isInsufficientFundsError(err),
+          isBlockhash
+        }, "kamino sendInstructions falhou");
         // Detecta fundos insuficientes (0x1) incluindo logs internos de simulação.
         if (isInsufficientFundsError(err)) {
           logger.error({ err: decoded, attempt }, "kamino instructions falharam por fundos insuficientes (0x1); abortando sem retry");
@@ -491,11 +611,28 @@ class RealKaminoClient implements KaminoClient {
           (retryable as any).__retryable = true;
           (retryable as any).__originalErr = lastErr;
           (retryable as any).cause = lastErr;
+          (retryable as any).__attempt = attempt;
           logger.warn({ attempt, err: decoded }, "kamino instructions blockhash erro; tentativas esgotadas");
           throw retryable;
         }
+        // Se temos uma signature, verificar se a tx confirmou antes de falhar
+        if (lastSignature) {
+          try {
+            const statusResp = await (this.rpc as any)
+              .getSignatureStatuses([lastSignature])
+              .send();
+            const info = statusResp?.value?.[0];
+            if (info && !info.err &&
+              (info.confirmationStatus === "confirmed" || info.confirmationStatus === "finalized")) {
+              logger.info({ sig: lastSignature }, "tx confirmada apesar do erro RPC; usando como bem-sucedida");
+              return lastSignature;
+            }
+          } catch {
+            // ignora falha ao verificar status
+          }
+        }
         logger.error({ err: decoded }, "falha ao enviar instrucoes Kamino");
-        throw err;
+        throw attachAttempt(err);
       }
     }
     throw lastErr ?? new Error("falha ao enviar instrucoes Kamino");
@@ -551,14 +688,17 @@ class RealKaminoClient implements KaminoClient {
     throw new Error(`Transaction ${signature} not confirmed after ${timeoutMs / 1000}s`);
   }
 
-  private async jupiterRequest(url: string, init: RequestInit, retries = 2): Promise<{ res: Response; text: string }> {
+  private async jupiterRequest(url: string, init: RequestInit, retries = 4): Promise<{ res: Response; text: string }> {
     let attempt = 0;
     while (true) {
       const res = await fetch(url, init);
       const text = await res.text().catch(() => "");
       if (res.status === 429 && attempt < retries) {
+        const baseWait = 1000;
+        const jitter = Math.random() * 500;
+        const waitMs = Math.min(baseWait * Math.pow(2, attempt) + jitter, 15000);
         attempt += 1;
-        await sleep(1000 * attempt);
+        await sleep(waitMs);
         continue;
       }
       return { res, text };
@@ -659,8 +799,13 @@ class RealKaminoClient implements KaminoClient {
     try {
       return await builder();
     } catch (err) {
+      // Se e rate limit, NAO tentar fallback - apenas propagar
+      if (isRateLimitError(err)) {
+        throw err;
+      }
       if (fallback) {
         logger.warn({ err }, "Kamino action falhou com v2; tentando v1");
+        await sleep(500);
         return await fallback();
       }
       throw err;
@@ -721,12 +866,34 @@ class RealKaminoClient implements KaminoClient {
           true
         )
     );
-    const sig = await this.sendAction(action);
-    logger.info(
-      { sig, mint: input.mint, amount: input.amount },
-      "kamino deposit concluido"
-    );
-    return sig;
+    try {
+      const sig = await this.sendAction(action);
+      this.invalidatePositionCache();
+      logger.info(
+        { sig, mint: input.mint, amount: input.amount },
+        "kamino deposit concluido"
+      );
+      return sig;
+    } catch (err) {
+      const decoded = decodeRpcError(err);
+      const protocolError = parseKaminoProtocolError(err);
+      const attempt = (err as any)?.__attempt;
+      logger.error(
+        {
+          err: decoded,
+          label: "depositCollateral",
+          mint: input.mint,
+          amount: input.amount,
+          attempt,
+          errorCode: decoded.code,
+          errorName: decoded.name,
+          logs: decoded.logs,
+          protocolError
+        },
+        "kamino deposit falhou"
+      );
+      throw err;
+    }
   }
 
   async borrow(input: { mint: string; amount: number }): Promise<string> {
@@ -758,12 +925,34 @@ class RealKaminoClient implements KaminoClient {
           true
         )
     );
-    const sig = await this.sendAction(action);
-    logger.info(
-      { sig, mint: input.mint, amount: input.amount },
-      "kamino borrow concluido"
-    );
-    return sig;
+    try {
+      const sig = await this.sendAction(action);
+      this.invalidatePositionCache();
+      logger.info(
+        { sig, mint: input.mint, amount: input.amount },
+        "kamino borrow concluido"
+      );
+      return sig;
+    } catch (err) {
+      const decoded = decodeRpcError(err);
+      const protocolError = parseKaminoProtocolError(err);
+      const attempt = (err as any)?.__attempt;
+      logger.error(
+        {
+          err: decoded,
+          label: "borrow",
+          mint: input.mint,
+          amount: input.amount,
+          attempt,
+          errorCode: decoded.code,
+          errorName: decoded.name,
+          logs: decoded.logs,
+          protocolError
+        },
+        "kamino borrow falhou"
+      );
+      throw err;
+    }
   }
 
   async repay(input: { mint: string; amount: number }): Promise<string> {
@@ -800,14 +989,34 @@ class RealKaminoClient implements KaminoClient {
           true
         )
     );
-    const sig = await this.sendAction(action);
-    // Invalida o cache do market para forcar reload da obligation atualizada.
-    this.marketPromise = null;
-    logger.info(
-      { sig, mint: input.mint, amount: input.amount },
-      "kamino repay concluido"
-    );
-    return sig;
+    try {
+      const sig = await this.sendAction(action);
+      this.invalidatePositionCache();
+      logger.info(
+        { sig, mint: input.mint, amount: input.amount },
+        "kamino repay concluido"
+      );
+      return sig;
+    } catch (err) {
+      const decoded = decodeRpcError(err);
+      const protocolError = parseKaminoProtocolError(err);
+      const attempt = (err as any)?.__attempt;
+      logger.error(
+        {
+          err: decoded,
+          label: "repay",
+          mint: input.mint,
+          amount: input.amount,
+          attempt,
+          errorCode: decoded.code,
+          errorName: decoded.name,
+          logs: decoded.logs,
+          protocolError
+        },
+        "kamino repay falhou"
+      );
+      throw err;
+    }
   }
 
   async repayWithCollateral(input: {
@@ -835,7 +1044,7 @@ class RealKaminoClient implements KaminoClient {
       }
     }
     if (!obligation) {
-      this.marketPromise = null; // força reload do market na próxima tentativa
+      this.invalidateMarket();
       throw new Error("Posicao Kamino nao encontrada");
     }
     const currentSlot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
@@ -907,7 +1116,7 @@ class RealKaminoClient implements KaminoClient {
       // Invalida o cache e tenta novamente com um market recarregado.
       if (msg.includes("reserveAddress") || msg.includes("reserve") || msg.includes("Reserve")) {
         logger.warn({ err }, "repayWithCollateral falhou por reserve ausente; recarregando market e tentando novamente");
-        this.marketPromise = null;
+        this.invalidateMarket(true);
         const freshMarket = await this.loadMarket();
         responses = await getRepayWithCollIxs({
           repayAmount: new Decimal(input.repayAmount),
@@ -936,9 +1145,47 @@ class RealKaminoClient implements KaminoClient {
     if (!responses.length) {
       throw new Error("Nenhuma instrucao para repay-with-collateral");
     }
-    const signature = await this.sendInstructions(responses[0].ixs, lastLookupTables);
+    if (!responses[0].ixs || responses[0].ixs.length === 0) {
+      throw new Error(
+        "repay-with-collateral gerou 0 instrucoes - obligation em estado invalido ou divida ja zerada"
+      );
+    }
+    logger.info(
+      {
+        ixCount: responses[0].ixs.length,
+        collateral: input.collateralMint,
+        debt: input.debtMint,
+        repayAmount: input.repayAmount
+      },
+      "repay-with-collateral instrucoes prontas"
+    );
+    let signature: string;
+    try {
+      signature = await this.sendInstructions(responses[0].ixs, lastLookupTables);
+    } catch (err) {
+      const decoded = decodeRpcError(err);
+      const protocolError = parseKaminoProtocolError(err);
+      const attempt = (err as any)?.__attempt;
+      logger.error(
+        {
+          err: decoded,
+          label: "repayWithCollateral",
+          collateral: input.collateralMint,
+          debt: input.debtMint,
+          repayAmount: input.repayAmount,
+          attempt,
+          errorCode: decoded.code,
+          errorName: decoded.name,
+          logs: decoded.logs,
+          protocolError
+        },
+        "kamino repay-with-collateral falhou"
+      );
+      throw err;
+    }
     // Invalida o cache do market para refletir o novo estado da obligation.
-    this.marketPromise = null;
+    this.invalidateMarket(true);
+    this.invalidatePositionCache();
     logger.info(
       {
         sig: signature,
@@ -963,7 +1210,7 @@ class RealKaminoClient implements KaminoClient {
     let market = await this.loadMarket();
     // Se o reserve do debtMint não está no market cacheado, força reload.
     if (!market.getReserveByMint(address(input.debtMint))) {
-      this.marketPromise = null;
+      this.invalidateMarket(true);
       market = await this.loadMarket();
     }
     let obligation = null;
@@ -977,7 +1224,7 @@ class RealKaminoClient implements KaminoClient {
       }
     }
     if (!obligation) {
-      this.marketPromise = null;
+      this.invalidateMarket();
       throw new Error("Posicao Kamino nao encontrada");
     }
     const slot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
@@ -1021,92 +1268,133 @@ class RealKaminoClient implements KaminoClient {
     return { capacityUi, slot, blockhash: latestBlockhash };
   }
 
-  async withdraw(input: { mint: string; amount: number }): Promise<string> {
-    let currentInput = { ...input };
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const market = await this.loadMarket();
-      const amountRaw = await this.toRawAmountString(currentInput.mint, currentInput.amount);
-      try {
-        const action = await this.buildActionWithFallback(
-          () =>
-            KaminoAction.buildWithdrawTxns(
-              market,
-              amountRaw,
-              address(currentInput.mint),
-              this.signer,
-              this.obligationType,
-              true,
-              undefined,
-              undefined,
-              true
-            ),
-          () =>
-            KaminoAction.buildWithdrawTxns(
-              market,
-              amountRaw,
-              address(currentInput.mint),
-              this.signer,
-              this.obligationType,
-              false,
-              undefined,
-              undefined,
-              true
-            )
-        );
-        const sig = await this.sendAction(action);
-        this.marketPromise = null; // invalida para proxima operacao
-        logger.info(
-          { sig, mint: currentInput.mint, amount: currentInput.amount },
-          "kamino withdraw concluido"
-        );
-        return sig;
-      } catch (err) {
-        const msg = String((err as any)?.message ?? err).toLowerCase();
-
-        // Erro 1: market com cache desatualizado (0x1776 / InvalidAccountInput)
-        const isStaleMarket =
-          msg.includes("0x1776") ||
-          msg.includes("invalidaccountinput") ||
-          msg.includes("invalid account input") ||
-          msg.includes("6006") ||
-          msg.includes("expected_remaining_accounts");
-        if (isStaleMarket && attempt === 0) {
-          logger.warn({ err }, "withdraw falhou com market stale (0x1776); recarregando market e retentando");
-          this.marketPromise = null;
-          continue;
-        }
-
-        // Erro 2: NetValueRemainingTooSmall (0x17cc / 6092)
-        // O protocolo rejeita saque de 100% do colateral pois a obrigação
-        // ficaria com valor líquido zerado abaixo do mínimo permitido.
-        // Solução: reduzir o amount em 15% e tentar novamente.
-        // O dust restante (~15%) será sacado no próximo ciclo de reconciliação.
-        const isNetValueTooSmall =
-          msg.includes("0x17cc") ||
-          msg.includes("netvalueremainingtoosmall") ||
-          msg.includes("net value remaining too small") ||
-          msg.includes("6092");
-        if (isNetValueTooSmall && attempt < 2) {
-          const reducedAmount = currentInput.amount * 0.85;
-          logger.warn(
-            { err, originalAmount: currentInput.amount, reducedAmount },
-            "withdraw falhou com NetValueRemainingTooSmall (0x17cc); reduzindo amount em 15% e retentando"
+  async withdraw(input: { mint: string; amount: number }): Promise<KaminoWithdrawResult> {
+    const reductions = [1, 0.85, 0.70, 0.50, 0.30];
+    for (let idx = 0; idx < reductions.length; idx += 1) {
+      const factor = reductions[idx];
+      let currentInput = idx === 0
+        ? { ...input }
+        : { ...input, amount: input.amount * factor };
+      let staleRetried = false;
+      while (true) {
+        const market = await this.loadMarket();
+        const amountRaw = await this.toRawAmountString(currentInput.mint, currentInput.amount);
+        try {
+          const action = await this.buildActionWithFallback(
+            () =>
+              KaminoAction.buildWithdrawTxns(
+                market,
+                amountRaw,
+                address(currentInput.mint),
+                this.signer,
+                this.obligationType,
+                true,
+                undefined,
+                undefined,
+                true
+              ),
+            () =>
+              KaminoAction.buildWithdrawTxns(
+                market,
+                amountRaw,
+                address(currentInput.mint),
+                this.signer,
+                this.obligationType,
+                false,
+                undefined,
+                undefined,
+                true
+              )
           );
-          currentInput = { ...currentInput, amount: reducedAmount };
-          this.marketPromise = null;
-          continue;
-        }
+          const sig = await this.sendAction(action);
+          this.invalidateMarket(true);
+          this.invalidatePositionCache();
+          const wasReduced = currentInput.amount !== input.amount;
+          if (wasReduced) {
+            const dustAmount = Math.max(0, input.amount - currentInput.amount);
+            logger.warn({ dustAmount, factor }, "withdraw parcial; dust registrado para proximo ciclo");
+          }
+          logger.info(
+            {
+              sig,
+              mint: currentInput.mint,
+              requestedAmount: input.amount,
+              actualAmount: currentInput.amount,
+              wasReduced
+            },
+            "kamino withdraw concluido"
+          );
+          return {
+            signature: sig,
+            requestedAmount: input.amount,
+            actualAmount: currentInput.amount,
+            wasReduced,
+            dustAmount: wasReduced ? Math.max(0, input.amount - currentInput.amount) : 0
+          };
+        } catch (err) {
+          const msg = String((err as any)?.message ?? err).toLowerCase();
 
-        throw err;
+          // Erro 1: market com cache desatualizado (0x1776 / InvalidAccountInput)
+          const isStaleMarket =
+            msg.includes("0x1776") ||
+            msg.includes("invalidaccountinput") ||
+            msg.includes("invalid account input") ||
+            msg.includes("6006") ||
+            msg.includes("expected_remaining_accounts");
+          if (isStaleMarket && !staleRetried) {
+            logger.warn({ err }, "withdraw falhou com market stale (0x1776); recarregando market e retentando");
+            staleRetried = true;
+            this.invalidateMarket(true);
+            continue;
+          }
+
+          // Erro 2: NetValueRemainingTooSmall (0x17cc / 6092)
+          const isNetValueTooSmall =
+            msg.includes("0x17cc") ||
+            msg.includes("netvalueremainingtoosmall") ||
+            msg.includes("net value remaining too small") ||
+            msg.includes("6092");
+          if (isNetValueTooSmall) {
+            logger.warn(
+              { err, originalAmount: input.amount, reducedAmount: currentInput.amount, factor },
+              "withdraw falhou com NetValueRemainingTooSmall (0x17cc); tentando fator menor"
+            );
+            break;
+          }
+
+          const decoded = decodeRpcError(err);
+          const protocolError = parseKaminoProtocolError(err);
+          const attempt = (err as any)?.__attempt;
+          logger.error(
+            {
+              err: decoded,
+              label: "withdraw",
+              mint: currentInput.mint,
+              amount: currentInput.amount,
+              attempt,
+              errorCode: decoded.code,
+              errorName: decoded.name,
+              logs: decoded.logs,
+              protocolError
+            },
+            "kamino withdraw falhou"
+          );
+          throw err;
+        }
       }
     }
     throw new Error("withdraw falhou apos multiplas tentativas");
   }
 
+  public invalidatePositionCache(): void {
+    this.lastState = null;
+    this.lastStateAt = 0;
+  }
+
   async getPositionState(): Promise<KaminoPositionState | null> {
-    // Cache de curta duração: se leu com sucesso há menos de 8s, devolve o cache.
+    // Cache de curta duração: se leu com sucesso há menos de 12s, devolve o cache.
     // Isso evita travar o tick com 3 retries × 2s quando a RPC está lenta.
-    const CACHE_TTL_MS = 60_000;
+    const CACHE_TTL_MS = 12_000;
     if (this.lastState && (Date.now() - this.lastStateAt) < CACHE_TTL_MS) {
       return this.lastState;
     }
@@ -1127,17 +1415,23 @@ class RealKaminoClient implements KaminoClient {
       })();
 
       const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const OBLIGATION_TIMEOUT_MS = 8000;
       let obligation = null;
       for (let attempt = 0; attempt < 3 && !obligation; attempt += 1) {
         for (const obligationType of obligationTypes) {
-          try {
-            obligation = await market.getObligationByWallet(
-              this.signer.address,
-              obligationType
-            );
-          } catch (innerErr) {
+          const timeoutPromise = new Promise<null>((_, reject) =>
+            setTimeout(() => reject(new Error("getObligationByWallet timeout")), OBLIGATION_TIMEOUT_MS)
+          );
+          const result = await Promise.race([
+            market.getObligationByWallet(this.signer.address, obligationType),
+            timeoutPromise
+          ]).catch((innerErr) => {
             logger.warn({ err: decodeRpcError(innerErr) }, "falha ao buscar obligation com tipo alternativo");
-            continue;
+            return null;
+          });
+          if (result) {
+            obligation = result;
+            break;
           }
           if (obligation) break;
         }
@@ -1148,7 +1442,7 @@ class RealKaminoClient implements KaminoClient {
       // Se após 3 tentativas ainda não encontrou, invalida o cache do market
       // para forçar um reload na próxima chamada (market pode estar com dados antigos).
       if (!obligation) {
-        this.marketPromise = null;
+        this.invalidateMarket();
         return null;
       }
       const deposit = obligation.getDeposits()[0];
@@ -1299,7 +1593,7 @@ class NoopKaminoClient implements KaminoClient {
     return { capacityUi, slot: 0 };
   }
 
-  async withdraw(input: { mint: string; amount: number }): Promise<string> {
+  async withdraw(input: { mint: string; amount: number }): Promise<KaminoWithdrawResult> {
     this.ensureEnabled("withdraw");
     this.lastState = {
       collateralMint: input.mint,
@@ -1308,11 +1602,21 @@ class NoopKaminoClient implements KaminoClient {
       debtAmount: this.lastState?.debtAmount ?? null,
       ltv: this.lastState?.ltv ?? null
     };
-    return 'noop';
+    return {
+      signature: "noop",
+      requestedAmount: input.amount,
+      actualAmount: input.amount,
+      wasReduced: false,
+      dustAmount: 0
+    };
   }
 
   async getPositionState(): Promise<KaminoPositionState | null> {
     return this.lastState;
+  }
+
+  invalidatePositionCache(): void {
+    this.lastState = null;
   }
 
   async supportsCollateral(_mint: string): Promise<boolean> {
@@ -1337,6 +1641,10 @@ export async function createKaminoClient(
   if (!rpcUrl) {
     throw new Error("RPC_URL nao configurado para Kamino");
   }
+  const readRpcUrl =
+    process.env.KAMINO_READ_RPC_URL ||
+    process.env.RPC_READ_URL ||
+    rpcUrl;
   const wsUrl =
     process.env.KAMINO_WS_URL ||
     process.env.RPC_WS_URL ||
@@ -1355,11 +1663,13 @@ export async function createKaminoClient(
   }
   const signer = await loadSignerFromEnv(ctx.wallet);
   const rpc = createSolanaRpc(rpcUrl);
+  const rpcRead = createSolanaRpc(readRpcUrl);
   const rpcSubscriptions = createSolanaRpcSubscriptions(wsUrl);
   logger.info({ market: marketRaw }, "Kamino client configurado (modo real)");
   return new RealKaminoClient({
     ctx,
     rpc,
+    rpcRead,
     rpcSubscriptions,
     signer,
     marketAddress

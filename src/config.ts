@@ -45,6 +45,7 @@ export type Config = {
   kaminoMaxLtv: number;
   kaminoCloseRule: "avg-price" | "breakeven" | "manual";
   kaminoPriceBufferPct: number;
+  kaminoMinCombinedPnlUsd: number;
   kaminoCollateralMode: "exit" | "max-value" | "tokenA" | "tokenB" | "both";
   kaminoAutoCloseOnTokenChange: boolean;
   kaminoConvertToCollateral: boolean;
@@ -488,6 +489,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const envJupiterApiKey = parseEnvString(process.env.JUPITER_API_KEY);
   const envJupiterApiUrl = parseEnvString(process.env.JUPITER_API_URL);
   const envKaminoScanIntervalSec = parseEnvNumber(process.env.KAMINO_SCAN_INTERVAL_SEC);
+  const envKaminoMinCombinedPnlUsd = parseEnvNumber(process.env.KAMINO_MIN_COMBINED_PNL_USD);
+  const envKaminoEnabled = parseEnvBool(process.env.KAMINO_ENABLED);
+  const envKaminoRebalanceEnabled = parseEnvBool(process.env.KAMINO_REBALANCE_ENABLED);
   const envBybitApiKey = parseEnvString(process.env.BYBIT_API_KEY);
   const envBybitApiSecret = parseEnvString(process.env.BYBIT_API_SECRET);
   const envBybitBaseUrl = parseEnvString(process.env.BYBIT_BASE_URL);
@@ -496,6 +500,15 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const envEvolutionApiKey = parseEnvString(process.env.EVOLUTION_API_KEY);
   const envEvolutionPhone = parseEnvString(process.env.EVOLUTION_PHONE);
   const envEvolutionInstance = parseEnvString(process.env.EVOLUTION_INSTANCE);
+  const dataKaminoEnabledRaw = (data as any).kaminoEnabled;
+  const dataKaminoEnabled = typeof dataKaminoEnabledRaw === "boolean"
+    ? dataKaminoEnabledRaw
+    : (typeof dataKaminoEnabledRaw === "string" ? parseEnvBool(dataKaminoEnabledRaw) : undefined);
+  const dataKaminoRebalanceEnabledRaw = (data as any).kaminoRebalanceEnabled;
+  const dataKaminoRebalanceEnabled = typeof dataKaminoRebalanceEnabledRaw === "boolean"
+    ? dataKaminoRebalanceEnabledRaw
+    : (typeof dataKaminoRebalanceEnabledRaw === "string" ? parseEnvBool(dataKaminoRebalanceEnabledRaw) : undefined);
+  const kaminoEnabledFallback = envKaminoEnabled ?? dataKaminoEnabled ?? false;
 
   const config: Config = {
     network: envNetwork ?? data.network ?? "mainnet-beta",
@@ -562,8 +575,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? null,
     autoAddLiquidityEnabled: parseEnvBool(process.env.AUTO_ADD_LIQUIDITY_ENABLED)
       ?? Boolean((data as any).autoAddLiquidityEnabled ?? false),
-    kaminoRebalanceEnabled: parseEnvBool(process.env.KAMINO_REBALANCE_ENABLED)
-      ?? Boolean((data as any).kaminoRebalanceEnabled ?? false),
+    kaminoRebalanceEnabled: envKaminoRebalanceEnabled
+      ?? dataKaminoRebalanceEnabled
+      ?? (kaminoEnabledFallback ? true : false),
     kaminoDepositPct: parseEnvNumber(process.env.KAMINO_DEPOSIT_PCT)
       ?? Number((data as any).kaminoDepositPct ?? 100),
     kaminoBorrowAsset: envKaminoBorrowAsset
@@ -579,6 +593,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? "avg-price",
     kaminoPriceBufferPct: parseEnvNumber(process.env.KAMINO_PRICE_BUFFER_PCT)
       ?? Number((data as any).kaminoPriceBufferPct ?? 0.5),
+    kaminoMinCombinedPnlUsd: envKaminoMinCombinedPnlUsd
+      ?? Number((data as any).kaminoMinCombinedPnlUsd ?? 0),
     kaminoCollateralMode: envKaminoCollateralMode
       ?? dataKaminoCollateralMode
       ?? "max-value",
@@ -766,6 +782,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.kaminoPriceBufferPct) || config.kaminoPriceBufferPct < 0) {
     throw new Error("kaminoPriceBufferPct must be >= 0");
+  }
+  if (!Number.isFinite(config.kaminoMinCombinedPnlUsd)) {
+    throw new Error("kaminoMinCombinedPnlUsd must be a number");
   }
   if (!parseKaminoCollateralMode(config.kaminoCollateralMode)) {
     throw new Error("kaminoCollateralMode must be exit, max-value, tokenA, tokenB, or both");
