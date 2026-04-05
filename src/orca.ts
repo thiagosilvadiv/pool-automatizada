@@ -2603,6 +2603,11 @@ export class OrcaBot {
 
     let feeA = 0;
     let feeB = 0;
+    const targetMint = (this.config.autoSwapFeesToUsdcTargetMint || "").trim();
+    let preSwapBalance: bigint = 0n;
+    if (this.config.autoSwapFeesToUsdcEnabled && this.config.autoSwapFeesToUsdcDestWallet && targetMint) {
+      preSwapBalance = await this.readTargetMintBalance(targetMint);
+    }
     try {
       const amounts = await this.getPositionTokenAmounts(position);
       this.lastStatus.lastCloseTokenA = amounts.tokenA;
@@ -2668,7 +2673,7 @@ export class OrcaBot {
       // Após o swap, transferir stablecoin para carteira destino se configurada
       if (this.config.autoSwapFeesToUsdcDestWallet) {
         try {
-          await this.maybeTransferFeesToDestWallet();
+          await this.maybeTransferFeesToDestWallet(preSwapBalance);
         } catch (err) {
           logger.warn({ err }, "transfer-fees-to-dest-wallet failed");
         }
@@ -7742,7 +7747,18 @@ export class OrcaBot {
    * configurada em autoSwapFeesToUsdcDestWallet, após o swap das fees.
    * Só é chamado se autoSwapFeesToUsdcDestWallet estiver definido.
    */
-  private async maybeTransferFeesToDestWallet(): Promise<void> {
+  private async readTargetMintBalance(targetMint: string): Promise<bigint> {
+    try {
+      const mintPubkey = new PublicKey(targetMint);
+      const sourceAta = getAssociatedTokenAddressSync(mintPubkey, this.wallet.publicKey);
+      const accountInfo = await getAccount(this.connection, sourceAta);
+      return accountInfo.amount ?? 0n;
+    } catch {
+      return 0n;
+    }
+  }
+
+  private async maybeTransferFeesToDestWallet(preBalance: bigint): Promise<void> {
     const destWalletStr = (this.config.autoSwapFeesToUsdcDestWallet ?? "").trim();
     if (!destWalletStr) {
       return;
@@ -7767,17 +7783,47 @@ export class OrcaBot {
       const destAta = getAssociatedTokenAddressSync(mintPubkey, destPubkey);
 
       // Lê saldo atual da ATA de origem
-      let sourceBalance = 0n;
+      let postBalance = 0n;
       try {
         const accountInfo = await getAccount(this.connection, sourceAta);
-        sourceBalance = accountInfo.amount;
+        postBalance = accountInfo.amount ?? 0n;
       } catch {
         // Conta não existe ou saldo zero — nada a transferir
         return;
       }
 
-      if (sourceBalance <= 0n) {
+      if (postBalance <= 0n) {
         return;
+      }
+
+      const delta = postBalance - (preBalance ?? 0n);
+      if (delta <= 0n) {
+        logger.info(
+          { preBalance: preBalance?.toString(), postBalance: postBalance.toString(), targetMint },
+          "transfer-fees-to-dest-wallet: transfer skipped (zero delta)"
+        );
+        return;
+      }
+
+      // Decimais para estimar USD
+      let decimals = 6;
+      try {
+        const mintInfo = await getMint(this.connection, mintPubkey);
+        decimals = Number(mintInfo.decimals ?? 6);
+      } catch {
+        // fallback permanece 6
+      }
+
+      const minUsd = Number(this.config.autoSwapFeesToUsdcMinUsd ?? 0);
+      if (minUsd > 0) {
+        const deltaUsd = Number(delta) / Math.pow(10, Math.max(0, decimals));
+        if (!(Number.isFinite(deltaUsd) && deltaUsd >= minUsd)) {
+          logger.info(
+            { preBalance: preBalance?.toString(), postBalance: postBalance.toString(), delta: delta.toString(), minUsd, targetMint },
+            "transfer-fees-to-dest-wallet: transfer skipped (delta below minUsd)"
+          );
+          return;
+        }
       }
 
       const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash("confirmed");
@@ -7809,7 +7855,7 @@ export class OrcaBot {
           sourceAta,             // origem
           destAta,               // destino
           this.wallet.publicKey, // authority
-          sourceBalance          // quantidade (raw)
+          delta                  // quantidade (raw)
         )
       );
 
@@ -7821,7 +7867,9 @@ export class OrcaBot {
         {
           mint: targetMint,
           dest: destWalletStr,
-          amount: sourceBalance.toString(),
+          preBalance: preBalance?.toString(),
+          postBalance: postBalance.toString(),
+          delta: delta.toString(),
           sig
         },
         "transfer-fees-to-dest-wallet: transferência concluída"
