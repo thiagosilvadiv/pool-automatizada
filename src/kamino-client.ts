@@ -224,6 +224,25 @@ function decodeRpcError(err: any): { code?: number; name?: string; message: stri
   return { code: err?.code, name: err?.name, message, logs: err?.logs };
 }
 
+export function buildRpcUrlList(primary: string, rawList?: string): string[] {
+  const seen = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    if (!value) return;
+    const trimmed = String(value).trim();
+    if (!trimmed) return;
+    seen.add(trimmed);
+  };
+  add(primary);
+  if (rawList) {
+    rawList
+      .split(/[,;\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .forEach((item) => add(item));
+  }
+  return Array.from(seen);
+}
+
 export function isBlockhashError(err: any): boolean {
   const msg = String(err?.message ?? err).toLowerCase();
   return (
@@ -314,6 +333,10 @@ class RealKaminoClient implements KaminoClient {
   private sendAndConfirm: ReturnType<typeof sendAndConfirmTransactionFactory>;
   private lastState: KaminoPositionState | null = null;
   private lastStateAt: number = 0;
+  private rpcUrls: string[];
+  private readRpcUrls: string[];
+  private rpcIndex = 0;
+  private readRpcIndex = 0;
 
   constructor(options: {
     ctx: KaminoClientContext;
@@ -322,6 +345,8 @@ class RealKaminoClient implements KaminoClient {
     rpcSubscriptions: ReturnType<typeof createSolanaRpcSubscriptions>;
     signer: TransactionSigner;
     marketAddress: Address;
+    rpcUrls?: string[];
+    readRpcUrls?: string[];
   }) {
     this.ctx = options.ctx;
     this.rpc = options.rpc;
@@ -329,6 +354,8 @@ class RealKaminoClient implements KaminoClient {
     this.rpcSubscriptions = options.rpcSubscriptions;
     this.signer = options.signer;
     this.marketAddress = options.marketAddress;
+    this.rpcUrls = options.rpcUrls?.length ? [...options.rpcUrls] : [];
+    this.readRpcUrls = options.readRpcUrls?.length ? [...options.readRpcUrls] : [];
     this.obligationType = new VanillaObligation(PROGRAM_ID);
     this.sendAndConfirm = sendAndConfirmTransactionFactory({
       rpc: this.rpc as any,
@@ -339,6 +366,32 @@ class RealKaminoClient implements KaminoClient {
   private shouldInvalidateMarket(): boolean {
     if (!this.marketLoadedAt) return false;
     return (Date.now() - this.marketLoadedAt) > this.MARKET_TTL_MS;
+  }
+
+  private rotateRpcEndpoint(reason: string): void {
+    if (!this.rpcUrls.length) {
+      return;
+    }
+    this.rpcIndex = (this.rpcIndex + 1) % this.rpcUrls.length;
+    const nextRpcUrl = this.rpcUrls[this.rpcIndex];
+    if (this.readRpcUrls.length) {
+      this.readRpcIndex = (this.readRpcIndex + 1) % this.readRpcUrls.length;
+    }
+    const nextReadUrl = this.readRpcUrls[this.readRpcIndex] ?? nextRpcUrl;
+    try {
+      this.rpc = createSolanaRpc(nextRpcUrl);
+      this.rpcRead = createSolanaRpc(nextReadUrl);
+      const wsUrl = deriveWsUrl(nextRpcUrl);
+      this.rpcSubscriptions = createSolanaRpcSubscriptions(wsUrl);
+      this.sendAndConfirm = sendAndConfirmTransactionFactory({
+        rpc: this.rpc as any,
+        rpcSubscriptions: this.rpcSubscriptions as any
+      });
+      this.invalidateMarket(true);
+      logger.warn({ nextRpcUrl, nextReadUrl, reason }, "kamino rpc endpoint rotacionado");
+    } catch (err) {
+      logger.warn({ err, nextRpcUrl, reason }, "falha ao rotacionar rpc endpoint");
+    }
   }
 
   private invalidateMarket(force = false): void {
@@ -403,7 +456,7 @@ class RealKaminoClient implements KaminoClient {
     let attempt = 0;
     let lastErr: any;
     let lastSignature: string | null = null;
-    while (attempt < 2) {
+    while (attempt < 3) {
       attempt += 1;
       try {
         const { value: latestBlockhash } = await (this.rpc as any)
@@ -456,6 +509,9 @@ class RealKaminoClient implements KaminoClient {
         if (isInsufficientFundsError(err)) {
           logger.error({ err: decoded, attempt }, "kamino tx falhou por fundos insuficientes (0x1); abortando sem retry");
           throw err;
+        }
+        if (isRateLimitError(err)) {
+          this.rotateRpcEndpoint("rate-limit");
         }
         const errMsg = String((err as any)?.message ?? err).toLowerCase();
         const isSimulation = isBlockhash && errMsg.includes("simulation failed");
@@ -513,7 +569,7 @@ class RealKaminoClient implements KaminoClient {
     let attempt = 0;
     let lastErr: any;
     let lastSignature: string | null = null;
-    while (attempt < 2) {
+    while (attempt < 3) {
       attempt += 1;
       try {
         const { value: latestBlockhash } = await (this.rpc as any)
@@ -588,6 +644,9 @@ class RealKaminoClient implements KaminoClient {
         if (isInsufficientFundsError(err)) {
           logger.error({ err: decoded, attempt }, "kamino instructions falharam por fundos insuficientes (0x1); abortando sem retry");
           throw err;
+        }
+        if (isRateLimitError(err)) {
+          this.rotateRpcEndpoint("rate-limit");
         }
         const errMsg = String((err as any)?.message ?? err).toLowerCase();
         const isSimulation = isBlockhash && errMsg.includes("simulation failed");
@@ -956,6 +1015,11 @@ class RealKaminoClient implements KaminoClient {
   }
 
   async repay(input: { mint: string; amount: number }): Promise<string> {
+    const support = await this.supportsBorrow(input.mint);
+    if (!support.ok) {
+      const reason = support.reason ? `: ${support.reason}` : "";
+      throw new Error(`Mint ${input.mint} nao suportado para repay${reason}`);
+    }
     const market = await this.loadMarket();
     const amountRaw = await this.toRawAmountString(input.mint, input.amount);
     const currentSlot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
@@ -1269,6 +1333,10 @@ class RealKaminoClient implements KaminoClient {
   }
 
   async withdraw(input: { mint: string; amount: number }): Promise<KaminoWithdrawResult> {
+    const supported = await this.supportsCollateral(input.mint);
+    if (!supported) {
+      throw new Error(`Mint ${input.mint} nao suportado como colateral no market ativo`);
+    }
     const reductions = [1, 0.85, 0.70, 0.50, 0.30];
     for (let idx = 0; idx < reductions.length; idx += 1) {
       const factor = reductions[idx];
@@ -1647,10 +1715,14 @@ export async function createKaminoClient(
     process.env.KAMINO_READ_RPC_URL ||
     process.env.RPC_READ_URL ||
     rpcUrl;
+  const rpcUrls = buildRpcUrlList(rpcUrl, process.env.KAMINO_RPC_URLS);
+  const readRpcUrls = buildRpcUrlList(readRpcUrl, process.env.KAMINO_READ_RPC_URLS);
+  const primaryRpcUrl = rpcUrls[0] ?? rpcUrl;
+  const primaryReadRpcUrl = readRpcUrls[0] ?? readRpcUrl;
   const wsUrl =
     process.env.KAMINO_WS_URL ||
     process.env.RPC_WS_URL ||
-    deriveWsUrl(rpcUrl);
+    deriveWsUrl(primaryRpcUrl);
   const override = typeof marketAddressOverride === "string" ? marketAddressOverride.trim() : "";
   const marketRaw = override
     || ctx.config.kaminoMarketAddress
@@ -1664,8 +1736,8 @@ export async function createKaminoClient(
     throw new Error("KAMINO_MARKET invalido");
   }
   const signer = await loadSignerFromEnv(ctx.wallet);
-  const rpc = createSolanaRpc(rpcUrl);
-  const rpcRead = createSolanaRpc(readRpcUrl);
+  const rpc = createSolanaRpc(primaryRpcUrl);
+  const rpcRead = createSolanaRpc(primaryReadRpcUrl);
   const rpcSubscriptions = createSolanaRpcSubscriptions(wsUrl);
   logger.info({ market: marketRaw }, "Kamino client configurado (modo real)");
   return new RealKaminoClient({
@@ -1674,6 +1746,8 @@ export async function createKaminoClient(
     rpcRead,
     rpcSubscriptions,
     signer,
-    marketAddress
+    marketAddress,
+    rpcUrls,
+    readRpcUrls
   });
 }

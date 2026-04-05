@@ -16,7 +16,7 @@ import { Config } from "./config.js";
 import { createKaminoClient } from "./kamino-client.js";
 import type { KaminoClient } from "./kamino-client.js";
 import { releaseKaminoLock, tryAcquireKaminoLock } from "./kamino-lock.js";
-import { logger } from "./logger.js";
+import { logger, stringifyError } from "./logger.js";
 import { calculateRange, isPriceOutOfRange, resolveDirectionalExitPreference, Range } from "./strategy.js";
 import { alignTickRangeToSpacing } from "./tick-range.js";
 import { WalletLike } from "./solana.js";
@@ -43,6 +43,7 @@ const DEFAULT_TX_SIZE_THRESHOLD = 1200;
 const FORCE_SPLIT_SOL = true;
 const JUPITER_DIRECT_ONLY = false;
 const KAMINO_SWAP_SLIPPAGE_BPS = 100;
+const DEFAULT_KAMINO_MARKET = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF";
 
 export function computeRiskAwareRepayChunk(params: {
   debtRemaining: number;
@@ -3144,14 +3145,40 @@ export class OrcaBot {
     return this.config.kaminoMarketAddress
       ?? process.env.KAMINO_MARKET
       ?? process.env.KAMINO_MAIN_MARKET
-      ?? null;
+      ?? DEFAULT_KAMINO_MARKET;
   }
 
   private getKaminoMarketAddress(): string | null {
     return this.kaminoState?.marketAddress ?? this.getConfiguredKaminoMarketAddress();
   }
 
-  private getKaminoMarketCandidates(): string[] {
+  private getPoolTokenMints(): string[] {
+    const mints: string[] = [];
+    const add = (value: any) => {
+      if (!value) return;
+      const str = typeof value === "string" ? value : value?.toBase58?.();
+      if (str && String(str).trim()) {
+        mints.push(String(str).trim());
+      }
+    };
+    add(this.poolState?.tokenMintA);
+    add(this.poolState?.tokenMintB);
+    return mints;
+  }
+
+  private getDebtMintForCompatibility(): string | null {
+    if (this.kaminoState?.debtMint) {
+      return this.kaminoState.debtMint;
+    }
+    try {
+      const resolved = this.resolveKaminoBorrowMint();
+      return resolved?.mint ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private gatherKaminoMarketSeeds(): string[] {
     const candidates = new Set<string>();
     const add = (value: string | null | undefined) => {
       if (!value) return;
@@ -3166,7 +3193,82 @@ export class OrcaBot {
       }
     }
     add(this.getConfiguredKaminoMarketAddress());
+    add(DEFAULT_KAMINO_MARKET);
     return Array.from(candidates.values());
+  }
+
+  private async isMarketCompatible(
+    client: KaminoClient,
+    tokenMints: string[],
+    debtMint: string | null
+  ): Promise<{ ok: boolean; reason?: string }> {
+    try {
+      for (const mint of tokenMints) {
+        const supported = await client.supportsCollateral(mint);
+        if (!supported) {
+          return { ok: false, reason: `Token ${mint} nao suportado` };
+        }
+      }
+      if (debtMint) {
+        const borrow = await client.supportsBorrow(debtMint);
+        if (!borrow.ok) {
+          return { ok: false, reason: borrow.reason ?? "Borrow indisponivel" };
+        }
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, reason: stringifyError(err) };
+    }
+  }
+
+  private async buildCompatibleKaminoClients(): Promise<Map<string, KaminoClient>> {
+    const seeds = this.gatherKaminoMarketSeeds();
+    const tokenMints = this.getPoolTokenMints();
+    const debtMint = this.getDebtMintForCompatibility();
+    const result = new Map<string, KaminoClient>();
+
+    for (const market of seeds) {
+      try {
+        const client = await createKaminoClient(
+          {
+            connection: this.connection,
+            wallet: this.wallet,
+            config: this.config
+          },
+          market
+        );
+        const compatibility = await this.isMarketCompatible(client, tokenMints, debtMint);
+        if (compatibility.ok) {
+          result.set(market, client);
+        } else {
+          this.queueKaminoLog(
+            "market-fallback",
+            `Market ${market} ignorado: ${compatibility.reason ?? "incompatível"}`,
+            "warn"
+          );
+        }
+      } catch (err) {
+        logger.warn({ err, market }, "falha ao avaliar market Kamino");
+      }
+    }
+
+    if (!result.size && !result.has(DEFAULT_KAMINO_MARKET)) {
+      try {
+        const client = await createKaminoClient(
+          {
+            connection: this.connection,
+            wallet: this.wallet,
+            config: this.config
+          },
+          DEFAULT_KAMINO_MARKET
+        );
+        result.set(DEFAULT_KAMINO_MARKET, client);
+      } catch (err) {
+        logger.warn({ err }, "falha ao criar fallback Kamino client");
+      }
+    }
+
+    return result;
   }
 
   private async resolveKaminoPositionWithFallback(): Promise<{
@@ -3174,22 +3276,53 @@ export class OrcaBot {
     position: KaminoPositionState | null;
     marketAddress: string | null;
   }> {
-    const candidates = this.getKaminoMarketCandidates();
-    let lastClient = await this.ensureKaminoClient();
-    let lastMarket = this.getKaminoMarketAddress();
-    for (const market of candidates) {
-      const client = await this.ensureKaminoClient(market);
+    const candidates = await this.buildCompatibleKaminoClients();
+    let chosenClient: KaminoClient | null = null;
+    let chosenMarket: string | null = null;
+    let chosenPosition: KaminoPositionState | null = null;
+    let firstCompatible: { market: string; client: KaminoClient } | null = null;
+
+    for (const [market, client] of candidates.entries()) {
+      if (!firstCompatible) {
+        firstCompatible = { market, client };
+      }
       const position = await client.getPositionState();
       const hasDebt = (position?.debtAmount ?? 0) > 0;
       const hasCollateral = (position?.collateralAmount ?? 0) > 0
         || (Array.isArray(position?.deposits) && position!.deposits!.length > 0);
       if (position && (hasDebt || hasCollateral)) {
-        return { kamino: client, position, marketAddress: market };
+        chosenClient = client;
+        chosenMarket = market;
+        chosenPosition = position;
+        break;
       }
-      lastClient = client;
-      lastMarket = market;
     }
-    return { kamino: lastClient, position: null, marketAddress: lastMarket ?? null };
+
+    if (!chosenClient && firstCompatible) {
+      chosenClient = firstCompatible.client;
+      chosenMarket = firstCompatible.market;
+    }
+
+    if (!chosenClient) {
+      const fallback = await this.ensureKaminoClient(DEFAULT_KAMINO_MARKET);
+      return { kamino: fallback, position: null, marketAddress: DEFAULT_KAMINO_MARKET };
+    }
+
+    const previousMarket = this.kaminoState?.marketAddress ?? this.kaminoClientMarket ?? null;
+    if (previousMarket && previousMarket !== chosenMarket) {
+      const tokens = this.getPoolTokenMints();
+      this.queueKaminoLog(
+        "market-fallback",
+        `Market Kamino ajustado de ${previousMarket} para ${chosenMarket}. Tokens: ${tokens.join(",")}`,
+        "warn"
+      );
+    }
+    this.kaminoClient = chosenClient;
+    this.kaminoClientMarket = chosenMarket;
+    if (this.kaminoState) {
+      this.setKaminoState({ ...this.kaminoState, marketAddress: chosenMarket });
+    }
+    return { kamino: chosenClient, position: chosenPosition, marketAddress: chosenMarket };
   }
 
   private canUseKaminoLock(): { ok: boolean; ownerName?: string } {
