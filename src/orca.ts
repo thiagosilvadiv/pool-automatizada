@@ -1377,6 +1377,33 @@ export class OrcaBot {
       return { ok: false, reason: message };
     }
 
+    // Verificar se o preço atual está dentro do range da posição.
+    // Se estiver fora do range, o AMM só aceita um dos tokens e o
+    // quote falhará. Nesse caso, o auto-add deve ser ignorado —
+    // o tick principal do bot vai detectar o out-of-range e rebalancear.
+    {
+      const lowerPrice = whirlpools.PriceMath.tickIndexToPrice(
+        lowerTick,
+        this.poolState.decimalsA,
+        this.poolState.decimalsB
+      );
+      const upperPrice = whirlpools.PriceMath.tickIndexToPrice(
+        upperTick,
+        this.poolState.decimalsA,
+        this.poolState.decimalsB
+      );
+      const lowerNum = toNumber(lowerPrice);
+      const upperNum = toNumber(upperPrice);
+      if (price < lowerNum || price > upperNum) {
+        const message = `auto-add ignorado: preco fora do range da posicao (preco=${price.toFixed(6)}, range=[${lowerNum.toFixed(6)}, ${upperNum.toFixed(6)}])`;
+        logger.info({ price, lowerNum, upperNum }, message);
+        // Não setar erro — isso não é um erro, é uma condição esperada.
+        // Usar lastAction neutro para não poluir o histórico.
+        this.lastStatus.lastAction = "no-action";
+        return { ok: false, reason: message };
+      }
+    }
+
     let balances = await this.getTokenBalances();
     let usableA = options.maxTokenA != null ? Number(options.maxTokenA) : balances.tokenA * effectiveShare;
     let usableB = options.maxTokenB != null ? Number(options.maxTokenB) : balances.tokenB * effectiveShare;
@@ -1473,6 +1500,13 @@ export class OrcaBot {
     const swapped = await this.rebalanceToTarget(usableA, usableB, targetA, targetB, price, slippage);
     if (swapped) {
       balances = await this.getTokenBalances();
+    } else if (targetA > usableA * 1.05 || targetB > usableB * 1.05) {
+      // Swap era necessário mas não ocorreu (bloqueado por allowlist,
+      // rebalanceSwapPct=0, ou falha no swap).
+      logger.warn(
+        { usableA, usableB, targetA, targetB },
+        "auto-add: swap nao executado mas era necessario para rebalancear tokens"
+      );
     }
     ({ usableA, usableB } = applyValueCap(balances));
 
