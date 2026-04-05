@@ -690,9 +690,11 @@ export class OrcaBot {
         const prevErr = lastErr;
         lastErr = err;
         if (this.isRateLimitError(err)) {
-          const baseWait = 3000;
-          const jitter = Math.random() * 1000;
-          const waitMs = Math.min(baseWait * Math.pow(2, attempt) + jitter, 20000);
+          // Correção Bug 3: aumentar jitter para evitar thundering herd após restart.
+          // Múltiplos pools/operações fazendo retry ao mesmo tempo = mais 429s.
+          const baseWait = 5000;
+          const jitter = Math.random() * 3000; // até 3s de jitter aleatório
+          const waitMs = Math.min(baseWait * Math.pow(2, attempt) + jitter, 30000);
           logger.warn({ err, attempt, label, waitMs }, "kamino call rate-limited; retrying");
           await this.sleep(waitMs);
           continue;
@@ -2742,6 +2744,16 @@ export class OrcaBot {
       }
     }
     this.kaminoState = normalized;
+    // Correção Bug 4: se restaurando estado Kamino ativo mas sem timestamp
+    // de abertura, usar o momento atual (conservador — inicia grace period
+    // do zero para evitar fechamentos imediatos logo após restart).
+    if (this.kaminoState?.active && this.kaminoPoolOpenedAt == null) {
+      this.kaminoPoolOpenedAt = Date.now();
+      logger.info(
+        { collateralMint: this.kaminoState.collateralMint, cycleCount: this.kaminoState.cycleCount },
+        "kaminoPoolOpenedAt inicializado no resume (estado ativo restaurado)"
+      );
+    }
     this.syncKaminoStatus();
     this.updateBalanceReservations();
   }
@@ -7106,14 +7118,29 @@ export class OrcaBot {
     const positionValueTokenBWithFees = positionValueTokenB + positionFeesTokenB;
     if (positionValueSolWithFees != null) {
       if (this.initialPositionValueSol === null) {
-        this.initialPositionValueSol = positionValueSolWithFees;
+        // Correção Bug 2: validar que o valor inicial é razoável antes de usar como anchor.
+        // Se positionValueSolWithFees for absurdo (> 1 milhão de SOL), ignorar e aguardar.
+        if (positionValueSolWithFees > 0 && positionValueSolWithFees < 1_000_000) {
+          this.initialPositionValueSol = positionValueSolWithFees;
+        }
       }
-      this.lastStatus.positionPnl = positionValueSolWithFees - this.initialPositionValueSol;
+      if (this.initialPositionValueSol !== null) {
+        this.lastStatus.positionPnl = positionValueSolWithFees - this.initialPositionValueSol;
+      } else {
+        this.lastStatus.positionPnl = null;
+      }
     } else {
       if (this.initialPositionValue === null) {
-        this.initialPositionValue = positionValueTokenBWithFees;
+        // Correção Bug 2: validar magnitude antes de usar como anchor.
+        if (positionValueTokenBWithFees > 0 && positionValueTokenBWithFees < 1_000_000_000) {
+          this.initialPositionValue = positionValueTokenBWithFees;
+        }
       }
-      this.lastStatus.positionPnl = positionValueTokenBWithFees - this.initialPositionValue;
+      if (this.initialPositionValue !== null) {
+        this.lastStatus.positionPnl = positionValueTokenBWithFees - this.initialPositionValue;
+      } else {
+        this.lastStatus.positionPnl = null;
+      }
     }
     const pnlBasis = positionValueSolWithFees != null ? portfolioValueSol : portfolioValueTokenB;
     if (this.lastStatus.positionPnl != null && !isMagnitudeSane(this.lastStatus.positionPnl, pnlBasis)) {

@@ -1741,6 +1741,10 @@ export class BotRunner {
         const item = this.history[i];
         if (item?.positionMint === status.positionMint && Number.isFinite(item.positionEntryUsd ?? NaN)) {
           this.bot.setPositionEntryUsd(item.positionEntryUsd ?? null);
+          // Correção Bug 2: resetar anchors internos ao restaurar entry do histórico.
+          // Sem isso, initialPositionValueSol pode ser definido com valor corrompido
+          // no primeiro tick após restart, causando PnL absurdo.
+          this.bot.resetPositionAnchorsOnResume();
           break;
         }
       }

@@ -6,6 +6,17 @@ import { OrcaBot } from "./orca.js";
 import { withRetry } from "./retry.js";
 import { startServer } from "./server.js";
 
+// Correção Bug 3: capturar crashes não tratados para logar antes de morrer
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] uncaughtException:", err);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("[FATAL] unhandledRejection:", reason);
+  process.exit(1);
+});
+
 function parseArgs(argv: string[]): { configPath?: string; ui: boolean } {
   const args = argv.slice(2);
   const idx = args.findIndex((arg) => arg === "--config");
