@@ -51,6 +51,7 @@ export type Config = {
   kaminoAvgMode: "cumulative" | "reset";
   kaminoRepayRetrySec: number;
   kaminoRepayMaxAttempts: number;
+  kaminoGracePeriodSec: number;
   autoResumeEnabled: boolean;
   autoResumeMaxAttempts: number;
   autoResumeBaseDelayMs: number;
@@ -395,6 +396,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   const envKaminoRepayRetrySec = parseEnvNumber(process.env.KAMINO_REPAY_RETRY_SEC);
   const envKaminoRepayMaxAttempts = parseEnvNumber(process.env.KAMINO_REPAY_MAX_ATTEMPTS);
+  const envKaminoGracePeriodSec = parseEnvNumber(process.env.KAMINO_GRACE_PERIOD_SEC);
 
   const envTrendTimeframeRaw = process.env.TREND_TIMEFRAME ?? "";
   const envTrendTimeframe = parseTrendTimeframe(envTrendTimeframeRaw);
@@ -587,6 +589,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? Number((data as any).kaminoRepayRetrySec ?? 15),
     kaminoRepayMaxAttempts: envKaminoRepayMaxAttempts
       ?? Number((data as any).kaminoRepayMaxAttempts ?? 2),
+    kaminoGracePeriodSec: envKaminoGracePeriodSec
+      ?? Number((data as any).kaminoGracePeriodSec ?? 120),
     autoResumeEnabled,
     autoResumeMaxAttempts: Number(autoResumeMaxAttempts),
     autoResumeBaseDelayMs: Number(autoResumeBaseDelayMs),
@@ -767,6 +771,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.kaminoRepayMaxAttempts) || config.kaminoRepayMaxAttempts < 0) {
     throw new Error("kaminoRepayMaxAttempts must be >= 0");
+  }
+  if (!Number.isFinite(config.kaminoGracePeriodSec) || config.kaminoGracePeriodSec < 0) {
+    throw new Error("kaminoGracePeriodSec must be >= 0");
   }
   if (!Number.isFinite(config.minSolBalance) || config.minSolBalance < 0) {
     throw new Error("minSolBalance must be >= 0");

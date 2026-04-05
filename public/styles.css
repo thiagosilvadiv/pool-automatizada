@@ -1259,6 +1259,15 @@ td {
   box-shadow: 0 0 0 2px rgba(255, 107, 107, 0.12);
 }
 
+tr.history-loan-close td[data-col="type"] {
+  color: #d6a645;
+  font-weight: 600;
+}
+
+tr.history-loan-close td[data-col="pnlUsd"] {
+  color: #d6a645;
+}
+
 tbody tr:nth-child(even) {
   background: rgba(255, 255, 255, 0.02);
 }

@@ -63,8 +63,9 @@ function resolveActionType(action: string | null): string | null {
       return "fechamento";
     case "rebalanced":
     case "kamino-rebalanced":
-    case "kamino-close":
       return "fechamento";
+    case "kamino-close":
+      return "fechamento-emprestimo";
     case "resume-position":
     case "skip-low-sol-position":
       return "monitorando";
@@ -139,6 +140,13 @@ export type HistoryEvent = {
   hedgePnlUsd: number | null;
   hedgeDecision: "opened" | "skipped" | "failed" | null;
   hedgeDecisionReason: string | null;
+  // Campos exclusivos do tipo "fechamento-emprestimo"
+  kaminoLoanPnlUsd: number | null;
+  kaminoCollateralAvgPriceUsdc: number | null;
+  kaminoCollateralTargetPriceUsdc: number | null;
+  kaminoDebtUsd: number | null;
+  kaminoCollateralUsd: number | null;
+  kaminoCycleOpenedAt: string | null;
 };
 
 export type HedgeLogEntry = {
@@ -1155,7 +1163,13 @@ export class BotRunner {
           hedgeFeesUsd: null,
           hedgePnlUsd: null,
           hedgeDecision: hedgeDecision?.status ?? null,
-          hedgeDecisionReason: hedgeDecision?.reason ?? null
+          hedgeDecisionReason: hedgeDecision?.reason ?? null,
+          kaminoLoanPnlUsd: null,
+          kaminoCollateralAvgPriceUsdc: null,
+          kaminoCollateralTargetPriceUsdc: null,
+          kaminoDebtUsd: null,
+          kaminoCollateralUsd: null,
+          kaminoCycleOpenedAt: null
         });
       }
       return;
@@ -1231,7 +1245,13 @@ export class BotRunner {
         hedgeFeesUsd: hedgeClose?.feesUsd ?? null,
         hedgePnlUsd: hedgeClose?.pnlUsd ?? null,
         hedgeDecision: closeHedgeDecision?.status ?? null,
-        hedgeDecisionReason: closeHedgeDecision?.reason ?? null
+        hedgeDecisionReason: closeHedgeDecision?.reason ?? null,
+        kaminoLoanPnlUsd: null,
+        kaminoCollateralAvgPriceUsdc: null,
+        kaminoCollateralTargetPriceUsdc: null,
+        kaminoDebtUsd: null,
+        kaminoCollateralUsd: null,
+        kaminoCycleOpenedAt: null
       };
       this.pushEvent(closeEvent);
       if (closeMint) {
@@ -1289,7 +1309,13 @@ export class BotRunner {
         hedgeFeesUsd: null,
         hedgePnlUsd: null,
         hedgeDecision: openHedgeDecision?.status ?? null,
-        hedgeDecisionReason: openHedgeDecision?.reason ?? null
+        hedgeDecisionReason: openHedgeDecision?.reason ?? null,
+        kaminoLoanPnlUsd: null,
+        kaminoCollateralAvgPriceUsdc: null,
+        kaminoCollateralTargetPriceUsdc: null,
+        kaminoDebtUsd: null,
+        kaminoCollateralUsd: null,
+        kaminoCycleOpenedAt: null
       };
       this.pushEvent(openEvent);
       if (closeMint) {
@@ -1322,6 +1348,21 @@ export class BotRunner {
     const actionType = resolveActionType(action);
     const eventTrend = this.resolveTrendForMint(mergedPositionMint, trendNow);
     const eventHedgeDecision = decisionForMint(mergedPositionMint);
+    const isKaminoClose = action === "kamino-close";
+    const kaminoLoanPnlUsd = isKaminoClose
+      ? (status.kaminoCollateralUsd != null && status.kaminoDebtUsd != null
+        ? status.kaminoCollateralUsd - status.kaminoDebtUsd
+        : status.positionPnlUsd ?? null)
+      : null;
+    const kaminoCollateralAvgPriceUsdc = isKaminoClose
+      ? (status.kaminoAvgPriceUsdc ?? null)
+      : null;
+    const kaminoCollateralTargetPriceUsdc = isKaminoClose
+      ? (status.kaminoTargetPriceUsdc ?? null)
+      : null;
+    const kaminoCycleOpenedAt = isKaminoClose
+      ? (mergedPositionMint ? this.openedAtByMint.get(mergedPositionMint) ?? null : null)
+      : null;
     const event: HistoryEvent = {
       id: this.createEventId(timestamp),
       timestamp,
@@ -1363,7 +1404,13 @@ export class BotRunner {
       hedgeFeesUsd: hedgeClose?.feesUsd ?? null,
       hedgePnlUsd: hedgeClose?.pnlUsd ?? null,
       hedgeDecision: eventHedgeDecision?.status ?? null,
-      hedgeDecisionReason: eventHedgeDecision?.reason ?? null
+      hedgeDecisionReason: eventHedgeDecision?.reason ?? null,
+      kaminoLoanPnlUsd,
+      kaminoCollateralAvgPriceUsdc,
+      kaminoCollateralTargetPriceUsdc,
+      kaminoDebtUsd: isKaminoClose ? (status.kaminoDebtUsd ?? null) : null,
+      kaminoCollateralUsd: isKaminoClose ? (status.kaminoCollateralUsd ?? null) : null,
+      kaminoCycleOpenedAt
     };
     this.pushEvent(event);
     if (action === "close-position" && mergedPositionMint) {
@@ -1523,6 +1570,30 @@ export class BotRunner {
           }
             if (feesUsd != null && !isEntryUsdSane(feesUsd, budgetUsd, portfolioUsd)) {
               next = { ...next, positionFeesUsd: null };
+              mutated = true;
+            }
+            if (next.kaminoLoanPnlUsd === undefined) {
+              next = { ...next, kaminoLoanPnlUsd: null };
+              mutated = true;
+            }
+            if (next.kaminoCollateralAvgPriceUsdc === undefined) {
+              next = { ...next, kaminoCollateralAvgPriceUsdc: null };
+              mutated = true;
+            }
+            if (next.kaminoCollateralTargetPriceUsdc === undefined) {
+              next = { ...next, kaminoCollateralTargetPriceUsdc: null };
+              mutated = true;
+            }
+            if (next.kaminoDebtUsd === undefined) {
+              next = { ...next, kaminoDebtUsd: null };
+              mutated = true;
+            }
+            if (next.kaminoCollateralUsd === undefined) {
+              next = { ...next, kaminoCollateralUsd: null };
+              mutated = true;
+            }
+            if (next.kaminoCycleOpenedAt === undefined) {
+              next = { ...next, kaminoCycleOpenedAt: null };
               mutated = true;
             }
             normalized.push(next);

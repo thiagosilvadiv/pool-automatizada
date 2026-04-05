@@ -193,6 +193,7 @@ let historyColumnVisibility = loadHistoryColumnVisibility();
 const historyTypeDefaults = {
   abertura: true,
   fechamento: true,
+  "fechamento-emprestimo": true,
   monitorando: true,
   operacional: true
 };
@@ -229,6 +230,7 @@ const actionLabels = {
 const actionTypeLabels = {
   "abertura": "Abertura",
   "fechamento": "Fechamento",
+  "fechamento-emprestimo": "Fechamento Empréstimo",
   "fechamento + abertura": "Fechamento + abertura",
   "monitorando": "Monitorando",
   "operacional": "Operacional"
@@ -598,7 +600,8 @@ function buildHistoryCsv(items) {
   const rows = items.map((item) => {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
     const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
-    const pnlRaw = Number(item.positionPnlUsd);
+    const isLoanClose = item.actionType === "fechamento-emprestimo";
+    const pnlRaw = Number(isLoanClose ? item.kaminoLoanPnlUsd : item.positionPnlUsd);
     const hedgeRaw = Number(item.hedgePnlUsd);
     const hedgeSkipped = item.hedgeDecision === "skipped";
     const hasPnl = Number.isFinite(pnlRaw);
@@ -623,7 +626,7 @@ function buildHistoryCsv(items) {
       formatNumber(item.positionFeesUsd, 2),
       formatNumber(item.txFeeUsd, 6),
       formatNumber(item.positionExitUsd, 2),
-      formatNumber(item.positionPnlUsd, 2),
+      formatNumber(isLoanClose ? item.kaminoLoanPnlUsd : item.positionPnlUsd, 2),
       item.hedgeSymbol ?? "-",
       formatNumber(item.hedgeNotionalUsd, 2),
       formatNumber(item.hedgeLeverage, 2),
@@ -1372,7 +1375,8 @@ function renderHistory(items) {
     const editId = rawEventId;
     currentIds.add(eventId);
     const checked = selectedHistoryIds.has(eventId) ? "checked" : "";
-    const pnlRaw = Number(item.positionPnlUsd);
+    const isLoanClose = item.actionType === "fechamento-emprestimo";
+    const pnlRaw = Number(isLoanClose ? item.kaminoLoanPnlUsd : item.positionPnlUsd);
     const hedgeRaw = Number(item.hedgePnlUsd);
     const hedgeSkipped = item.hedgeDecision === "skipped";
     const hasPnl = Number.isFinite(pnlRaw);
@@ -1393,7 +1397,17 @@ function renderHistory(items) {
     const feesCell = renderEditableNumberCell(item.positionFeesUsd, "positionFeesUsd", editId);
     const txFeeCell = renderEditableNumberCell(item.txFeeUsd, "txFeeUsd", editId);
     const exitCell = renderEditableNumberCell(item.positionExitUsd, "positionExitUsd", editId);
-    const pnlCell = renderEditableNumberCell(item.positionPnlUsd, "positionPnlUsd", editId);
+    const loanTooltip = isLoanClose
+      ? [
+        `Colateral USD: ${formatNumber(item.kaminoCollateralUsd, 2)}`,
+        `Dívida USD: ${formatNumber(item.kaminoDebtUsd, 2)}`,
+        `Preço médio: ${formatNumber(item.kaminoCollateralAvgPriceUsdc, 2)}`,
+        `Preço alvo: ${formatNumber(item.kaminoCollateralTargetPriceUsdc, 2)}`
+      ].join(" | ")
+      : "";
+    const pnlCell = isLoanClose
+      ? `<span class="history-loan-pnl" title="${escapeHtml(loanTooltip)}">${formatNumber(item.kaminoLoanPnlUsd, 2)}</span>`
+      : renderEditableNumberCell(item.positionPnlUsd, "positionPnlUsd", editId);
     const hedgeNotionalCell = renderEditableNumberCell(item.hedgeNotionalUsd, "hedgeNotionalUsd", editId);
     const hedgeLeverageCell = renderEditableNumberCell(item.hedgeLeverage, "hedgeLeverage", editId);
     const hedgeFeesCell = renderEditableNumberCell(item.hedgeFeesUsd, "hedgeFeesUsd", editId);
@@ -1447,8 +1461,9 @@ function renderKaminoLogs(items) {
     const level = kaminoLogLevelLabels[entry.level] ?? entry.level ?? "-";
     const market = entry.marketAddress ? shortMint(entry.marketAddress) : "-";
     const message = truncateText(entry.message ?? "-", 80);
+    const rowClass = isLoanClose ? "history-loan-close" : "";
     return `
-      <tr>
+      <tr class="${rowClass}">
         <td>${formatTimestamp(entry.timestamp)}</td>
         <td><span class="log-level ${escapeHtml(entry.level ?? "")}">${escapeHtml(level)}</span></td>
         <td>${escapeHtml(entry.action ?? "-")}</td>

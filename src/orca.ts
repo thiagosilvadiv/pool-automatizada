@@ -392,6 +392,7 @@ export class OrcaBot {
   private outOfRangeSince: number | null = null;
   private lastRebalanceAt: number | null = null;
   private missingPositionSince: number | null = null;
+  private kaminoPoolOpenedAt: number | null = null;
   private onLowSol?: () => Promise<void>;
   private kaminoTooLargeSeen = false;
   private lastTrendPreferredExitToken: "tokenA" | "tokenB" | null = null;
@@ -942,6 +943,9 @@ export class OrcaBot {
       this.lastStatus.lastAction = result;
       if (result === "open-position") {
         this.lastRebalanceAt = Date.now();
+        if (this.kaminoState?.active) {
+          this.kaminoPoolOpenedAt = Date.now();
+        }
         if (this.config.autoSwapToSolEnabled) {
           try {
             await this.swapWalletToSol("auto");
@@ -1010,9 +1014,22 @@ export class OrcaBot {
     }
 
     const pnlNoFeesUsd = this.getPositionPnlNoFeesUsd();
-    const shouldUseKamino = this.config.kaminoRebalanceEnabled
+    // Não ativar Kamino para rebalanceamento logo após abertura da pool.
+    const kaminoGraceSec = Number(this.config.kaminoGracePeriodSec ?? 120);
+    const kaminoGraceActive = kaminoGraceSec > 0
+      && this.kaminoPoolOpenedAt != null
+      && (Date.now() - this.kaminoPoolOpenedAt) / 1000 < kaminoGraceSec;
+
+    const shouldUseKamino = !kaminoGraceActive
+      && this.config.kaminoRebalanceEnabled
       && pnlNoFeesUsd != null
       && pnlNoFeesUsd < 0;
+    if (kaminoGraceActive) {
+      logger.info(
+        { elapsedSec: Math.floor((Date.now() - (this.kaminoPoolOpenedAt ?? Date.now())) / 1000), kaminoGraceSec },
+        "Kamino ignorado: grace period ativo"
+      );
+    }
     if (this.config.kaminoRebalanceEnabled && !shouldUseKamino) {
       logger.info(
         { pnlNoFeesUsd },
@@ -1071,6 +1088,9 @@ export class OrcaBot {
     this.lastStatus.lastAction = result === "open-position" ? "rebalanced" : result;
     if (result === "open-position") {
       this.lastRebalanceAt = Date.now();
+      if (this.kaminoState?.active) {
+        this.kaminoPoolOpenedAt = Date.now();
+      }
       if (this.config.autoSwapToSolEnabled) {
         try {
           await this.swapWalletToSol("auto");
@@ -3729,6 +3749,19 @@ export class OrcaBot {
       }
       return closed;
     }
+    // Grace period: não fechar ciclo Kamino logo após a pool ter sido aberta.
+    // Garante que o bot não entre em loop de abertura/fechamento imediato.
+    const kaminoGraceSec = Number(this.config.kaminoGracePeriodSec ?? 120);
+    if (kaminoGraceSec > 0 && this.kaminoPoolOpenedAt != null) {
+      const elapsedSec = (Date.now() - this.kaminoPoolOpenedAt) / 1000;
+      if (elapsedSec < kaminoGraceSec) {
+        logger.info(
+          { elapsedSec, kaminoGraceSec },
+          "Kamino grace period ativo; fechamento automatico bloqueado"
+        );
+        return false;
+      }
+    }
     // Bloqueio "manual" so se aplica a fechamentos por criterio de preco.
     if (rule === "manual") {
       return false;
@@ -4981,7 +5014,20 @@ export class OrcaBot {
       updatedAt: new Date().toISOString(),
       lastError: null
     };
+    // Preservar valores de colateral/divida para histórico antes de limpar o estado.
+    const closingDebtUsd = debtAmount > 0 ? debtAmount : (state.debtUsd ?? null);
+    const closingCollateralUsd = (kaminoNetUsd != null && closingDebtUsd != null)
+      ? kaminoNetUsd + closingDebtUsd
+      : (Number.isFinite(Number(state.collateralUsd)) ? Number(state.collateralUsd) : null);
+    const closingAvgPriceUsdc = Number.isFinite(Number(state.avgPriceUsdc))
+      ? Number(state.avgPriceUsdc)
+      : (this.lastStatus.kaminoAvgPriceUsdc ?? null);
+    const closingTargetPriceUsdc = Number.isFinite(Number(state.targetPriceUsdc))
+      ? Number(state.targetPriceUsdc)
+      : (this.lastStatus.kaminoTargetPriceUsdc ?? null);
+
     this.setKaminoState(nextState);
+    this.kaminoPoolOpenedAt = null;
     // Soma o PnL da pool encerrada ao kaminoNetUsd para refletir o
     // resultado real do ciclo (perda da pool + recuperação via Kamino).
     const poolExitUsd = this.lastStatus.eventPositionExitUsd ?? null;
@@ -4996,7 +5042,11 @@ export class OrcaBot {
       lastAction: "kamino-close",
       positionPnlUsd: combinedPnlUsd,
       positionFeesUsd: 0,
-      lastActionFeeLamports: null
+      lastActionFeeLamports: null,
+      kaminoCollateralUsd: closingCollateralUsd,
+      kaminoDebtUsd: closingDebtUsd,
+      kaminoAvgPriceUsdc: closingAvgPriceUsdc,
+      kaminoTargetPriceUsdc: closingTargetPriceUsdc
     });
     this.releaseKaminoLockIfOwned();
     this.queueKaminoLog("close", "Ciclo Kamino fechado (repay + withdraw).", "info");
@@ -5747,6 +5797,7 @@ export class OrcaBot {
     if (openResult === "open-position") {
       this.lastRebalanceAt = Date.now();
       this.queueHistoryAction("kamino-reopen");
+      this.kaminoPoolOpenedAt = Date.now();
       if (this.config.autoSwapToSolEnabled) {
         try {
           await this.swapWalletToSol("auto");
