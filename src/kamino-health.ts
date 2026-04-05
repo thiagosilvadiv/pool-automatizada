@@ -1,6 +1,5 @@
-﻿import type { KaminoCycleState } from "./kamino-types.js";
-
 import type { KaminoCycleState } from "./kamino-types.js";
+
 
 type ErrorType = "rate-limit" | "insufficient-funds" | "blockhash" | "protocol" | "unknown";
 
