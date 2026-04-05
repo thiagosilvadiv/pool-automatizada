@@ -209,7 +209,7 @@ export function isInsufficientFundsError(err: any): boolean {
   // Verificação direta na mensagem principal
   if (
     msg.includes("insufficient funds") ||
-    msg.includes("custom program error: 0x1") ||
+    /custom program error: 0x1(?![0-9a-f])/i.test(msg) ||
     msg.includes("\"0x1\"") ||
     msg.includes("error: insufficient funds")
   ) {
@@ -221,7 +221,7 @@ export function isInsufficientFundsError(err: any): boolean {
   if (Array.isArray(logs)) {
     for (const log of logs) {
       const l = String(log).toLowerCase();
-      if (l.includes("insufficient funds") || l.includes("custom program error: 0x1")) {
+      if (l.includes("insufficient funds") || /custom program error: 0x1(?![0-9a-f])/i.test(l)) {
         return true;
       }
     }

@@ -509,10 +509,10 @@ export class OrcaBot {
     const originalErr = (err as any)?.__originalErr ?? (err as any)?.cause;
     const originalMsg = originalErr ? String(originalErr?.message ?? originalErr).toLowerCase() : "";
     if (
-      message.includes("custom program error: 0x1") ||
+      /custom program error: 0x1(?![0-9a-f])/i.test(message) ||
       message.includes("\"0x1\"") ||
       message.includes("insufficient funds") ||
-      originalMsg.includes("custom program error: 0x1") ||
+      /custom program error: 0x1(?![0-9a-f])/i.test(originalMsg) ||
       originalMsg.includes("insufficient funds") ||
       originalMsg.includes("\"0x1\"")
     ) {
@@ -603,14 +603,14 @@ export class OrcaBot {
           const origMsg = origErr ? String(origErr?.message ?? origErr).toLowerCase() : "";
           // Se o erro atual, anterior OU o erro original embutido indicam 0x1, não fazer retry.
           if (
-            prevMsg.includes("0x1") ||
+            /\b0x1\b/.test(prevMsg) ||
             prevMsg.includes("insufficient funds") ||
-            currMsg.includes("0x1") ||
+            /\b0x1\b/.test(currMsg) ||
             currMsg.includes("insufficient funds") ||
-            currMsg.includes("custom program error: 0x1") ||
-            origMsg.includes("0x1") ||
+            /custom program error: 0x1(?![0-9a-f])/i.test(currMsg) ||
+            /\b0x1\b/.test(origMsg) ||
             origMsg.includes("insufficient funds") ||
-            origMsg.includes("custom program error: 0x1")
+            /custom program error: 0x1(?![0-9a-f])/i.test(origMsg)
           ) {
             throw err;
           }
@@ -4691,8 +4691,8 @@ export class OrcaBot {
               debtAmount = 0;
               stableBalance = await this.getWalletTokenBalance(stable.mint);
             } else if (
-              repayWalletMsg.includes("0x1") ||
-              repayWalletMsg.includes("custom program error: 0x1") ||
+              /\b0x1\b/.test(repayWalletMsg) ||
+              /custom program error: 0x1(?![0-9a-f])/i.test(repayWalletMsg) ||
               repayWalletMsg.includes("insufficient funds")
             ) {
               stableBalance = await this.getWalletTokenBalance(stable.mint);
@@ -4726,9 +4726,9 @@ export class OrcaBot {
         });
         const repayErrLower = (repayAttempt.error ?? "").toLowerCase();
         const repayIsInsufficientFunds =
-          repayErrLower.includes("0x1") ||
-          repayErrLower.includes("insufficient funds") ||
-          repayErrLower.includes("custom program error: 0x1");
+          /\b0x1\b/.test(repayErrLower) ||
+          /custom program error: 0x1(?![0-9a-f])/i.test(repayErrLower) ||
+          repayErrLower.includes("insufficient funds");
         if (repayAttempt.retryable && repayAttempt.error && !repayIsInsufficientFunds) {
           const wait = this.scheduleKaminoRepayRetry(state, repayAttempt.error, mode);
           if (wait) {
