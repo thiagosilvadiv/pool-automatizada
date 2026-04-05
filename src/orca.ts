@@ -5822,11 +5822,11 @@ export class OrcaBot {
     let shareA = 0.5;
     try {
       const ticks = this.getTicksForRange(input.executionRange, input.price);
-      const tokenExtensionCtx = await whirlpools.TokenExtensionUtil.buildTokenExtensionContext(
-        this.ctx.fetcher,
-        this.poolState.pool.getTokenAInfo(),
-        this.poolState.pool.getTokenBInfo()
-      );
+    const tokenExtensionCtx = await whirlpools.TokenExtensionUtil.buildTokenExtensionContext(
+      this.ctx.fetcher,
+      this.poolState.pool.getData(),
+      whirlpools.IGNORE_CACHE
+    );
       const ratio = await this.getRangeRatio(
         ticks.lowerTick,
         ticks.upperTick,
