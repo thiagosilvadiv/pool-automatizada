@@ -1270,9 +1270,43 @@ export class OrcaBot {
       const baseUsd = avgMode === "reset" ? 0 : (previous?.collateralUsd ?? 0);
       const baseDebtUsd = avgMode === "reset" ? 0 : (previous?.debtUsd ?? 0);
       const nextAmount = baseAmount + amount;
-      // Estima USD do novo depósito usando o preço já disponível (fallback seguro para UI)
-      const currentPrice = this.lastStatus?.lastPrice ?? null;
-      const depositedUsd = currentPrice != null ? currentPrice * amount : null;
+      // Calcula USD do depósito usando o preço USD real do token de colateral.
+      // Para SOL (NATIVE_MINT), usa solUsdPrice (Pyth). Para outros tokens,
+      // tenta obter o preço via Jupiter. Isso garante que avgPriceUsdc reflita
+      // o preço USD verdadeiro do token depositado, não o preço do par da pool.
+      let depositedUsd: number | null = null;
+      try {
+        const solUsdPriceForAvg = await this.tryGetSolUsdPrice();
+        if (mint === NATIVE_MINT.toBase58() && solUsdPriceForAvg != null) {
+          depositedUsd = solUsdPriceForAvg * amount;
+        } else {
+          const decimals = await this.getTokenDecimals(mint);
+          let stableMintInfo: { mint: string; decimals: number; label: string } | null = null;
+          try {
+            stableMintInfo = await this.getStableMintInfo();
+          } catch {
+            stableMintInfo = null;
+          }
+          if (stableMintInfo) {
+            const tokenPrice = await this.getTokenUsdPrice({
+              mint,
+              decimals,
+              stableMint: stableMintInfo.mint,
+              stableDecimals: stableMintInfo.decimals
+            }).catch(() => null);
+            if (tokenPrice != null) {
+              depositedUsd = tokenPrice * amount;
+            }
+          }
+        }
+      } catch (err) {
+        logger.warn({ err }, "falha ao obter preco USD do colateral para avgPriceUsdc; usando fallback");
+      }
+      // Fallback: se não conseguiu preço real, usa o borrowUsd como estimativa
+      // (só faz sentido se avgBasis === "debt")
+      if (depositedUsd == null && borrowSig && borrowUsd > 0) {
+        depositedUsd = borrowUsd; // estimativa grosseira; será corrigida no próximo ciclo
+      }
       const nextUsd = baseUsd + (depositedUsd ?? 0);
       const nextDebtUsd = baseDebtUsd + (borrowSig ? borrowUsd : 0);
       const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
@@ -3850,6 +3884,24 @@ export class OrcaBot {
           evaluated.push({ entry, priceUsd: 0, target, ready: false });
           continue;
         }
+        // SALVAGUARDA: detecta avgPriceUsdc calculado incorretamente.
+        // Se o alvo for menor que 60% do preço atual e o ciclo foi iniciado há
+        // menos de 5 minutos, provavelmente o avgPriceUsdc está errado.
+        // Bloqueia o fechamento e força recálculo no próximo tick.
+        const cycleAge = state?.updatedAt
+          ? (Date.now() - Date.parse(state.updatedAt)) / 1000
+          : Infinity;
+        if (target > 0 && priceUsd > 0 && target < priceUsd * 0.6 && cycleAge < 300) {
+          this.queueKaminoLog(
+            "close-blocked-sanity",
+            `Fechamento bloqueado: alvo (${target.toFixed(6)}) é menor que 60% do preço atual ` +
+            `(${priceUsd.toFixed(6)}). Possível erro no cálculo de avgPriceUsdc. ` +
+            `Ciclo tem ${cycleAge.toFixed(0)}s; aguardando recálculo.`,
+            "warn"
+          );
+          evaluated.push({ entry, priceUsd, target: 0, ready: false });
+          continue;
+        }
         evaluated.push({ entry, priceUsd, target, ready: priceUsd >= target });
       }
 
@@ -5657,8 +5709,24 @@ export class OrcaBot {
         if (pnl != null && Number.isFinite(pnl) && pnl < 0) return Math.abs(pnl);
         return 0;
       })();
+      const depositsForAvg: Array<typeof deposits[number] & { safeDepositUsd: number | null }> = [];
+      let totalDepositUsdForAvg = 0;
       for (const entry of deposits) {
-        const share = totalDepositUsd > 0 ? (entry.depositUsd ?? 0) / totalDepositUsd : 0;
+        // CORREÇÃO: garantir depositUsd correto para SOL
+        let safeDepositUsd = entry.depositUsd ?? null;
+        if ((safeDepositUsd == null || safeDepositUsd <= 0) && entry.mint === NATIVE_MINT.toBase58()) {
+          const solPrice = await this.tryGetSolUsdPrice();
+          if (solPrice != null) {
+            safeDepositUsd = solPrice * entry.depositAmount;
+          }
+        }
+        if (safeDepositUsd != null && Number.isFinite(safeDepositUsd) && safeDepositUsd > 0) {
+          totalDepositUsdForAvg += safeDepositUsd;
+        }
+        depositsForAvg.push({ ...entry, safeDepositUsd });
+      }
+      for (const entry of depositsForAvg) {
+        const share = totalDepositUsdForAvg > 0 ? (entry.safeDepositUsd ?? 0) / totalDepositUsdForAvg : 0;
         const debtUsd = borrowUsd * share;
         const prev = nextMap.get(entry.mint) ?? {
           mint: entry.mint,
@@ -5672,7 +5740,7 @@ export class OrcaBot {
         const baseUsd = avgMode === "reset" ? 0 : (prev.usd ?? 0);
         const baseDebtUsd = avgMode === "reset" ? 0 : (prev.debtUsd ?? 0);
         const nextAmount = baseAmount + entry.depositAmount;
-        const nextUsd = baseUsd + (entry.depositUsd ?? 0);
+        const nextUsd = baseUsd + (entry.safeDepositUsd ?? 0);
         const nextDebtUsd = baseDebtUsd + debtUsd;
         const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
         const avgPriceUsdc = nextAmount > 0 ? avgNumerator / nextAmount : null;
