@@ -431,6 +431,8 @@ export class OrcaBot {
   private missingPositionSince: number | null = null;
   private nullPnlNoFeesTicks: number = 0;
   private kaminoAutoCloseHold = false;
+  private kaminoMissingCount = 0;
+  private kaminoMissingSince: number | null = null;
   private kaminoPoolOpenedAt: number | null = null;
   private onLowSol?: () => Promise<void>;
   private kaminoTooLargeSeen = false;
@@ -3594,44 +3596,52 @@ export class OrcaBot {
       const position = await kamino.getPositionState();
       const hasDebt = (position?.debtAmount ?? 0) > 0;
       const hasCollateral = (position?.collateralAmount ?? 0) > 0;
-    if (!position || (!hasDebt && !hasCollateral)) {
-      if (this.kaminoState?.active) {
-        // Posição sumiu on-chain após fechamento — desativa o ciclo localmente
-        // em vez de manter active=true com estado inconsistente.
-        const wasJustClosed =
-          !this.kaminoState.collateralAmount ||
-          Number(this.kaminoState.collateralAmount) <= 0;
-        if (wasJustClosed) {
-          this.setKaminoState({
-            ...this.kaminoState,
-            active: false,
-            reservedTokenA: null,
-            reservedTokenB: null,
-            reservedCollateralDust: null,
-            lastError: null,
-            updatedAt: new Date().toISOString()
-          });
-          this.kaminoPoolOpenedAt = null;
-          this.releaseKaminoLockIfOwned();
-          this.queueKaminoLog(
-            "not-found",
-            "Posicao Kamino nao encontrada no market; ciclo desativado.",
-            "warn"
-          );
-        } else {
-          this.setKaminoState({
-            ...this.kaminoState,
-            lastError: "Posicao Kamino nao encontrada no market; mantendo ciclo salvo."
-          });
-          this.queueKaminoLog(
-            "not-found",
-            "Posicao Kamino nao encontrada no market; mantendo ciclo salvo.",
-            "warn"
-          );
+      if (!position || (!hasDebt && !hasCollateral)) {
+        this.kaminoMissingCount += 1;
+        if (!this.kaminoMissingSince) {
+          this.kaminoMissingSince = Date.now();
         }
+        if (this.kaminoState?.active) {
+          // Posição sumiu on-chain após fechamento — desativa o ciclo localmente
+          // após confirmação (2 leituras) para evitar falso positivo por RPC.
+          const wasJustClosed =
+            !this.kaminoState.collateralAmount ||
+            Number(this.kaminoState.collateralAmount) <= 0;
+          const confirmedMissing = this.kaminoMissingCount >= 2;
+          if (wasJustClosed || confirmedMissing) {
+            this.setKaminoState({
+              ...this.kaminoState,
+              active: false,
+              reservedTokenA: null,
+              reservedTokenB: null,
+              reservedCollateralDust: null,
+              lastError: null,
+              updatedAt: new Date().toISOString()
+            });
+            this.kaminoPoolOpenedAt = null;
+            this.releaseKaminoLockIfOwned();
+            this.queueKaminoLog(
+              "not-found",
+              "Posicao Kamino nao encontrada no market; ciclo desativado.",
+              "warn"
+            );
+          } else {
+            this.setKaminoState({
+              ...this.kaminoState,
+              lastError: "Posicao Kamino nao encontrada no market; aguardando confirmacao."
+            });
+            this.queueKaminoLog(
+              "not-found",
+              "Posicao Kamino nao encontrada no market; aguardando confirmacao.",
+              "warn"
+            );
+          }
+        }
+        return;
       }
-      return;
-    }
+
+      this.kaminoMissingCount = 0;
+      this.kaminoMissingSince = null;
 
       const deposits = Array.isArray(position.deposits) ? position.deposits : [];
       const borrows = Array.isArray(position.borrows) ? position.borrows : [];
