@@ -123,6 +123,41 @@ let cachedPoolsResponse = null;
 let uiErrorCount = 0;
 const UI_ERROR_LIMIT = 3;
 
+function normalizePoolsResponse(raw) {
+  if (!raw) return null;
+  if (Array.isArray(raw)) return { pools: raw };
+  if (Array.isArray(raw.pools)) return raw;
+  return null;
+}
+
+function updateCachedPoolRunning(id, running) {
+  if (!id) return;
+  const normalized = normalizePoolsResponse(cachedPoolsResponse)
+    ?? (Array.isArray(cachedPools) ? { pools: cachedPools } : null);
+  if (!normalized) return;
+  normalized.pools = normalized.pools.map((pool) =>
+    pool.id === id ? { ...pool, running: Boolean(running) } : pool
+  );
+  cachedPoolsResponse = normalized;
+  cachedPools = normalized.pools;
+}
+
+function applyStatusSnapshot(status) {
+  if (!status) return;
+  cachedStatus = status;
+  const selectedId = cachedConfig?.selectedPoolId
+    ?? cachedPoolsResponse?.selectedPoolId
+    ?? null;
+  if (selectedId) {
+    updateCachedPoolRunning(selectedId, status.running);
+  }
+  const pools = normalizePoolsResponse(cachedPoolsResponse)
+    ?? (Array.isArray(cachedPools) ? { pools: cachedPools } : null);
+  if (cachedStatus && cachedConfig && pools) {
+    renderUiSnapshot(cachedStatus, cachedConfig, cachedHistory, pools, cachedKaminoLogs);
+  }
+}
+
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const closeBtn = document.getElementById("closeBtn");
@@ -201,7 +236,7 @@ const actionLabels = {
 const actionTypeLabels = {
   "abertura": "Abertura",
   "fechamento": "Fechamento",
-  "fechamento-emprestimo": "Fechamento Empréstimo",
+  "fechamento-emprestimo": "Fechamento Empr\u00e9stimo",
   "fechamento + abertura": "Fechamento + abertura",
   "monitorando": "Monitorando",
   "operacional": "Operacional"
@@ -1239,7 +1274,7 @@ function closeKaminoLogModal() {
 
 function renderPools(data, config) {
   closeActiveActionMenu();
-  const pools = data?.pools ?? [];
+  const pools = Array.isArray(data) ? data : (data?.pools ?? []);
   cachedPools = pools;
   cachedConfig = config;
   if (!pools.length) {
@@ -1324,7 +1359,8 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
   cachedHistory = Array.isArray(history) ? history : [];
   if (status) cachedStatus = status;
   if (config) cachedConfig = config;
-  if (pools) cachedPoolsResponse = pools;
+  const normalizedPools = normalizePoolsResponse(pools);
+  if (normalizedPools) cachedPoolsResponse = normalizedPools;
   if (Array.isArray(kaminoLogs)) {
     cachedKaminoLogs = kaminoLogs;
   }
@@ -1336,9 +1372,8 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
   applyStatusTone(runningEl, runningEl.textContent);
   applyStatusTone(lastErrorEl, lastErrorEl.textContent);
   const tokenInfo = getTokenInfo(config);
-  const selectedPool = Array.isArray(pools)
-    ? pools.find((item) => item.id === config.selectedPoolId)
-    : null;
+  const poolsList = normalizedPools?.pools ?? [];
+  const selectedPool = poolsList.find((item) => item.id === config.selectedPoolId) ?? null;
   const selectedOverrides = selectedPool?.overrides ?? {};
 
   const priceText = formatNumber(normalizeDisplayPrice(status.lastPrice, tokenInfo), 8);
@@ -1505,7 +1540,7 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
     renderHistory(cachedHistory);
   }
   renderKaminoLogs(kaminoLogs);
-  renderPools(pools, config);
+  renderPools(normalizedPools ?? poolsList, config);
 }
 
 async function updateUI() {
@@ -1530,9 +1565,11 @@ async function updateUI() {
   const status = statusResult.status === "fulfilled" ? statusResult.value : cachedStatus;
   const config = configResult.status === "fulfilled" ? configResult.value : cachedConfig;
   const history = historyResult.status === "fulfilled" ? historyResult.value : cachedHistory;
-  const pools = poolsResult.status === "fulfilled"
+  const poolsRaw = poolsResult.status === "fulfilled"
     ? poolsResult.value
     : (cachedPoolsResponse ?? (Array.isArray(cachedPools) ? { pools: cachedPools } : null));
+  const pools = normalizePoolsResponse(poolsRaw)
+    ?? (Array.isArray(cachedPools) ? { pools: cachedPools } : null);
   const kaminoLogs = kaminoLogsResult.status === "fulfilled" ? kaminoLogsResult.value : cachedKaminoLogs;
 
   if (status && config && pools) {
@@ -1547,12 +1584,20 @@ async function updateUI() {
 }
 
 startBtn.addEventListener("click", async () => {
-  await fetch("/api/start", { method: "POST" });
+  const res = await fetch("/api/start", { method: "POST" });
+  const data = await res.json().catch(() => null);
+  if (data?.status) {
+    applyStatusSnapshot(data.status);
+  }
   updateUI();
 });
 
 stopBtn.addEventListener("click", async () => {
-  await fetch("/api/stop", { method: "POST" });
+  const res = await fetch("/api/stop", { method: "POST" });
+  const data = await res.json().catch(() => null);
+  if (data?.status) {
+    applyStatusSnapshot(data.status);
+  }
   updateUI();
 });
 
@@ -2184,12 +2229,20 @@ async function handlePoolAction(action, id) {
 
   if (action === "start") {
     await fetch(`/api/pools/${id}/start`, { method: "POST" });
+    updateCachedPoolRunning(id, true);
+    if (cachedConfig?.selectedPoolId === id && cachedStatus) {
+      cachedStatus = { ...cachedStatus, running: true };
+    }
     updateUI();
     return;
   }
 
   if (action === "stop") {
     await fetch(`/api/pools/${id}/stop`, { method: "POST" });
+    updateCachedPoolRunning(id, false);
+    if (cachedConfig?.selectedPoolId === id && cachedStatus) {
+      cachedStatus = { ...cachedStatus, running: false };
+    }
     updateUI();
     return;
   }
