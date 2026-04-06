@@ -3983,6 +3983,9 @@ export class OrcaBot {
   }
 
   updateConfig(config: Config): void {
+    const prevBuffer = Number(this.config.kaminoPriceBufferPct ?? 0) || 0;
+    const nextBuffer = Number(config.kaminoPriceBufferPct ?? 0) || 0;
+    const bufferChanged = Math.abs(prevBuffer - nextBuffer) > 1e-9;
     const previousMarket = this.config.kaminoMarketAddress
       ?? process.env.KAMINO_MARKET
       ?? null;
@@ -3995,6 +3998,68 @@ export class OrcaBot {
       this.kaminoClientMarket = null;
     }
     this.outOfRangeSince = null;
+    if (bufferChanged) {
+      this.recalculateKaminoTargets("buffer-change");
+    }
+  }
+
+  private recalculateKaminoTargets(reason: string): void {
+    const state = this.kaminoState;
+    if (!state?.active) {
+      return;
+    }
+    const collaterals = Array.isArray(state.collaterals) && state.collaterals.length
+      ? state.collaterals.map((item) => ({ ...item }))
+      : (state.collateralMint
+        ? [{
+          mint: state.collateralMint,
+          amount: state.collateralAmount ?? 0,
+          usd: state.collateralUsd ?? null,
+          debtUsd: state.debtUsd ?? null,
+          avgPriceUsdc: state.avgPriceUsdc ?? null,
+          targetPriceUsdc: state.targetPriceUsdc ?? null
+        }]
+        : []);
+    if (!collaterals.length) {
+      return;
+    }
+    const bufferPct = Number(this.config.kaminoPriceBufferPct ?? 0) || 0;
+    const poolLossUsd = (() => {
+      const pnl = this.lastStatus.positionPnlUsd ?? null;
+      if (pnl != null && Number.isFinite(pnl) && pnl < 0) return Math.abs(pnl);
+      return 0;
+    })();
+    const totalUsdForLoss = collaterals.reduce((sum, item) => sum + (Number(item.usd ?? 0) || 0), 0);
+    const lossAdjPct = totalUsdForLoss > 0 && poolLossUsd > 0
+      ? (poolLossUsd / totalUsdForLoss) * 100
+      : 0;
+    let changed = false;
+    const nextCollaterals = collaterals.map((entry) => {
+      const avg = entry.avgPriceUsdc;
+      if (avg != null && Number.isFinite(avg) && avg > 0) {
+        const target = avg * (1 + ((bufferPct + lossAdjPct) / 100));
+        if (entry.targetPriceUsdc == null || Math.abs(entry.targetPriceUsdc - target) > 1e-9) {
+          changed = true;
+        }
+        return { ...entry, targetPriceUsdc: target };
+      }
+      return entry;
+    });
+    if (!changed) {
+      return;
+    }
+    const single = nextCollaterals.length === 1 ? nextCollaterals[0] : null;
+    this.setKaminoState({
+      ...state,
+      collaterals: nextCollaterals,
+      targetPriceUsdc: single ? single.targetPriceUsdc ?? null : state.targetPriceUsdc ?? null,
+      updatedAt: new Date().toISOString()
+    });
+    this.queueKaminoLog(
+      "target-recalc",
+      `Alvo Kamino atualizado (${reason}; buffer ${bufferPct.toFixed(2)}%).`,
+      "info"
+    );
   }
 
   private async ensureKaminoClient(marketAddressOverride?: string | null): Promise<KaminoClient> {
