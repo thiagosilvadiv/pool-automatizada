@@ -1376,3 +1376,23 @@ tbody tr:nth-child(even) {
     height: 420px;
   }
 }
+# Oculta colunas não usadas (Tendência e Hedge*)
+# Ordem atual da tabela de pools:
+# 1 Pool, 2 Criada, 3 Whirlpool, 4 Range, 5 Saída pref, 6 Direção,
+# 7 Bias %, 8 Tendência, 9 Budget USD, 10 Hedge %, 11 Hedge símbolo,
+# 12 Hedge lev, 13 Hedge entrada, 14 Status, 15 Ação, 16 PnL, 17 Selecionada, 18 Ações
+# Escondemos 8,10,11,12,13
+# Pools table
+# Usamos nth-child para afetar apenas a tabela de pools.
+table#poolsTable th:nth-child(8),
+table#poolsTable td:nth-child(8),
+table#poolsTable th:nth-child(10),
+table#poolsTable td:nth-child(10),
+table#poolsTable th:nth-child(11),
+table#poolsTable td:nth-child(11),
+table#poolsTable th:nth-child(12),
+table#poolsTable td:nth-child(12),
+table#poolsTable th:nth-child(13),
+table#poolsTable td:nth-child(13) {
+  display: none;
+}
