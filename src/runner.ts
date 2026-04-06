@@ -429,7 +429,9 @@ export class BotRunner {
     const collaterals = deposits.map((dep) => ({
       mint: dep.mint,
       amount: dep.amount,
-      usd: null,
+      usd: Number.isFinite(Number(dep.amount)) && Number.isFinite(Number(loan.avgPriceUsdc))
+        ? Number(dep.amount) * Number(loan.avgPriceUsdc)
+        : null,
       debtUsd: null,
       avgPriceUsdc: dep.avgPriceUsdc ?? null,
       targetPriceUsdc: dep.targetPriceUsdc ?? null

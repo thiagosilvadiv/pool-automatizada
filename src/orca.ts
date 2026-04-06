@@ -542,6 +542,15 @@ export class OrcaBot {
       || message.includes("429");
   }
 
+  private normalizeError(reason: string | null | undefined): string {
+    if (!reason) return "";
+    return String(reason)
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+  }
+
   private isKaminoRetryableError(err: any): boolean {
     if (!err) return false;
     if (this.isRateLimitError(err)) return true;
@@ -588,19 +597,43 @@ export class OrcaBot {
   private scheduleKaminoRepayRetry(
     state: KaminoCycleState,
     reason: string,
-    mode: "manual" | "target" | "token-change"
+    mode: "manual" | "target" | "token-change",
+    currentDebtAmount?: number
   ): boolean {
     const retrySec = Math.max(1, Number(this.config.kaminoRepayRetrySec ?? 15));
-    const maxAttempts = Math.max(0, Math.floor(Number(this.config.kaminoRepayMaxAttempts ?? 5)));
+    const maxAttempts = Math.max(0, Math.floor(Number(this.config.kaminoRepayMaxAttempts ?? 3)));
     const nextAttempts = Number(state.repayRetryAttempts ?? 0) + 1;
-    if (maxAttempts === 0 || nextAttempts > maxAttempts) {
+    const normalizedReason = this.normalizeError(reason);
+    const prevKey = state.repayLastErrorKey ?? null;
+    const prevDebt = Number(state.repayLastDebt ?? NaN);
+    const debtAmount = Number.isFinite(currentDebtAmount)
+      ? Number(currentDebtAmount)
+      : Number(state.debtAmount ?? 0);
+    const debtUnchanged = Number.isFinite(prevDebt)
+      ? Math.abs(prevDebt - debtAmount) < 1e-8
+      : false;
+    const sameError = normalizedReason === (prevKey ?? "");
+    const prevStreak = Number(state.repayErrorStreak ?? 0);
+    const nextStreak = sameError && debtUnchanged ? prevStreak + 1 : 1;
+
+    if (maxAttempts === 0 || nextAttempts > maxAttempts || nextStreak >= maxAttempts) {
       this.setKaminoState({
         ...state,
         repayRetryUntil: null,
         repayRetryAttempts: nextAttempts,
         repayRetryReason: reason,
-        lastError: reason
+        repayErrorStreak: nextStreak,
+        repayLastErrorKey: normalizedReason,
+        repayLastDebt: debtAmount,
+        lastError: nextStreak >= maxAttempts
+          ? `Pausado após ${nextStreak} falhas idênticas: ${reason}`
+          : reason
       });
+      this.queueKaminoLog(
+        "paused-max-retries",
+        `Ciclo pausado após ${nextStreak}/${maxAttempts} falhas: ${reason}`,
+        "error"
+      );
       return false;
     }
     const retryAt = new Date(Date.now() + retrySec * 1000);
@@ -628,9 +661,12 @@ export class OrcaBot {
       repayRetryUntil: retryUntil,
       repayRetryAttempts: nextAttempts,
       repayRetryReason: reason,
-      lastError: message
+      repayErrorStreak: nextStreak,
+      repayLastErrorKey: normalizedReason,
+      repayLastDebt: debtAmount,
+      lastError: `${message} [${nextStreak}/${maxAttempts}]`
     });
-    this.queueKaminoLog("repay-wait", message, "warn");
+    this.queueKaminoLog("repay-wait", `${message} [${nextStreak}/${maxAttempts}]`, "warn");
     if (mode === "target" || mode === "manual") {
       return true;
     }
@@ -2895,6 +2931,13 @@ export class OrcaBot {
         ? Number(state.repayRetryAttempts)
         : null,
       repayRetryReason: state.repayRetryReason ?? null,
+      repayErrorStreak: Number.isFinite(Number(state.repayErrorStreak ?? NaN))
+        ? Number(state.repayErrorStreak)
+        : null,
+      repayLastErrorKey: state.repayLastErrorKey ?? null,
+      repayLastDebt: Number.isFinite(Number(state.repayLastDebt ?? NaN))
+        ? Number(state.repayLastDebt)
+        : null,
       baselineTokenA,
       baselineTokenB,
       reservedTokenA,
@@ -5087,6 +5130,13 @@ export class OrcaBot {
 
     let debtAmount = Math.min(recordedDebtAmount, onChainDebtAmount);
     const repayBufferPct = Math.max(0, Number(this.config.kaminoPriceBufferPct ?? 0.5));
+    if (debtAmount <= 0) {
+      this.queueKaminoLog(
+        "repay-skipped-zero-debt",
+        `Divida zero on-chain (${onChainDebtAmount.toFixed(8)}); registrada local ${recordedDebtAmount.toFixed(8)}.`,
+        "info"
+      );
+    }
     if (debtAmount > 0) {
       this.queueKaminoLog(
         "repay-start",
@@ -5143,7 +5193,7 @@ export class OrcaBot {
             minAmountNeeded: Math.max(0.01, (debtAmount - convertibleAmount) * 1.02)
           }).catch(() => {});
         }
-        if (this.scheduleKaminoRepayRetry(state, message, mode) && mode === "target") {
+        if (this.scheduleKaminoRepayRetry(state, message, mode, debtAmount) && mode === "target") {
           return false;
         }
         if (mode === "target") {
@@ -5281,7 +5331,7 @@ export class OrcaBot {
           /custom program error: 0x1(?![0-9a-f])/i.test(repayErrLower) ||
           repayErrLower.includes("insufficient funds");
         if (repayAttempt.retryable && repayAttempt.error && !repayIsInsufficientFunds) {
-          const wait = this.scheduleKaminoRepayRetry(state, repayAttempt.error, mode);
+          const wait = this.scheduleKaminoRepayRetry(state, repayAttempt.error, mode, debtAmount);
           if (wait) {
             return false;
           }
@@ -5462,7 +5512,7 @@ export class OrcaBot {
                   // Erro retryable no fallback manual: agendar retry do ciclo inteiro
                   // em vez de apenas reduzir o chunk. O blockhash expirado não é
                   // resolvido reduzindo o chunk — precisa de uma nova tx com novo blockhash.
-                  const wait = this.scheduleKaminoRepayRetry(state, msg, mode);
+                  const wait = this.scheduleKaminoRepayRetry(state, msg, mode, debtAmount);
                   if (wait) return false;
                   // Tentativas esgotadas: sair do loop sem reduzir chunk.
                   break;
@@ -5560,7 +5610,7 @@ export class OrcaBot {
             debtAmount = 0;
             stableBalance = await this.getWalletTokenBalance(stable.mint);
           } else if (this.isKaminoRetryableError(message)) {
-            const wait = this.scheduleKaminoRepayRetry(state, message, mode);
+            const wait = this.scheduleKaminoRepayRetry(state, message, mode, debtAmount);
             if (wait) {
               return false;
             }
@@ -5675,13 +5725,13 @@ export class OrcaBot {
               `Withdraw falhou com market stale (${message}); market sera recarregado na proxima tentativa.`,
               "warn"
             );
-            const wait = this.scheduleKaminoRepayRetry(state, message, mode);
+            const wait = this.scheduleKaminoRepayRetry(state, message, mode, debtAmount);
             if (wait) {
               return false;
             }
           }
           if (this.isKaminoRetryableError(message)) {
-            const wait = this.scheduleKaminoRepayRetry(state, message, mode);
+            const wait = this.scheduleKaminoRepayRetry(state, message, mode, debtAmount);
             if (wait) {
               return false;
             }
@@ -5769,6 +5819,9 @@ export class OrcaBot {
       marketAddress: state.marketAddress ?? this.getKaminoMarketAddress(),
       repayRetryUntil: null,
       repayRetryAttempts: 0,
+      repayErrorStreak: 0,
+      repayLastErrorKey: null,
+      repayLastDebt: null,
       repayRetryReason: null,
       baselineTokenA: null,
       baselineTokenB: null,
@@ -6040,6 +6093,9 @@ export class OrcaBot {
       collaterals: remainingCollaterals,
       repayRetryUntil: null,
       repayRetryAttempts: 0,
+      repayErrorStreak: 0,
+      repayLastErrorKey: null,
+      repayLastDebt: null,
       repayRetryReason: null,
       updatedAt: new Date().toISOString(),
       lastError: null

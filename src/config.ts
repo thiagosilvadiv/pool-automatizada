@@ -609,7 +609,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     kaminoRepayRetrySec: envKaminoRepayRetrySec
       ?? Number((data as any).kaminoRepayRetrySec ?? 15),
     kaminoRepayMaxAttempts: envKaminoRepayMaxAttempts
-      ?? Number((data as any).kaminoRepayMaxAttempts ?? 2),
+      ?? Number((data as any).kaminoRepayMaxAttempts ?? 3),
     kaminoGracePeriodSec: envKaminoGracePeriodSec
       ?? Number((data as any).kaminoGracePeriodSec ?? 120),
     autoResumeEnabled,

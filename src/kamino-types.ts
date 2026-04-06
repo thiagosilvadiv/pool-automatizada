@@ -24,6 +24,9 @@ export type KaminoCycleState = {
   repayRetryUntil?: string | null;
   repayRetryAttempts?: number | null;
   repayRetryReason?: string | null;
+  repayErrorStreak?: number | null;
+  repayLastErrorKey?: string | null;
+  repayLastDebt?: number | null;
   baselineTokenA?: number | null;
   baselineTokenB?: number | null;
   reservedTokenA?: number | null;
