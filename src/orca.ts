@@ -997,8 +997,8 @@ export class OrcaBot {
           const price = await this.getCurrentPrice();
           const range = calculateRange(price, this.config.rangeWidthPct, {
             exitBiasPct: this.config.rangeExitBiasPct,
-            exitSide,
-            valueToken
+            exitSide: exitSide ?? undefined,
+            valueToken: valueToken ?? undefined
           });
           const executionRange = this.getExecutionRange(range, price);
           const solUsdPrice = await this.tryGetSolUsdPrice();
@@ -1024,8 +1024,8 @@ export class OrcaBot {
     const price = await this.getCurrentPrice();
     const range = calculateRange(price, this.config.rangeWidthPct, {
       exitBiasPct: this.config.rangeExitBiasPct,
-      exitSide,
-      valueToken
+      exitSide: exitSide ?? undefined,
+      valueToken: valueToken ?? undefined
     });
     const executionRange = this.getExecutionRange(range, price);
     this.lastStatus.lastPrice = price;
