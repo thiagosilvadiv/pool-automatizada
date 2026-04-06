@@ -370,6 +370,9 @@ export type BotStatus = {
   kaminoOwnerPoolName: string | null;
   kaminoMarketAddress: string | null;
   kaminoHealth: KaminoHealthStatus | null;
+  // Origem do cálculo de entry USD (para não poluir PnL em reconstruções)
+  positionEntrySource: "deposit" | "reconstructed" | null;
+  eventPositionEntrySource: "deposit" | "reconstructed" | null;
 };
 
 export type KaminoLogItem = {
@@ -468,10 +471,12 @@ export class OrcaBot {
     positionValueUsd: null,
     positionPnlUsd: null,
     positionEntryUsd: null,
+    positionEntrySource: null,
     positionFeesUsd: null,
     positionExitUsd: null,
     eventPositionMint: null,
     eventPositionEntryUsd: null,
+    eventPositionEntrySource: null,
     eventPositionFeesUsd: null,
     eventPositionExitUsd: null,
     tokenAMint: null,
@@ -812,6 +817,7 @@ export class OrcaBot {
     this.lastStatus.running = true;
     this.lastStatus.eventPositionMint = null;
     this.lastStatus.eventPositionEntryUsd = null;
+    this.lastStatus.eventPositionEntrySource = null;
     this.lastStatus.eventPositionFeesUsd = null;
     this.lastStatus.eventPositionExitUsd = null;
     this.resetActionFee();
@@ -1244,6 +1250,7 @@ export class OrcaBot {
     this.lastStatus.running = true;
     this.lastStatus.eventPositionMint = null;
     this.lastStatus.eventPositionEntryUsd = null;
+    this.lastStatus.eventPositionEntrySource = null;
     this.lastStatus.eventPositionFeesUsd = null;
     this.lastStatus.eventPositionExitUsd = null;
     this.resetActionFee();
@@ -1818,6 +1825,7 @@ export class OrcaBot {
         // Como forçamos o valor acumulado aqui, ele será preservado.
         this.positionEntryUsd = accumulatedEntry;
         this.lastStatus.positionEntryUsd = accumulatedEntry;
+        this.lastStatus.positionEntrySource = "deposit";
         this.lastStatus.positionPnlUsd = null;
         logger.info(
           { previousEntry, addedUsd, accumulatedEntry },
@@ -2689,6 +2697,7 @@ export class OrcaBot {
     }
     this.lastStatus.eventPositionMint = this.currentPositionMint;
     this.lastStatus.eventPositionEntryUsd = this.lastStatus.positionEntryUsd ?? this.positionEntryUsd;
+    this.lastStatus.eventPositionEntrySource = this.lastStatus.positionEntrySource ?? null;
     this.lastStatus.eventPositionFeesUsd = this.lastStatus.positionFeesUsd ?? null;
     this.lastStatus.eventPositionExitUsd = this.lastPositionValueUsdWithFees
       ?? this.lastStatus.positionValueUsd
@@ -2993,9 +3002,10 @@ export class OrcaBot {
     return this.getTokenBalances();
   }
 
-   setPositionEntryUsd(value: number | null): void {
+   setPositionEntryUsd(value: number | null, source: "deposit" | "reconstructed" | null = null): void {
      this.positionEntryUsd = value;
      this.lastStatus.positionEntryUsd = value;
+     this.lastStatus.positionEntrySource = source ?? this.lastStatus.positionEntrySource ?? null;
    }
 
    // Correção Bug 2: método público para resetar apenas os anchors de valor
@@ -3417,27 +3427,47 @@ export class OrcaBot {
       const existingCollaterals = Array.isArray(this.kaminoState?.collaterals)
         ? this.kaminoState!.collaterals
         : [];
+      const priceRecovered = async (mint: string | null | undefined, amount: number | null | undefined, prev?: KaminoCollateralEntry) => {
+        const safeMint = mint ?? "";
+        const safeAmount = amount ?? 0;
+        let usd = prev?.usd ?? null;
+        let avg = prev?.avgPriceUsdc ?? null;
+        if (safeMint && safeAmount > 0) {
+          try {
+            const priced = await this.tryPriceCollateral(safeMint, safeAmount);
+            if (priced != null) {
+              usd = priced;
+              avg = priced / safeAmount;
+            }
+          } catch {
+            // mantém valores anteriores se o preço falhar
+          }
+        }
+        return {
+          mint: safeMint,
+          amount: safeAmount,
+          usd,
+          debtUsd: prev?.debtUsd ?? null,
+          avgPriceUsdc: avg,
+          targetPriceUsdc: prev?.targetPriceUsdc ?? null
+        };
+      };
+
       const recoveredCollaterals: KaminoCollateralEntry[] = deposits.length
-        ? deposits.map((item) => {
-          const prev = existingCollaterals.find((e) => e.mint === item.mint);
-          return {
-            mint: item.mint ?? "",
-            amount: item.amount ?? 0,
-            usd: prev?.usd ?? null,
-            debtUsd: prev?.debtUsd ?? null,
-            avgPriceUsdc: prev?.avgPriceUsdc ?? null,
-            targetPriceUsdc: prev?.targetPriceUsdc ?? null
-          };
-        })
+        ? await Promise.all(
+          deposits.map(async (item) => {
+            const prev = existingCollaterals.find((e) => e.mint === item.mint);
+            return priceRecovered(item.mint, item.amount, prev);
+          })
+        )
         : (position?.collateralMint && (position.collateralAmount ?? 0) > 0
-          ? [{
-            mint: position.collateralMint,
-            amount: position.collateralAmount ?? 0,
-            usd: existingCollaterals[0]?.usd ?? null,
-            debtUsd: existingCollaterals[0]?.debtUsd ?? null,
-            avgPriceUsdc: existingCollaterals[0]?.avgPriceUsdc ?? null,
-            targetPriceUsdc: existingCollaterals[0]?.targetPriceUsdc ?? null
-          }]
+          ? [
+              await priceRecovered(
+                position.collateralMint,
+                position.collateralAmount ?? 0,
+                existingCollaterals[0]
+              )
+            ]
           : []);
 
       if (this.kaminoState?.active) {
@@ -3557,7 +3587,8 @@ export class OrcaBot {
             debtAmount: onChainDebt,
             collaterals: recoveredCollaterals,
             updatedAt: new Date().toISOString(),
-            lastError: null
+            lastError: null,
+            entrySource: this.kaminoState?.entrySource ?? null
           };
           this.setKaminoState(updated);
           this.queueKaminoLog("reconcile", "Estado Kamino reconciliado com on-chain.", "warn");
@@ -3613,7 +3644,8 @@ export class OrcaBot {
       collaterals: recoveredCollaterals,
       cycleCount: Math.max(previous?.cycleCount ?? 0, 1),
       updatedAt: new Date().toISOString(),
-      lastError: "Ciclo Kamino recuperado do market (sem historico)."
+      lastError: "Ciclo Kamino recuperado do market (sem historico).",
+      entrySource: "reconstructed"
     };
     this.kaminoState = this.normalizeKaminoState(nextState);
     this.queueKaminoLog(
@@ -5563,20 +5595,54 @@ export class OrcaBot {
 
     for (const entry of withdrawTargets) {
       if (entry.mint && entry.amount > 0) {
+        let amountToWithdraw = entry.amount;
         try {
-          const withdrawResult = await this.kaminoCallWithRetry(
-            () => kamino.withdraw({ mint: entry.mint, amount: entry.amount }),
-            "kamino-withdraw"
-          );
-          this.recordKaminoSuccess("withdraw", entry.mint, withdrawResult.actualAmount, withdrawResult.signature);
-          if (withdrawResult.dustAmount > 0) {
-            reservedDust += withdrawResult.dustAmount;
-            this.recordWithdrawDust(withdrawResult.dustAmount, entry.mint);
+          const capacityInfo = await kamino.getWithdrawCapacity({
+            collateralMint: entry.mint,
+            debtMint: stable.mint,
+            repayAmountUi: 0,
+            bufferPct: 0.99
+          });
+          const capacityUi = Number(capacityInfo?.capacityUi ?? 0);
+          if (!Number.isFinite(capacityUi) || capacityUi <= 0) {
+            this.queueKaminoLog(
+              "withdraw-capacity-zero",
+              `Withdraw ignorado: capacidade insuficiente (mint=${entry.mint}, requested=${entry.amount.toFixed(8)}, capacity=${capacityUi})`,
+              "warn"
+            );
+            continue;
           }
-          this.queueHistoryAction("kamino-withdraw");
+          const capped = Math.min(amountToWithdraw, capacityUi);
+          if (capped < amountToWithdraw - 1e-9) {
+            this.queueKaminoLog(
+              "withdraw-capped",
+              `Amount limitado pela capacidade (mint=${entry.mint}, requested=${amountToWithdraw.toFixed(8)}, capacity=${capacityUi.toFixed(8)}, using=${capped.toFixed(8)})`,
+              "warn"
+            );
+            amountToWithdraw = capped;
+          }
+        } catch (capErr) {
+          logger.warn({ err: capErr, mint: entry.mint, amount: entry.amount }, "falha ao obter capacidade; mantendo amount original");
+        }
+
+        let attempts = 0;
+        while (attempts < 2 && amountToWithdraw > KAMINO_WITHDRAW_MIN) {
+          try {
+            const withdrawResult = await this.kaminoCallWithRetry(
+              () => kamino.withdraw({ mint: entry.mint, amount: amountToWithdraw }),
+              "kamino-withdraw"
+            );
+            this.recordKaminoSuccess("withdraw", entry.mint, withdrawResult.actualAmount, withdrawResult.signature);
+            if (withdrawResult.dustAmount > 0) {
+              reservedDust += withdrawResult.dustAmount;
+              this.recordWithdrawDust(withdrawResult.dustAmount, entry.mint);
+            }
+            this.queueHistoryAction("kamino-withdraw");
+            break;
         } catch (err) {
-          const message = stringifyError(err);
-          const msgLower = message.toLowerCase();
+            attempts += 1;
+            const message = stringifyError(err);
+            const msgLower = message.toLowerCase();
 
           // 0x1784 = ObligationDepositsEmpty (6020): a obrigação já está vazia.
           // Isso ocorre quando um withdraw anterior (ex: retry após blockhash error
@@ -5620,9 +5686,40 @@ export class OrcaBot {
               return false;
             }
           }
+          const withdrawTooLarge =
+            msgLower.includes("0x177b") ||
+            msgLower.includes("withdrawtoolarge") ||
+            msgLower.includes("withdraw too large") ||
+            msgLower.includes("6011");
+          if (withdrawTooLarge && attempts < 2) {
+            let parsedMax: number | null = null;
+            try {
+              const decoded = decodeURIComponent(message);
+              const matchMax = decoded.match(/max_withdraw_value[=:\\s]+([0-9]+(?:\\.[0-9]+)?)/i);
+              if (matchMax) {
+                const parsed = parseFloat(matchMax[1]);
+                if (Number.isFinite(parsed) && parsed > 0) {
+                  parsedMax = parsed;
+                }
+              }
+            } catch {
+              // ignore
+            }
+            const nextAmount = parsedMax != null ? parsedMax * 0.9 : amountToWithdraw * 0.9;
+            if (nextAmount > KAMINO_WITHDRAW_MIN) {
+              this.queueKaminoLog(
+                "withdraw-too-large",
+                `Retry withdraw reduzido (mint=${entry.mint}, prev=${amountToWithdraw.toFixed(8)}, next=${nextAmount.toFixed(8)}, parsedMax=${parsedMax ?? -1})`,
+                "warn"
+              );
+              amountToWithdraw = nextAmount;
+              continue;
+            }
+          }
           this.queueKaminoLog("withdraw-failed", message, "error");
           throw err;
         }
+      }
       }
     }
 
@@ -7352,6 +7449,7 @@ export class OrcaBot {
       this.lastStatus.positionValueUsd = null;
       this.lastStatus.positionPnlUsd = null;
       this.lastStatus.positionEntryUsd = null;
+      this.lastStatus.positionEntrySource = null;
       this.lastStatus.positionFeesUsd = null;
       this.lastPositionValueUsdWithFees = null;
       return;
@@ -7437,18 +7535,24 @@ export class OrcaBot {
           minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
         })) {
           this.positionEntryUsd = positionValueUsdWithFees;
+          this.lastStatus.positionEntrySource = "reconstructed";
         }
       }
       if (this.positionEntryUsd != null) {
         this.lastStatus.positionEntryUsd = this.positionEntryUsd;
         this.lastStatus.positionPnlUsd = positionValueUsdWithFees - this.positionEntryUsd;
+        if (!this.lastStatus.positionEntrySource) {
+          this.lastStatus.positionEntrySource = "deposit";
+        }
       } else {
         this.lastStatus.positionEntryUsd = null;
         this.lastStatus.positionPnlUsd = null;
+        this.lastStatus.positionEntrySource = null;
       }
     } else {
       this.lastStatus.positionEntryUsd = null;
       this.lastStatus.positionPnlUsd = null;
+      this.lastStatus.positionEntrySource = null;
     }
     if (this.lastStatus.positionPnlUsd != null
       && !isUsdMagnitudeSane(this.lastStatus.positionPnlUsd, budgetUsd, portfolioUsd)) {
@@ -7954,6 +8058,7 @@ export class OrcaBot {
     this.positionEntryUsd = null;
     this.lastPositionValueUsdWithFees = null;
     this.lastStatus.positionEntryUsd = null;
+    this.lastStatus.positionEntrySource = null;
     this.lastStatus.positionPnlUsd = null;
   }
 

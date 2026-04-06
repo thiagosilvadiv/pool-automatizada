@@ -48,6 +48,8 @@ export type KaminoCycleState = {
     mint: string;
     amount: number;
   } | null;
+  // Indica a origem do cálculo de entry em USD (para PnL/histórico)
+  entrySource?: "deposit" | "reconstructed" | null;
 };
 
 export type PendingReturn = {

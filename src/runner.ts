@@ -121,6 +121,7 @@ export type HistoryEvent = {
   openTokenB: number | null;
   closeTokenA: number | null;
   closeTokenB: number | null;
+  positionEntrySource: "deposit" | "reconstructed" | null;
   positionEntryUsd: number | null;
   positionFeesUsd: number | null;
   positionPnlUsd: number | null;
@@ -1056,10 +1057,16 @@ export class BotRunner {
     const action = status.lastAction;
     const eventPositionMint = status.eventPositionMint ?? null;
     const eventPositionEntryUsd = status.eventPositionEntryUsd ?? null;
+    const eventPositionEntrySource = status.eventPositionEntrySource ?? null;
     const eventPositionFeesUsd = status.eventPositionFeesUsd ?? null;
     const eventPositionExitUsd = status.eventPositionExitUsd ?? null;
     const decisionForMint = (mint: string | null) => this.getHedgeDecision(mint);
-    const resolveEntryFallback = (entry: number | null, mint: string | null): number | null => {
+    const resolveEntryFallback = (
+      entry: number | null,
+      mint: string | null,
+      entrySource: "deposit" | "reconstructed" | null = null
+    ): number | null => {
+      if (entrySource === "reconstructed") return null;
       if (entry != null) {
         return entry;
       }
@@ -1078,6 +1085,8 @@ export class BotRunner {
     };
     let mergedPositionMint = status.positionMint ?? null;
     let mergedPositionEntryUsd = status.positionEntryUsd ?? null;
+    let mergedPositionEntrySource: "deposit" | "reconstructed" | null =
+      status.positionEntrySource ?? null;
     let mergedPositionFeesUsd = status.positionFeesUsd ?? null;
     let mergedPositionPnlUsd = status.positionPnlUsd ?? null;
     let mergedPositionExitUsd: number | null = null;
@@ -1091,7 +1100,12 @@ export class BotRunner {
       mergedPositionFeesUsd = null;
     } else if (action === "close-position") {
       mergedPositionMint = eventPositionMint ?? mergedPositionMint;
-      mergedPositionEntryUsd = resolveEntryFallback(eventPositionEntryUsd ?? mergedPositionEntryUsd, mergedPositionMint);
+      mergedPositionEntryUsd = resolveEntryFallback(
+        eventPositionEntryUsd ?? mergedPositionEntryUsd,
+        mergedPositionMint,
+        eventPositionEntrySource ?? mergedPositionEntrySource
+      );
+      mergedPositionEntrySource = eventPositionEntrySource ?? mergedPositionEntrySource;
       mergedPositionFeesUsd = eventPositionFeesUsd ?? mergedPositionFeesUsd;
       mergedPositionExitUsd = eventPositionExitUsd ?? null;
       if (mergedPositionExitUsd != null && mergedPositionEntryUsd != null) {
@@ -1148,11 +1162,12 @@ export class BotRunner {
           positionTokenB: status.positionTokenB,
           openTokenA: null,
           openTokenB: null,
-          closeTokenA: null,
-          closeTokenB: null,
-          positionEntryUsd: mergedPositionEntryUsd,
-          positionFeesUsd: mergedPositionFeesUsd,
-          positionPnlUsd: mergedPositionPnlUsd,
+      closeTokenA: null,
+      closeTokenB: null,
+      positionEntrySource: mergedPositionEntrySource,
+      positionEntryUsd: mergedPositionEntryUsd,
+      positionFeesUsd: mergedPositionFeesUsd,
+      positionPnlUsd: mergedPositionPnlUsd,
           positionExitUsd: null,
           txFeeLamports,
           txFeeUsd,
@@ -1196,7 +1211,8 @@ export class BotRunner {
       const timestamp = new Date().toISOString();
       const closeMint = eventPositionMint ?? null;
       const closeOpenedAt = closeMint ? this.openedAtByMint.get(closeMint) ?? null : null;
-      const closeEntryUsd = resolveEntryFallback(eventPositionEntryUsd ?? null, closeMint);
+      const closeEntrySource = eventPositionEntrySource ?? mergedPositionEntrySource ?? null;
+      const closeEntryUsd = resolveEntryFallback(eventPositionEntryUsd ?? null, closeMint, closeEntrySource);
       const closeFeesUsd = eventPositionFeesUsd ?? null;
       const closeExitUsd = eventPositionExitUsd ?? null;
       let closePnlUsd = closeExitUsd != null && closeEntryUsd != null
@@ -1232,6 +1248,7 @@ export class BotRunner {
         openTokenB: null,
         closeTokenA: status.lastCloseTokenA,
         closeTokenB: status.lastCloseTokenB,
+        positionEntrySource: closeEntrySource ?? mergedPositionEntrySource,
         positionEntryUsd: closeEntryUsd,
         positionFeesUsd: closeFeesUsd,
         positionPnlUsd: closePnlUsd,
@@ -1296,6 +1313,7 @@ export class BotRunner {
         openTokenB: status.lastOpenTokenB,
         closeTokenA: null,
         closeTokenB: null,
+        positionEntrySource: status.positionEntrySource ?? null,
         positionEntryUsd: status.positionEntryUsd,
         positionFeesUsd: status.positionFeesUsd,
         positionPnlUsd: status.positionPnlUsd,
@@ -1391,6 +1409,7 @@ export class BotRunner {
       openTokenB: status.lastOpenTokenB,
       closeTokenA: status.lastCloseTokenA,
       closeTokenB: status.lastCloseTokenB,
+      positionEntrySource: mergedPositionEntrySource,
       positionEntryUsd: mergedPositionEntryUsd,
       positionFeesUsd: mergedPositionFeesUsd,
       positionPnlUsd: mergedPositionPnlUsd,
@@ -1555,6 +1574,11 @@ export class BotRunner {
             next = { ...next, trendDirection: normalizedTrend };
           }
           const entryUsd = typeof raw.positionEntryUsd === "number" ? raw.positionEntryUsd : null;
+          const entrySource = raw.positionEntrySource ?? null;
+          if (entrySource !== (next as any).positionEntrySource) {
+            next = { ...next, positionEntrySource: entrySource as any };
+            mutated = true;
+          }
           const feesUsd = typeof raw.positionFeesUsd === "number" ? raw.positionFeesUsd : null;
           const budgetUsd = typeof raw.budgetUsd === "number" ? raw.budgetUsd : null;
           const portfolioUsd = typeof raw.portfolioUsd === "number" ? raw.portfolioUsd : null;
@@ -1570,7 +1594,7 @@ export class BotRunner {
           if (entryUsd != null && !isEntryUsdSane(entryUsd, budgetUsd, portfolioUsd, {
             minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
           })) {
-            next = { ...next, positionEntryUsd: null, positionPnlUsd: null };
+            next = { ...next, positionEntryUsd: null, positionPnlUsd: null, positionEntrySource: null };
             mutated = true;
           }
             if (feesUsd != null && !isEntryUsdSane(feesUsd, budgetUsd, portfolioUsd)) {
