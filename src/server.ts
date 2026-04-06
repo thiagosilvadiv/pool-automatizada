@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction, type Express } from "express"
 import path from "path";
 import { fileURLToPath } from "url";
 import { randomUUID } from "crypto";
+import fs from "fs/promises";
 
 import { Config } from "./config.js";
 import { buildConnection, buildWallet, loadKeypair } from "./solana.js";
@@ -60,6 +61,24 @@ export async function startServer(config: Config): Promise<void> {
   const app = express();
   const port = Number(process.env.PORT ?? 3000);
   app.use(express.json());
+
+  const clearLocalData = async (): Promise<void> => {
+    const dataDir = path.join(__dirname, "..", "data");
+    const targets = ["history.json", "pools.json"];
+    for (const file of targets) {
+      try {
+        await fs.rm(path.join(dataDir, file));
+      } catch {}
+    }
+    try {
+      const files = await fs.readdir(dataDir);
+      await Promise.all(
+        files
+          .filter((f) => f.startsWith("history-") && f.endsWith(".json"))
+          .map((f) => fs.rm(path.join(dataDir, f)))
+      );
+    } catch {}
+  };
 
   const hedgeSymbolsCache: { updatedAt: number; symbols: string[] } = { updatedAt: 0, symbols: [] };
   const HEDGE_SYMBOLS_TTL_MS = 5 * 60 * 1000;
@@ -242,6 +261,17 @@ export async function startServer(config: Config): Promise<void> {
         borrowSig: result.borrowSig,
         status: poolManager.getSelectedStatus()
       });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post("/api/reset", async (_req: Request, res: Response) => {
+    try {
+      await poolManager.stopSelected();
+      await poolManager.resetSelectedKaminoCycle();
+      await clearLocalData();
+      res.json({ ok: true, restarting: false });
     } catch (err) {
       res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
     }
