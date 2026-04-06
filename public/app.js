@@ -122,7 +122,12 @@ const UI_ERROR_LIMIT = 3;
 function normalizePoolsResponse(raw) {
   if (!raw) return null;
   if (Array.isArray(raw)) return { pools: raw };
-  if (Array.isArray(raw.pools)) return raw;
+  if (Array.isArray(raw.pools)) {
+    return {
+      ...raw,
+      pools: raw.pools
+    };
+  }
   return null;
 }
 
@@ -1297,8 +1302,28 @@ function closeKaminoLogModal() {
 
 function renderPools(data, config) {
   closeActiveActionMenu();
-  const pools = Array.isArray(data) ? data : (data?.pools ?? []);
-  cachedPools = pools;
+  const hasError = Boolean(data && !Array.isArray(data) && data.error);
+  const errorMsg = hasError ? String(data.error ?? "") : "";
+  let pools = Array.isArray(data) ? data : (data?.pools ?? []);
+  const cachedFallback = normalizePoolsResponse(cachedPoolsResponse)?.pools
+    ?? (Array.isArray(cachedPools) ? cachedPools : []);
+
+  if (hasError && poolError) {
+    poolError.textContent = errorMsg || "Falha ao carregar pools.";
+    poolError.classList.remove("hidden");
+  } else if (poolError) {
+    poolError.textContent = "";
+    poolError.classList.add("hidden");
+  }
+
+  // Se a API falhar e devolver lista vazia, preserva o cache anterior.
+  if (hasError && pools.length === 0 && cachedFallback.length > 0) {
+    pools = cachedFallback;
+  }
+
+  if (pools.length > 0) {
+    cachedPools = pools;
+  }
   cachedConfig = config;
   if (!pools.length) {
     poolsBody.innerHTML = "<tr><td colspan=\"12\">Sem pools cadastradas</td></tr>";
