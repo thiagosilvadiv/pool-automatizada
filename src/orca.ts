@@ -4948,6 +4948,7 @@ export class OrcaBot {
         if (!candidate?.mint) continue;
         const available = onChainDeposits.get(candidate.mint) ?? candidate.amount;
         if (available <= epsilon) continue;
+        let fullRepayAttempt = false;
         if (this.isSwapAllowlistActive() && !this.isSwapAllowed(candidate.mint)) {
           this.queueKaminoLog(
             "repay-with-collateral",
@@ -4997,7 +4998,7 @@ export class OrcaBot {
             : (capacity.capacityUi * effectivePrice);
           const canFullRepay = Number.isFinite(maxStableFromQuote)
             && maxStableFromQuote >= debtRemaining * 0.995;
-          const fullRepayAttempt = canFullRepay;
+          fullRepayAttempt = canFullRepay;
           let repayAmount = debtRemaining;
           let chunkChoice: { chunk: number; reason?: string } | null = null;
           if (!fullRepayAttempt) {
