@@ -9,10 +9,12 @@ import type {
 } from "@kamino-finance/klend-sdk";
 import { KswapSdk, RouterContext } from "@kamino-finance/kswap-sdk";
 import type { RouteOutput, RouteParams, RouterType, MintInfo } from "@kamino-finance/kswap-sdk";
-import Decimal from "decimal.js";
+import DecimalJs from "decimal.js";
 import type { Address } from "@solana/kit";
 
-// Roteadores permitidos pelo KSwap (conforme documentação Kamino)
+const Decimal: any = DecimalJs;
+
+// Roteadores permitidos pelo KSwap (conforme documentacao Kamino)
 const ALLOWED_ROUTERS: RouterType[] = ["metis", "titan", "dflow", "openOcean", "jupiterLite"];
 
 export function getKswapQuoter(
@@ -56,7 +58,7 @@ export function getKswapQuoter(
       throw new Error("Nenhuma rota KSwap encontrada para o par de tokens.");
     }
 
-    // Selecionar melhor rota por preço (maior output garantido)
+    // Selecionar melhor rota por preco (maior output garantido)
     const bestRoute = routeOutputs.routes.reduce((best, current) => {
       const outBest = new Decimal(best.amountsExactIn.amountOutGuaranteed.toString())
         .div(outputMintReserve.getMintFactor());
@@ -120,7 +122,7 @@ export function getKswapSwapper(
     }
 
     // Retornar TODAS as rotas para que getRepayWithCollIxs selecione a melhor
-    // por tamanho de transação (conforme documentação Kamino)
+    // por tamanho de transacao (conforme documentacao Kamino)
     return routeOutputs.routes.map((routeOutput) => {
       const inAmt = new Decimal(routeOutput.amountsExactIn.amountIn.toString())
         .div(routeOutput.inputTokenDecimals || inputMintReserve.getMintFactor());
