@@ -184,7 +184,10 @@ const KAMINO_ERROR_CODES: Record<string, string> = {
   "6092": "NetValueRemainingTooSmall",
   "6006": "InvalidAccountInput",
   "0x1780": "BorrowingDisabled - borrow desativado para este ativo",
-  "0x1785": "ReserveStale - reserve desatualizado, reload necessario",
+  "0x1785": "ObligationBorrowsEmpty - obligation nao tem borrows (divida ja quitada on-chain)",
+  "6021":  "ObligationBorrowsEmpty - obligation nao tem borrows (divida ja quitada on-chain)",
+  "0x1784": "ReserveStale - reserve desatualizado, reload necessario",
+  "6020": "ReserveStale - reserve desatualizado, reload necessario",
   "0x178a": "UtilizationTooHigh - utilizacao do mercado muito alta"
 };
 
@@ -245,6 +248,9 @@ export function buildRpcUrlList(primary: string, rawList?: string): string[] {
 
 export function isBlockhashError(err: any): boolean {
   const msg = String(err?.message ?? err).toLowerCase();
+  // Se for ObligationBorrowsEmpty, NÃO classificar como blockhash.
+  // O erro chega com código -32002 mas a causa real é semântica (divida zerada).
+  if (isObligationBorrowsEmptyError(err)) return false;
   return (
     msg.includes("blockhash not found") ||
     msg.includes("blockhash expired") ||
@@ -254,6 +260,32 @@ export function isBlockhashError(err: any): boolean {
     msg.includes("blockheight exceeded") ||
     msg.includes("lastvalidblockheight") ||
     msg.includes("block height exceeded")
+  );
+}
+
+/**
+ * Verifica se o erro é ObligationBorrowsEmpty (código 6021 / 0x1785).
+ * Isso ocorre quando se tenta repay numa obligation que não tem borrows ativos.
+ * Deve ser tratado como "dívida já quitada on-chain", não como erro fatal nem blockhash.
+ */
+export function isObligationBorrowsEmptyError(err: any): boolean {
+  const msg = String(err?.message ?? err).toLowerCase();
+  const logs: string[] = (err as any)?.__originalErr?.context?.logs
+    ?? (err as any)?.context?.logs
+    ?? (err as any)?.logs
+    ?? [];
+  const logsText = logs.join(" ").toLowerCase();
+  return (
+    msg.includes("obligationborrowsempty") ||
+    msg.includes("obligation borrows are empty") ||
+    msg.includes("obligation has no borrows") ||
+    msg.includes("0x1785") ||
+    msg.includes("6021") ||
+    logsText.includes("obligationborrowsempty") ||
+    logsText.includes("obligation borrows are empty") ||
+    logsText.includes("obligation has no borrows") ||
+    logsText.includes("0x1785") ||
+    logsText.includes("error code: 6021")
   );
 }
 
@@ -490,6 +522,7 @@ class RealKaminoClient implements KaminoClient {
         const decoded = decodeRpcError(err);
         const isBlockhash = isBlockhashError(err);
         const protocolError = parseKaminoProtocolError(err);
+        const isObligationEmpty = isObligationBorrowsEmptyError(err);
         if (isInvalidAccountInputError(err)) {
           this.invalidateMarket(true);
         }
@@ -503,8 +536,17 @@ class RealKaminoClient implements KaminoClient {
           protocolError,
           isRateLimit: isRateLimitError(err),
           isInsufficientFunds: isInsufficientFundsError(err),
-          isBlockhash
+          isBlockhash,
+          isObligationBorrowsEmpty: isObligationEmpty
         }, "kamino sendAction falhou");
+        // ObligationBorrowsEmpty: divida ja quitada on-chain; nao fazer retry.
+        if (isObligationEmpty) {
+          logger.warn({ err: decoded, attempt }, "kamino tx falhou: ObligationBorrowsEmpty — divida ja zerada on-chain; abortando sem retry");
+          const cleanErr = new Error("ObligationBorrowsEmpty: obligation has no borrows — divida ja quitada on-chain");
+          (cleanErr as any).__obligationBorrowsEmpty = true;
+          (cleanErr as any).__originalErr = err;
+          throw cleanErr;
+        }
         // Detecta fundos insuficientes (0x1) incluindo logs internos de simulação.
         if (isInsufficientFundsError(err)) {
           logger.error({ err: decoded, attempt }, "kamino tx falhou por fundos insuficientes (0x1); abortando sem retry");
@@ -1020,6 +1062,37 @@ class RealKaminoClient implements KaminoClient {
       const reason = support.reason ? `: ${support.reason}` : "";
       throw new Error(`Mint ${input.mint} nao suportado para repay${reason}`);
     }
+
+    // Pré-validação: verificar dívida on-chain antes de construir a tx.
+    // Evita o erro ObligationBorrowsEmpty quando o estado local está desatualizado.
+    // Invalidar cache para forçar leitura fresca da obligation.
+    this.invalidatePositionCache();
+    try {
+      const positionState = await this.getPositionState();
+      const onChainDebt = positionState?.borrows?.find((b) => b.mint === input.mint)?.amount ?? 0;
+      if (onChainDebt <= 0) {
+        const noDebtErr = new Error("ObligationBorrowsEmpty: obligation has no borrows — divida ja quitada on-chain");
+        (noDebtErr as any).__obligationBorrowsEmpty = true;
+        logger.warn(
+          { mint: input.mint, requestedAmount: input.amount, onChainDebt },
+          "repay() abortado: dívida on-chain zerada antes de construir tx (ObligationBorrowsEmpty preventivo)"
+        );
+        throw noDebtErr;
+      }
+      // Se a dívida on-chain for menor que o valor solicitado, ajustar para evitar excesso.
+      if (onChainDebt < input.amount) {
+        logger.warn(
+          { mint: input.mint, requestedAmount: input.amount, onChainDebt },
+          "repay(): ajustando amount para dívida on-chain real (evita overpay)"
+        );
+        input = { ...input, amount: onChainDebt };
+      }
+    } catch (preCheckErr: any) {
+      if ((preCheckErr as any).__obligationBorrowsEmpty) throw preCheckErr;
+      // Falha ao ler posição: continuar mesmo assim (evitar bloqueio por RPC instável).
+      logger.warn({ err: preCheckErr }, "repay(): falha ao ler estado on-chain para pré-validação; prosseguindo");
+    }
+
     const market = await this.loadMarket();
     const amountRaw = await this.toRawAmountString(input.mint, input.amount);
     const currentSlot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();

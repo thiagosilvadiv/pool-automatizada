@@ -27,6 +27,7 @@ import type { KaminoCollateralEntry, KaminoCycleState } from "./kamino-types.js"
 import { KaminoHealthMonitor } from "./kamino-health.js";
 import { notifyKaminoFundsNeeded } from "./evolution-notify.js";
 import type { KaminoPositionState, KaminoWithdrawResult } from "./kamino-client.js";
+import { isObligationBorrowsEmptyError } from "./kamino-client.js";
 import { BalanceCoordinator } from "./balance-coordinator.js";
 
 const whirlpools = whirlpoolsSdk as any;
@@ -554,6 +555,8 @@ export class OrcaBot {
   private isKaminoRetryableError(err: any): boolean {
     if (!err) return false;
     if (this.isRateLimitError(err)) return true;
+    // ObligationBorrowsEmpty nunca é retryable — é um estado semântico (dívida zerada).
+    if ((err as any).__obligationBorrowsEmpty || isObligationBorrowsEmptyError(err)) return false;
     const message = String(err?.message ?? err).toLowerCase();
     // Verifica erro original embutido (quando sendAction encapsula 0x1 em retryable)
     const originalErr = (err as any)?.__originalErr ?? (err as any)?.cause;
@@ -731,6 +734,10 @@ export class OrcaBot {
         this.kaminoHealth.recordError(err, label);
         const prevErr = lastErr;
         lastErr = err;
+        // ObligationBorrowsEmpty: dívida já zerada on-chain; não fazer retry.
+        if ((err as any).__obligationBorrowsEmpty) {
+          throw err;
+        }
         if (this.isRateLimitError(err)) {
           // Correção Bug 3: aumentar jitter para evitar thundering herd após restart.
           // Múltiplos pools/operações fazendo retry ao mesmo tempo = mais 429s.
@@ -3726,6 +3733,8 @@ export class OrcaBot {
     } catch (err) {
       const reconcileMsg = String((err as any)?.message ?? err).toLowerCase();
       if (
+        (err as any).__obligationBorrowsEmpty ||
+        isObligationBorrowsEmptyError(err) ||
         reconcileMsg.includes("obligationborrowsempty") ||
         reconcileMsg.includes("obligation borrows are empty") ||
         reconcileMsg.includes("obligation has no borrows") ||
@@ -4925,6 +4934,7 @@ export class OrcaBot {
     const resolved = await this.resolveKaminoPositionWithFallback();
     const kamino = resolved.kamino;
     let position = resolved.position;
+    let positionIsLocalFallback = false;
     if (!position) {
       const hasLocalDebt = (state.debtAmount ?? 0) > 0 && Boolean(state.debtMint);
       const hasLocalCollateral = (state.collateralAmount ?? 0) > 0 && Boolean(state.collateralMint);
@@ -4934,6 +4944,7 @@ export class OrcaBot {
           "Posicao on-chain indisponivel (rate limit?); usando estado local para fechar.",
           "warn"
         );
+        positionIsLocalFallback = true;
         position = {
           collateralMint: state.collateralMint ?? null,
           collateralAmount: state.collateralAmount ?? null,
@@ -5116,6 +5127,19 @@ export class OrcaBot {
     }
 
     const preOpState = await kamino.getPositionState().catch(() => null);
+    // Se position veio de fallback local E conseguimos ler on-chain agora, usar valor fresco.
+    if (positionIsLocalFallback && preOpState != null) {
+      const freshOnChainDebt = preOpState.borrows?.find((b) => b.mint === debtMint)?.amount ?? 0;
+      if (freshOnChainDebt < recordedDebtAmount - 1e-8) {
+        logger.warn(
+          { recordedDebtAmount, freshOnChainDebt, positionIsLocalFallback },
+          "Fallback local: dívida on-chain fresca é menor; usando valor on-chain para repay"
+        );
+        recordedDebtAmount = freshOnChainDebt;
+        state = { ...state, debtAmount: freshOnChainDebt };
+        this.setKaminoState(state);
+      }
+    }
     logger.info(
       {
         operation: "repay-start",
@@ -5123,17 +5147,24 @@ export class OrcaBot {
         amount: recordedDebtAmount,
         preOpCollateral: preOpState?.collateralAmount,
         preOpDebt: preOpState?.debtAmount,
-        preOpLtv: preOpState?.ltv
+        preOpLtv: preOpState?.ltv,
+        positionIsLocalFallback
       },
       "iniciando repay Kamino"
     );
 
-    let debtAmount = Math.min(recordedDebtAmount, onChainDebtAmount);
+    // Quando position veio de fallback local, onChainDebtAmount pode estar inflado
+    // com dados locais. Usar o valor fresco do preOpState se disponível.
+    const effectiveOnChainDebt = (positionIsLocalFallback && preOpState != null)
+      ? (preOpState.borrows?.find((b) => b.mint === debtMint)?.amount ?? onChainDebtAmount)
+      : onChainDebtAmount;
+
+    let debtAmount = Math.min(recordedDebtAmount, effectiveOnChainDebt);
     const repayBufferPct = Math.max(0, Number(this.config.kaminoPriceBufferPct ?? 0.5));
     if (debtAmount <= 0) {
       this.queueKaminoLog(
         "repay-skipped-zero-debt",
-        `Divida zero on-chain (${onChainDebtAmount.toFixed(8)}); registrada local ${recordedDebtAmount.toFixed(8)}.`,
+        `Divida zero on-chain (onChain=${effectiveOnChainDebt.toFixed(8)}, fallback=${onChainDebtAmount.toFixed(8)}); registrada local ${recordedDebtAmount.toFixed(8)}.`,
         "info"
       );
     }
@@ -5276,13 +5307,9 @@ export class OrcaBot {
             debtAmount = Math.max(0, debtAmount - repayChunk);
             stableBalance = await this.getWalletTokenBalance(stable.mint);
           } catch (repayWalletErr) {
-            const repayWalletMsg = String((repayWalletErr as any)?.message ?? repayWalletErr).toLowerCase();
             if (
-              repayWalletMsg.includes("obligationborrowsempty") ||
-              repayWalletMsg.includes("obligation borrows are empty") ||
-              repayWalletMsg.includes("obligation has no borrows") ||
-              repayWalletMsg.includes("0x1785") ||
-              repayWalletMsg.includes("6021")
+              (repayWalletErr as any).__obligationBorrowsEmpty ||
+              isObligationBorrowsEmptyError(repayWalletErr)
             ) {
               this.queueKaminoLog(
                 "repay-wallet",
@@ -5292,9 +5319,9 @@ export class OrcaBot {
               debtAmount = 0;
               stableBalance = await this.getWalletTokenBalance(stable.mint);
             } else if (
-              /\b0x1\b/.test(repayWalletMsg) ||
-              /custom program error: 0x1(?![0-9a-f])/i.test(repayWalletMsg) ||
-              repayWalletMsg.includes("insufficient funds")
+              /\b0x1\b/.test(String((repayWalletErr as any)?.message ?? repayWalletErr)) ||
+              /custom program error: 0x1(?![0-9a-f])/i.test(String((repayWalletErr as any)?.message ?? repayWalletErr)) ||
+              String((repayWalletErr as any)?.message ?? repayWalletErr).toLowerCase().includes("insufficient funds")
             ) {
               stableBalance = await this.getWalletTokenBalance(stable.mint);
               this.queueKaminoLog(
@@ -5594,13 +5621,14 @@ export class OrcaBot {
           stableBalance = await this.getWalletTokenBalance(stable.mint);
         } catch (err) {
           const message = stringifyError(err);
-          const msgLower = message.toLowerCase();
           if (
-            msgLower.includes("obligationborrowsempty") ||
-            msgLower.includes("obligation borrows are empty") ||
-            msgLower.includes("obligation has no borrows") ||
-            msgLower.includes("0x1785") ||
-            msgLower.includes("6021")
+            (err as any).__obligationBorrowsEmpty ||
+            isObligationBorrowsEmptyError(err) ||
+            message.toLowerCase().includes("obligationborrowsempty") ||
+            message.toLowerCase().includes("obligation borrows are empty") ||
+            message.toLowerCase().includes("obligation has no borrows") ||
+            message.toLowerCase().includes("0x1785") ||
+            message.toLowerCase().includes("6021")
           ) {
             this.queueKaminoLog(
               "repay-wallet",
@@ -5609,7 +5637,7 @@ export class OrcaBot {
             );
             debtAmount = 0;
             stableBalance = await this.getWalletTokenBalance(stable.mint);
-          } else if (this.isKaminoRetryableError(message)) {
+          } else if (this.isKaminoRetryableError(err)) {
             const wait = this.scheduleKaminoRepayRetry(state, message, mode, debtAmount);
             if (wait) {
               return false;
