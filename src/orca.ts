@@ -3729,10 +3729,12 @@ export class OrcaBot {
               this.kaminoHealth.recordError(closeErr, "kamino-close");
               const msg = `Falha ao sacar colateral residual: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}.`;
               this.queueKaminoLog("debt-zero-close-failed", `${msg} Nova tentativa agendada.`, "error");
-              const currentState = this.kaminoState ?? state;
-              const wait = this.scheduleKaminoRepayRetry(currentState, msg, "target", 0);
-              if (wait) {
-                return;
+              const currentState = this.kaminoState;
+              if (currentState) {
+                const wait = this.scheduleKaminoRepayRetry(currentState, msg, "target", 0);
+                if (wait) {
+                  return;
+                }
               }
             }
             return;
