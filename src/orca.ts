@@ -591,6 +591,7 @@ export class OrcaBot {
     if (this.isRateLimitError(err)) return true;
     // ObligationBorrowsEmpty nunca é retryable — é um estado semântico (dívida zerada).
     if ((err as any).__obligationBorrowsEmpty || isObligationBorrowsEmptyError(err)) return false;
+    if (this.isKaminoNetValueTooSmallError(err)) return false;
     const message = String(err?.message ?? err).toLowerCase();
     // Verifica erro original embutido (quando sendAction encapsula 0x1 em retryable)
     const originalErr = (err as any)?.__originalErr ?? (err as any)?.cause;
@@ -641,6 +642,24 @@ export class OrcaBot {
       || message.includes("reserva ausente")
       || message.includes("reserve not found")
       || message.includes("reserve missing");
+  }
+
+  private isKaminoNetValueTooSmallError(err: any): boolean {
+    if (!err) return false;
+    const message = String(err?.message ?? err).toLowerCase();
+    const logs: string[] = (err as any)?.__originalErr?.context?.logs
+      ?? (err as any)?.context?.logs
+      ?? (err as any)?.logs
+      ?? [];
+    const logsText = Array.isArray(logs) ? logs.join(" ").toLowerCase() : String(logs ?? "").toLowerCase();
+    return message.includes("netvalueremainingtoosmall")
+      || message.includes("net value remaining too small")
+      || message.includes("0x17cc")
+      || message.includes("6092")
+      || logsText.includes("netvalueremainingtoosmall")
+      || logsText.includes("net value remaining too small")
+      || logsText.includes("0x17cc")
+      || logsText.includes("6092");
   }
 
   private scheduleKaminoRepayRetry(
@@ -4972,30 +4991,41 @@ export class OrcaBot {
             stableDecimals: debtDecimals,
             collAmountUi: capacity.capacityUi
           });
-          const chunkChoice = selectRepayChunkWithQuote({
-            debtRemaining,
-            capacityUi: capacity.capacityUi,
-            priceCollToDebt: priceCollToDebt ?? 0,
-            quoteOutStableUi,
-            minStable: KAMINO_REPAY_MIN_STABLE
-          });
-          let repayAmount = chunkChoice.chunk;
-          if (maxChunkOverride != null) {
-            repayAmount = Math.min(repayAmount, maxChunkOverride);
-          }
           const effectivePrice = Math.max(0, priceCollToDebt ?? 0);
+          const maxStableFromQuote = quoteOutStableUi != null
+            ? quoteOutStableUi
+            : (capacity.capacityUi * effectivePrice);
+          const canFullRepay = Number.isFinite(maxStableFromQuote)
+            && maxStableFromQuote >= debtRemaining * 0.995;
+          const fullRepayAttempt = canFullRepay;
+          let repayAmount = debtRemaining;
+          let chunkChoice: { chunk: number; reason?: string } | null = null;
+          if (!fullRepayAttempt) {
+            chunkChoice = selectRepayChunkWithQuote({
+              debtRemaining,
+              capacityUi: capacity.capacityUi,
+              priceCollToDebt: priceCollToDebt ?? 0,
+              quoteOutStableUi,
+              minStable: KAMINO_REPAY_MIN_STABLE
+            });
+            repayAmount = chunkChoice.chunk;
+            if (maxChunkOverride != null) {
+              repayAmount = Math.min(repayAmount, maxChunkOverride);
+            }
+          }
           // Não forçar split para wSOL: o SDK Kamino suporta wSOL como colateral
           // no repayWithCollateral nativo (uma tx atômica). O split (withdraw→swap→repay)
           // usa 3 txs separadas, cada uma sujeita a falha de blockhash.
           // Só vai para split se: já viu "tx too large" antes, ou se o quote
           // indica slippage/rota ruim (quoteOut < 50% do preço esperado).
-          const preferSplit =
+          const preferSplit = !fullRepayAttempt && (
             this.kaminoTooLargeSeen ||
             (quoteOutStableUi != null &&
               capacity.capacityUi > 0 &&
               effectivePrice > 0 &&
-              quoteOutStableUi / capacity.capacityUi < effectivePrice * 0.5); // heuristic: rotas com muito slippage/hops
-          if (chunkChoice.chunk <= epsilon) {
+              quoteOutStableUi / capacity.capacityUi < effectivePrice * 0.5) // heuristic: rotas com muito slippage/hops
+          );
+          if (!fullRepayAttempt && chunkChoice && chunkChoice.chunk <= epsilon) {
             const reason = chunkChoice.reason ?? "capacidade de saque insuficiente";
             lastFailure = reason;
             this.queueKaminoLog(
@@ -5101,6 +5131,24 @@ export class OrcaBot {
           this.kaminoHealth.recordError(err, "kamino-repay-with-collateral");
           const message = stringifyError(err);
           lastFailure = message;
+          if (this.isKaminoNetValueTooSmallError(err)) {
+            await refreshPosition();
+            if (debtRemaining <= epsilon) {
+              performed = true;
+              return {
+                performed: true,
+                debtAmount: debtRemaining,
+                onChainDeposits
+              };
+            }
+            return {
+              performed,
+              debtAmount: debtRemaining,
+              onChainDeposits,
+              retryable: true,
+              error: message
+            };
+          }
           if (this.isKaminoReserveMissingError(err)) {
             reserveMissingMints.add(candidate.mint);
             this.queueKaminoLog(
@@ -5129,6 +5177,20 @@ export class OrcaBot {
             lower.includes("6011") ||
             lower.includes("0x177b")
           ) {
+            if (fullRepayAttempt) {
+              this.queueKaminoLog(
+                "repay-with-collateral",
+                `Quitacao total recusada por tamanho/params; pausando. Detalhe: ${message}`,
+                "warn"
+              );
+              return {
+                performed,
+                debtAmount: debtRemaining,
+                onChainDeposits,
+                retryable: true,
+                error: message
+              };
+            }
             this.kaminoTooLargeSeen = true;
             chunkReductions += 1;
             let kaminoMaxWithdrawUsd: number | null = null;
@@ -5680,6 +5742,29 @@ export class OrcaBot {
               );
               debtAmount = 0;
               stableBalance = await this.getWalletTokenBalance(stable.mint);
+            } else if (this.isKaminoNetValueTooSmallError(repayWalletErr)) {
+              const refreshed = await kamino.getPositionState().catch(() => null);
+              if (refreshed) {
+                const freshDebt = refreshed.borrows?.find((b) => b.mint === stable.mint)?.amount ?? 0;
+                debtAmount = Math.max(0, Number(freshDebt));
+              }
+              if (debtAmount <= epsilon) {
+                this.queueKaminoLog(
+                  "repay-wallet",
+                  "Net value remaining too small; dívida já está zerada on-chain.",
+                  "warn"
+                );
+                debtAmount = 0;
+                stableBalance = await this.getWalletTokenBalance(stable.mint);
+              } else {
+                const message = "Net value remaining too small; aguardando nova tentativa.";
+                this.setKaminoState({ ...state, lastError: message });
+                const wait = this.scheduleKaminoRepayRetry(state, message, mode, debtAmount);
+                if (wait) {
+                  return false;
+                }
+                return false;
+              }
             } else if (
               /\b0x1\b/.test(String((repayWalletErr as any)?.message ?? repayWalletErr)) ||
               /custom program error: 0x1(?![0-9a-f])/i.test(String((repayWalletErr as any)?.message ?? repayWalletErr)) ||
@@ -6027,6 +6112,29 @@ export class OrcaBot {
             );
             debtAmount = 0;
             stableBalance = await this.getWalletTokenBalance(stable.mint);
+          } else if (this.isKaminoNetValueTooSmallError(err)) {
+            const refreshed = await kamino.getPositionState().catch(() => null);
+            if (refreshed) {
+              const freshDebt = refreshed.borrows?.find((b) => b.mint === stable.mint)?.amount ?? 0;
+              debtAmount = Math.max(0, Number(freshDebt));
+            }
+            if (debtAmount <= epsilon) {
+              this.queueKaminoLog(
+                "repay-wallet",
+                "Net value remaining too small; dívida já está zerada on-chain.",
+                "warn"
+              );
+              debtAmount = 0;
+              stableBalance = await this.getWalletTokenBalance(stable.mint);
+            } else {
+              const messageNet = "Net value remaining too small; aguardando nova tentativa.";
+              this.setKaminoState({ ...state, lastError: messageNet });
+              const wait = this.scheduleKaminoRepayRetry(state, messageNet, mode, debtAmount);
+              if (wait) {
+                return false;
+              }
+              return false;
+            }
           } else if (this.isKaminoRetryableError(err)) {
             const wait = this.scheduleKaminoRepayRetry(state, message, mode, debtAmount);
             if (wait) {
