@@ -1608,8 +1608,17 @@ async function updateUI() {
     ?? (Array.isArray(cachedPools) ? { pools: cachedPools } : null);
   const kaminoLogs = kaminoLogsResult.status === "fulfilled" ? kaminoLogsResult.value : cachedKaminoLogs;
 
+  if (pools) {
+    cachedPoolsResponse = pools;
+    if (Array.isArray(pools.pools)) {
+      cachedPools = pools.pools;
+    }
+  }
+
   if (status && config && pools) {
     renderUiSnapshot(status, config, history, pools, kaminoLogs);
+  } else if (pools) {
+    renderPools(pools, config ?? cachedConfig ?? {});
   }
 
   if (uiErrorCount >= UI_ERROR_LIMIT) {
