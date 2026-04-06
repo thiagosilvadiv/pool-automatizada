@@ -785,14 +785,9 @@ export class OrcaBot {
           throw err;
         }
         if (this.isRateLimitError(err)) {
-          // Correção Bug 3: aumentar jitter para evitar thundering herd após restart.
-          // Múltiplos pools/operações fazendo retry ao mesmo tempo = mais 429s.
-          const baseWait = 5000;
-          const jitter = Math.random() * 3000; // até 3s de jitter aleatório
-          const waitMs = Math.min(baseWait * Math.pow(2, attempt) + jitter, 30000);
-          logger.warn({ err, attempt, label, waitMs }, "kamino call rate-limited; retrying");
-          await this.sleep(waitMs);
-          continue;
+          // Rate limit: aciona cooldown global e interrompe a operação.
+          this.noteRateLimit(`kamino-${label}`);
+          throw err;
         }
         if (this.isKaminoRetryableError(err) && attempt < 2) {
           const prevMsg = String((prevErr as any)?.message ?? "").toLowerCase();
@@ -5192,6 +5187,12 @@ export class OrcaBot {
       this.setError("Nenhum ciclo Kamino ativo");
       return false;
     }
+    if (this.isRateLimited()) {
+      const remaining = this.getRateLimitRemainingSec();
+      this.lastStatus.lastAction = "rate-limit-wait";
+      this.lastStatus.lastError = `Rate limit ativo; aguardando ${remaining}s.`;
+      return false;
+    }
     let reservedDust = Number(state.reservedCollateralDust ?? 0);
     if (!Number.isFinite(reservedDust)) {
       reservedDust = 0;
@@ -5216,6 +5217,12 @@ export class OrcaBot {
     const kamino = resolved.kamino;
     let position = resolved.position;
     let positionIsLocalFallback = false;
+    if (this.isRateLimited()) {
+      const remaining = this.getRateLimitRemainingSec();
+      this.lastStatus.lastAction = "rate-limit-wait";
+      this.lastStatus.lastError = `Rate limit ativo; aguardando ${remaining}s.`;
+      return false;
+    }
     if (!position) {
       const hasLocalDebt = (state.debtAmount ?? 0) > 0 && Boolean(state.debtMint);
       const hasLocalCollateral = (state.collateralAmount ?? 0) > 0 && Boolean(state.collateralMint);
@@ -5408,6 +5415,15 @@ export class OrcaBot {
     }
 
     const preOpState = await kamino.getPositionState().catch(() => null);
+    if (positionIsLocalFallback && preOpState == null) {
+      this.queueKaminoLog(
+        "repay-wait",
+        "Posicao on-chain indisponivel; aguardando leitura antes de quitar.",
+        "warn"
+      );
+      this.lastStatus.lastAction = "kamino-repay-wait";
+      return false;
+    }
     // Se position veio de fallback local E conseguimos ler on-chain agora, usar valor fresco.
     if (positionIsLocalFallback && preOpState != null) {
       const freshOnChainDebt = preOpState.borrows?.find((b) => b.mint === debtMint)?.amount ?? 0;
