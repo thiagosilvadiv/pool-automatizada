@@ -27,7 +27,10 @@ function isEditableHistoryField(field: string): field is keyof HistoryEvent {
   return HISTORY_EDITABLE_FIELDS.has(field as keyof HistoryEvent);
 }
 
-type PoolSummaryRouteService = Pick<PoolManager, "listSummaries" | "getSelectedPoolId" | "getAutoResumeStatus">;
+type PoolSummaryRouteService = Pick<
+  PoolManager,
+  "listSummaries" | "listPools" | "getSelectedPoolId" | "getAutoResumeStatus"
+>;
 
 export function registerPoolsSummaryRoute(app: Express, poolManager: PoolSummaryRouteService): void {
   app.get("/api/pools", async (_req: Request, res: Response) => {
@@ -36,13 +39,44 @@ export function registerPoolsSummaryRoute(app: Express, poolManager: PoolSummary
     );
     let pools: PoolSummary[] = [];
     let error: string | null = null;
+    const selectedPoolId = poolManager.getSelectedPoolId();
     try {
       pools = await Promise.race([poolManager.listSummaries(), timeoutPromise]);
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
+    if (pools.length === 0) {
+      const fallbackEntries = poolManager.listPools();
+      if (fallbackEntries.length > 0) {
+        pools = fallbackEntries.map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          whirlpoolAddress: entry.whirlpoolAddress,
+          createdAt: entry.createdAt,
+          selected: entry.id === selectedPoolId,
+          running: false,
+          lastAction: null,
+          lastError: error,
+          lastPrice: null,
+          positionValueUsd: null,
+          positionPnlUsd: null,
+          positionValueSol: null,
+          positionPnlSol: null,
+          tokenAMint: null,
+          tokenBMint: null,
+          isTokenASol: null,
+          isTokenBSol: null,
+          trendDirection: null,
+          trendUpdatedAt: null,
+          trendTimeframe: null,
+          trendEnabled: false,
+          trendStale: false,
+          overrides: entry.overrides ?? null
+        }));
+      }
+    }
     res.json({
-      selectedPoolId: poolManager.getSelectedPoolId(),
+      selectedPoolId,
       autoResume: poolManager.getAutoResumeStatus(),
       pools,
       error: error ?? undefined

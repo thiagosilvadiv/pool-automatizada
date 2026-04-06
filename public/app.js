@@ -1316,8 +1316,8 @@ function renderPools(data, config) {
     poolError.classList.add("hidden");
   }
 
-  // Se a API falhar e devolver lista vazia, preserva o cache anterior.
-  if (hasError && pools.length === 0 && cachedFallback.length > 0) {
+  // Se a API devolver lista vazia, preserva o cache anterior.
+  if (pools.length === 0 && cachedFallback.length > 0) {
     pools = cachedFallback;
   }
 
