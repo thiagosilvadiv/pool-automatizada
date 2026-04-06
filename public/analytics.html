@@ -13,7 +13,6 @@
         <p class="subtitle">Resumo de performance e histórico filtrado por data.</p>
         <nav class="nav">
           <a href="/">Painel</a>
-          <a href="/charts.html">Gráficos</a>
           <a href="/allowlist.html">Tokens Permitidos</a>
           <a href="/kamino-markets.html">Kamino Markets</a>
         </nav>
@@ -42,7 +41,6 @@
           <label><input type="checkbox" data-col="close" checked /> Fechamento</label>
           <label><input type="checkbox" data-col="type" checked /> Tipo</label>
           <label><input type="checkbox" data-col="action" checked /> Ação</label>
-          <label><input type="checkbox" data-col="trend" checked /> Tendência</label>
           <label><input type="checkbox" data-col="price" checked /> Preço</label>
           <label><input type="checkbox" data-col="targetRange" checked /> Faixa alvo</label>
           <label><input type="checkbox" data-col="mint" checked /> Mint posição</label>
@@ -51,13 +49,6 @@
           <label><input type="checkbox" data-col="txFeeUsd" checked /> Taxa TX (USD)</label>
           <label><input type="checkbox" data-col="exitUsd" checked /> Saída (USD)</label>
           <label><input type="checkbox" data-col="pnlUsd" checked /> PnL líquido (USD)</label>
-          <label><input type="checkbox" data-col="hedgeSymbol" checked /> Hedge símbolo</label>
-          <label><input type="checkbox" data-col="hedgeNotional" checked /> Hedge notional (USD)</label>
-          <label><input type="checkbox" data-col="hedgeLeverage" checked /> Hedge lev</label>
-          <label><input type="checkbox" data-col="hedgeFees" checked /> Hedge taxas (USD)</label>
-          <label><input type="checkbox" data-col="hedgePnl" checked /> Hedge PnL (USD)</label>
-          <label><input type="checkbox" data-col="hedgeDecision" checked /> Hedge decisão</label>
-          <label><input type="checkbox" data-col="hedgeDecisionReason" checked /> Hedge motivo</label>
           <label><input type="checkbox" data-col="pnlTotal" checked /> PnL total (USD)</label>
           <label><input type="checkbox" data-col="pnlTotalNet" checked /> PnL total sem taxas (USD)</label>
           <div class="history-limit">
@@ -150,11 +141,11 @@
             </label>
             <label class="metric-toggle is-checked">
               <input type="checkbox" data-series="pnlTotal" checked />
-              <span>PnL com hedge e Taxas</span>
+              <span>PnL total (USD)</span>
             </label>
             <label class="metric-toggle is-checked">
               <input type="checkbox" data-series="pnlTotalNet" checked />
-              <span>PnL total com hedge sem taxas (USD)</span>
+              <span>PnL total sem taxas (USD)</span>
             </label>
             <label class="metric-toggle is-checked">
               <input type="checkbox" data-series="pnlCum" checked />
@@ -173,8 +164,8 @@
               <p><strong>Rendimento da taxa (%):</strong> taxa média diária sobre o capital de entrada.</p>
               <p><strong>PnL:</strong> PnL da pool considerando taxas e TX.</p>
               <p><strong>PnL sem taxas:</strong> PnL da pool sem descontar taxas.</p>
-              <p><strong>PnL com hedge e Taxas:</strong> PnL da pool (com taxas) + PnL do hedge.</p>
-              <p><strong>PnL total com hedge sem taxas (USD):</strong> PnL da pool sem taxas + PnL do hedge.</p>
+              <p><strong>PnL total (USD):</strong> PnL da pool (com taxas) no período.</p>
+              <p><strong>PnL total sem taxas (USD):</strong> PnL da pool sem taxas no período.</p>
               <p><strong>PnL acumulado:</strong> soma do PnL da pool ao longo do período.</p>
               <p><strong>PnL sem taxas acumulado:</strong> soma do PnL da pool sem taxas no período.</p>
             </div>
@@ -191,8 +182,8 @@
           <span><i class="legend-swatch feeYieldPct"></i> Rendimento da taxa (%)</span>
           <span><i class="legend-swatch pnl"></i> PnL</span>
           <span><i class="legend-swatch pnlNet"></i> PnL sem taxas</span>
-          <span><i class="legend-swatch pnlTotal"></i> PnL com hedge e Taxas</span>
-          <span><i class="legend-swatch pnlTotalNet"></i> PnL total com hedge sem taxas (USD)</span>
+          <span><i class="legend-swatch pnlTotal"></i> PnL total (USD)</span>
+          <span><i class="legend-swatch pnlTotalNet"></i> PnL total sem taxas (USD)</span>
           <span><i class="legend-swatch pnlCum"></i> PnL acumulado</span>
           <span><i class="legend-swatch pnlNetCum"></i> PnL sem taxas acumulado</span>
         </div>
@@ -241,7 +232,6 @@
                 <th data-col="close">Fechamento</th>
                 <th data-col="type">Tipo</th>
                 <th data-col="action">Ação</th>
-                <th data-col="trend">Tendência</th>
                 <th data-col="price">Preço</th>
                 <th data-col="targetRange">Faixa alvo</th>
                 <th data-col="mint">Mint posição</th>
@@ -250,19 +240,12 @@
                 <th data-col="txFeeUsd">Taxa TX (USD)</th>
                 <th data-col="exitUsd">Saída (USD)</th>
                 <th data-col="pnlUsd">PnL líquido (USD)</th>
-                <th data-col="hedgeSymbol">Hedge símbolo</th>
-                <th data-col="hedgeNotional">Hedge notional (USD)</th>
-          <th data-col="hedgeLeverage">Hedge lev</th>
-          <th data-col="hedgeFees">Hedge taxas (USD)</th>
-          <th data-col="hedgePnl">Hedge PnL (USD)</th>
-          <th data-col="hedgeDecision">Hedge decisão</th>
-          <th data-col="hedgeDecisionReason">Hedge motivo</th>
           <th data-col="pnlTotal">PnL total (USD)</th>
           <th data-col="pnlTotalNet">PnL total sem taxas (USD)</th>
               </tr>
             </thead>
             <tbody id="historyBody">
-              <tr><td colspan="23">Sem eventos ainda</td></tr>
+              <tr><td colspan="15">Sem eventos ainda</td></tr>
             </tbody>
             </table>
           </div>
@@ -272,4 +255,3 @@
     <script src="analytics.js"></script>
   </body>
 </html>
-

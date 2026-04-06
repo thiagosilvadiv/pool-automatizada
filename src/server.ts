@@ -8,8 +8,6 @@ import { Config } from "./config.js";
 import { buildConnection, buildWallet, loadKeypair } from "./solana.js";
 import { logger } from "./logger.js";
 import { PoolManager, type PoolSummary } from "./pool-manager.js";
-import { getTrendSeries } from "./trend.js";
-import { listLinearSymbols } from "./bybit.js";
 import type { HistoryEvent } from "./runner.js";
 import { createKaminoMarketsStore, type KaminoMarketEntry, type KaminoMarketsState } from "./storage.js";
 
@@ -22,11 +20,7 @@ const HISTORY_EDITABLE_FIELDS = new Set<keyof HistoryEvent>([
   "positionFeesUsd",
   "txFeeUsd",
   "positionExitUsd",
-  "positionPnlUsd",
-  "hedgeNotionalUsd",
-  "hedgeLeverage",
-  "hedgeFeesUsd",
-  "hedgePnlUsd"
+  "positionPnlUsd"
 ]);
 
 function isEditableHistoryField(field: string): field is keyof HistoryEvent {
@@ -62,9 +56,12 @@ export async function startServer(config: Config): Promise<void> {
   const port = Number(process.env.PORT ?? 3000);
   app.use(express.json());
 
-  const clearLocalData = async (): Promise<void> => {
+  const clearLocalData = async (options: { clearPools?: boolean } = {}): Promise<void> => {
     const dataDir = path.join(__dirname, "..", "data");
-    const targets = ["history.json", "pools.json"];
+    const targets = ["history.json"];
+    if (options.clearPools) {
+      targets.push("pools.json");
+    }
     for (const file of targets) {
       try {
         await fs.rm(path.join(dataDir, file));
@@ -79,9 +76,6 @@ export async function startServer(config: Config): Promise<void> {
       );
     } catch {}
   };
-
-  const hedgeSymbolsCache: { updatedAt: number; symbols: string[] } = { updatedAt: 0, symbols: [] };
-  const HEDGE_SYMBOLS_TTL_MS = 5 * 60 * 1000;
 
   const uiUser = process.env.UI_USER ?? null;
   const uiPass = process.env.UI_PASS ?? process.env.UI_PASSWORD ?? null;
@@ -228,18 +222,6 @@ export async function startServer(config: Config): Promise<void> {
     res.status(404).json({ ok: false, error: "disabled" });
   });
 
-  app.post("/api/hedge/open", (_req: Request, res: Response) => {
-    res.status(404).json({ ok: false, error: "disabled" });
-  });
-
-  app.post("/api/hedge/close", (_req: Request, res: Response) => {
-    res.status(404).json({ ok: false, error: "disabled" });
-  });
-
-  app.get("/api/hedge/price", (_req: Request, res: Response) => {
-    res.status(404).json({ ok: false, error: "disabled" });
-  });
-
   app.post("/api/bybit/order", (_req: Request, res: Response) => {
     res.status(404).json({ ok: false, error: "disabled" });
   });
@@ -287,7 +269,7 @@ export async function startServer(config: Config): Promise<void> {
       await poolManager.stopSelected();
       const clearPools = String(req.query?.clearPools ?? "").toLowerCase() === "true";
       await poolManager.resetSelectedKaminoCycle(clearPools);
-      await clearLocalData();
+      await clearLocalData({ clearPools });
       res.json({ ok: true, restarting: false });
     } catch (err) {
       res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -471,13 +453,6 @@ export async function startServer(config: Config): Promise<void> {
       budgetUsd: config.budgetUsd,
       pythSolUsdFeedId: config.pythSolUsdFeedId,
       priceStaleMaxSec: config.priceStaleMaxSec,
-      trendEnabled: config.trendEnabled,
-      trendTimeframe: config.trendTimeframe,
-      trendTargetUp: config.trendTargetUp,
-      trendTargetDown: config.trendTargetDown,
-      trendFallback: config.trendFallback,
-      trendStaleSec: config.trendStaleSec,
-      trendNetworkId: config.trendNetworkId,
       autoAddLiquidityEnabled: config.autoAddLiquidityEnabled,
       kaminoRebalanceEnabled: config.kaminoRebalanceEnabled,
       kaminoDepositPct: config.kaminoDepositPct,
@@ -492,12 +467,6 @@ export async function startServer(config: Config): Promise<void> {
       kaminoConvertToCollateral: config.kaminoConvertToCollateral,
       kaminoAvgPriceBasis: config.kaminoAvgPriceBasis,
       kaminoAvgMode: config.kaminoAvgMode,
-      hedgeEnabled: config.hedgeEnabled,
-      hedgePct: config.hedgePct,
-      hedgeSymbol: config.hedgeSymbol,
-      hedgeLeverage: config.hedgeLeverage,
-      hedgeMarginPct: config.hedgeMarginPct,
-      hedgeEntryMode: config.hedgeEntryMode,
       tokenAMint: selectedStatus?.tokenAMint ?? null,
       tokenBMint: selectedStatus?.tokenBMint ?? null,
       isTokenASol: selectedStatus?.isTokenASol ?? null,
@@ -505,58 +474,7 @@ export async function startServer(config: Config): Promise<void> {
     });
   });
 
-  app.get("/api/hedge-symbols", async (req: Request, res: Response) => {
-    try {
-      const forceRaw = String(req.query.force ?? "").trim().toLowerCase();
-      const force = forceRaw === "1" || forceRaw === "true" || forceRaw === "yes";
-      const now = Date.now();
-      if (!force && hedgeSymbolsCache.symbols.length > 0 && now - hedgeSymbolsCache.updatedAt < HEDGE_SYMBOLS_TTL_MS) {
-        res.json({ ok: true, symbols: hedgeSymbolsCache.symbols, cached: true, updatedAt: hedgeSymbolsCache.updatedAt });
-        return;
-      }
-      const symbols = await listLinearSymbols(config.bybitBaseUrl, { status: "Trading" });
-      hedgeSymbolsCache.symbols = symbols;
-      hedgeSymbolsCache.updatedAt = now;
-      const query = String(req.query.q ?? "").trim().toUpperCase();
-      const filtered = query ? symbols.filter((symbol) => symbol.includes(query)) : symbols;
-      res.json({ ok: true, symbols: filtered, cached: false, updatedAt: now });
-    } catch (err) {
-      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
-    }
-  });
-
   registerPoolsSummaryRoute(app, poolManager);
-
-
-  app.get("/api/trend-series/:id", async (req: Request, res: Response) => {
-    try {
-      const rawId = String(req.params.id ?? "").trim();
-      const poolId = rawId === "selected" ? poolManager.getSelectedPoolId() : rawId;
-      if (!poolId) {
-        res.status(404).json({ error: "Pool not found" });
-        return;
-      }
-      const config = poolManager.getPoolConfig(poolId);
-      if (!config) {
-        res.status(404).json({ error: "Pool not found" });
-        return;
-      }
-      const force = String(req.query.force ?? "").toLowerCase();
-      const bypassCache = force === "1" || force === "true" || force === "yes";
-      const series = await getTrendSeries({
-        networkId: config.trendNetworkId,
-        poolAddress: config.whirlpoolAddress,
-        timeframe: config.trendTimeframe,
-        staleSec: config.trendStaleSec,
-        cacheSec: config.trendCacheSec,
-        bypassCache,
-        limit: 240
-      });
-      res.json({ ok: true, poolId, series });
-    } catch (err) {
-      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
-    }
-  });
 
   app.post("/api/pools", async (req: Request, res: Response) => {
     try {
@@ -637,15 +555,6 @@ export async function startServer(config: Config): Promise<void> {
 
   app.get("/api/history", (_req: Request, res: Response) => {
     res.json(poolManager.getSelectedHistory());
-  });
-
-  app.get("/api/hedge-logs", (_req: Request, res: Response) => {
-    res.json(poolManager.getSelectedHedgeLogs());
-  });
-
-  app.post("/api/hedge-logs/clear", (_req: Request, res: Response) => {
-    poolManager.clearSelectedHedgeLogs();
-    res.json({ ok: true });
   });
 
   app.get("/api/kamino-logs", (_req: Request, res: Response) => {

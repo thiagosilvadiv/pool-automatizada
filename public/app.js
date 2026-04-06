@@ -1,10 +1,8 @@
-const statusBadge = document.getElementById("statusBadge");
+﻿const statusBadge = document.getElementById("statusBadge");
 const runningEl = document.getElementById("running");
 const lastTickEl = document.getElementById("lastTick");
 const lastActionEl = document.getElementById("lastAction");
 const lastErrorEl = document.getElementById("lastError");
-const hedgeStatusEl = document.getElementById("hedgeStatus");
-const hedgeErrorEl = document.getElementById("hedgeError");
 const effectiveExitTokenEl = document.getElementById("effectiveExitToken");
 const effectiveExitDirectionEl = document.getElementById("effectiveExitDirection");
 const effectiveExitSideEl = document.getElementById("effectiveExitSide");
@@ -57,7 +55,6 @@ const kaminoLogDetailMarket = document.getElementById("kaminoLogDetailMarket");
 const kaminoLogDetailMessage = document.getElementById("kaminoLogDetailMessage");
 const poolNameLabel = document.getElementById("poolNameLabel");
 const poolNameLabelTop = document.getElementById("poolNameLabelTop");
-const hedgeSymbolsList = document.getElementById("hedgeSymbolsList");
 
 const poolNameInput = document.getElementById("poolName");
 const poolAddressInput = document.getElementById("poolAddress");
@@ -65,10 +62,6 @@ const poolRangeInput = document.getElementById("poolRange");
 const poolExitTokenInput = document.getElementById("poolExitToken");
 const poolExitDirectionInput = document.getElementById("poolExitDirection");
 const poolExitBiasInput = document.getElementById("poolExitBias");
-const poolTrendEnabledInput = document.getElementById("poolTrendEnabled");
-const poolTrendTimeframeInput = document.getElementById("poolTrendTimeframe");
-const poolTrendUpInput = document.getElementById("poolTrendUp");
-const poolTrendDownInput = document.getElementById("poolTrendDown");
 const poolBudgetInput = document.getElementById("poolBudget");
 const poolAutoAddEnabledInput = document.getElementById("poolAutoAddEnabled");
 const poolKaminoEnabledInput = document.getElementById("poolKaminoEnabled");
@@ -83,13 +76,6 @@ const poolKaminoConvertInput = document.getElementById("poolKaminoConvert");
 const poolKaminoAvgBasisInput = document.getElementById("poolKaminoAvgBasis");
 const poolKaminoAvgModeInput = document.getElementById("poolKaminoAvgMode");
 const poolKaminoAutoCloseInput = document.getElementById("poolKaminoAutoClose");
-const poolHedgeEnabledInput = document.getElementById("poolHedgeEnabled");
-const poolHedgePctInput = document.getElementById("poolHedgePct");
-const poolHedgeMarginPctInput = document.getElementById("poolHedgeMarginPct");
-const poolHedgeSymbolInput = document.getElementById("poolHedgeSymbol");
-const poolHedgeLeverageInput = document.getElementById("poolHedgeLeverage");
-const poolHedgeEntryModeInput = document.getElementById("poolHedgeEntryMode");
-const poolTrendHint = document.getElementById("poolTrendHint");
 const addPoolBtn = document.getElementById("addPoolBtn");
 const poolsBody = document.getElementById("poolsBody");
 const poolError = document.getElementById("poolError");
@@ -100,10 +86,6 @@ const editPoolRangeInput = document.getElementById("editPoolRange");
 const editPoolExitTokenInput = document.getElementById("editPoolExitToken");
 const editPoolExitDirectionInput = document.getElementById("editPoolExitDirection");
 const editPoolExitBiasInput = document.getElementById("editPoolExitBias");
-const editPoolTrendEnabledInput = document.getElementById("editPoolTrendEnabled");
-const editPoolTrendTimeframeInput = document.getElementById("editPoolTrendTimeframe");
-const editPoolTrendUpInput = document.getElementById("editPoolTrendUp");
-const editPoolTrendDownInput = document.getElementById("editPoolTrendDown");
 const editPoolBudgetInput = document.getElementById("editPoolBudget");
 const editPoolAutoAddEnabledInput = document.getElementById("editPoolAutoAddEnabled");
 const editPoolKaminoEnabledInput = document.getElementById("editPoolKaminoEnabled");
@@ -118,13 +100,6 @@ const editPoolKaminoConvertInput = document.getElementById("editPoolKaminoConver
 const editPoolKaminoAvgBasisInput = document.getElementById("editPoolKaminoAvgBasis");
 const editPoolKaminoAvgModeInput = document.getElementById("editPoolKaminoAvgMode");
 const editPoolKaminoAutoCloseInput = document.getElementById("editPoolKaminoAutoClose");
-const editPoolHedgeEnabledInput = document.getElementById("editPoolHedgeEnabled");
-const editPoolHedgePctInput = document.getElementById("editPoolHedgePct");
-const editPoolHedgeMarginPctInput = document.getElementById("editPoolHedgeMarginPct");
-const editPoolHedgeSymbolInput = document.getElementById("editPoolHedgeSymbol");
-const editPoolHedgeLeverageInput = document.getElementById("editPoolHedgeLeverage");
-const editPoolHedgeEntryModeInput = document.getElementById("editPoolHedgeEntryMode");
-const editPoolTrendHint = document.getElementById("editPoolTrendHint");
 const editPoolError = document.getElementById("editPoolError");
 const swapResultModal = document.getElementById("swapResultModal");
 const swapResultSummary = document.getElementById("swapResultSummary");
@@ -170,7 +145,6 @@ const historyColumnDefaults = {
   close: true,
   type: true,
   action: true,
-  trend: true,
   price: true,
   targetRange: true,
   mint: true,
@@ -179,13 +153,6 @@ const historyColumnDefaults = {
   txFeeUsd: true,
   exitUsd: true,
   pnlUsd: true,
-  hedgeSymbol: true,
-  hedgeNotional: true,
-  hedgeLeverage: true,
-  hedgeFees: true,
-  hedgePnl: true,
-  hedgeDecision: true,
-  hedgeDecisionReason: true,
   pnlTotal: true,
   pnlTotalNet: true
 };
@@ -230,7 +197,7 @@ const actionLabels = {
 const actionTypeLabels = {
   "abertura": "Abertura",
   "fechamento": "Fechamento",
-  "fechamento-emprestimo": "Fechamento Empréstimo",
+  "fechamento-emprestimo": "Fechamento EmprÃ©stimo",
   "fechamento + abertura": "Fechamento + abertura",
   "monitorando": "Monitorando",
   "operacional": "Operacional"
@@ -242,20 +209,7 @@ const HISTORY_EDITABLE_FIELDS = {
   positionFeesUsd: { digits: 2, label: "Taxas (USD)" },
   txFeeUsd: { digits: 6, label: "Taxa TX (USD)" },
   positionExitUsd: { digits: 2, label: "Saida (USD)" },
-  positionPnlUsd: { digits: 2, label: "PnL liquido (USD)" },
-  hedgeNotionalUsd: { digits: 2, label: "Hedge notional (USD)" },
-  hedgeLeverage: { digits: 2, label: "Hedge lev" },
-  hedgeFeesUsd: { digits: 2, label: "Hedge taxas (USD)" },
-  hedgePnlUsd: { digits: 2, label: "Hedge PnL (USD)" }
-};
-
-const hedgeEntryModeLabels = {
-  "off": "Sempre (atual)",
-  "trend-down": "Somente baixa",
-  "trend-up": "Somente alta",
-  "trend-any": "Baixa ou alta",
-  "force-down": "Sempre baixa (ignora tendencia)",
-  "force-up": "Sempre alta (ignora tendencia)"
+  positionPnlUsd: { digits: 2, label: "PnL liquido (USD)" }
 };
 
 const MAX_KAMINO_LOG_ROWS = 20;
@@ -427,30 +381,6 @@ function setKaminoTestResult(message, isError) {
   }
 }
 
-function getOtherTokenLabel(info) {
-  if (!info) return null;
-  if (info.isTokenASol) {
-    return info.tokenBMint ? formatMintLabel(info.tokenBMint) : null;
-  }
-  if (info.isTokenBSol) {
-    return info.tokenAMint ? formatMintLabel(info.tokenAMint) : null;
-  }
-  return null;
-}
-
-function formatTrendTargetLabel(value, info) {
-  if (!value) return "-";
-  if (value === "sol") return "SOL";
-  if (value === "other") {
-    const label = getOtherTokenLabel(info);
-    return label ? `Outro (${label})` : "Outro";
-  }
-  if (value === "tokenA" || value === "tokenB") {
-    return describeToken(value, info);
-  }
-  return String(value);
-}
-
 function formatExitToken(value, info) {
   if (value === "tokenA") return describeToken("tokenA", info);
   if (value === "tokenB") return describeToken("tokenB", info);
@@ -491,35 +421,6 @@ function updateExitTokenSelectHints(selectEl, info) {
   if (optionB) optionB.textContent = describeToken("tokenB", info);
 }
 
-function updateTrendTargetSelectHints(selectEl, info) {
-  if (!(selectEl instanceof HTMLSelectElement)) return;
-  const optionSol = selectEl.querySelector("option[value=\"sol\"]");
-  const optionOther = selectEl.querySelector("option[value=\"other\"]");
-  const optionA = selectEl.querySelector("option[value=\"tokenA\"]");
-  const optionB = selectEl.querySelector("option[value=\"tokenB\"]");
-  if (optionSol) optionSol.textContent = "SOL";
-  if (optionOther) optionOther.textContent = formatTrendTargetLabel("other", info);
-  if (optionA) optionA.textContent = describeToken("tokenA", info);
-  if (optionB) optionB.textContent = describeToken("tokenB", info);
-}
-
-function updateTrendHint(el, info) {
-  if (!(el instanceof HTMLElement)) return;
-  if (info && info.isTokenASol === false && info.isTokenBSol === false) {
-    el.textContent = "";
-    el.classList.add("hidden");
-    return;
-  }
-  const otherLabel = getOtherTokenLabel(info);
-  if (otherLabel) {
-    el.textContent = `Dica: para pools com SOL use Alta \u2192 Outro (${otherLabel}) e Baixa \u2192 SOL. Deixe em branco para usar o padrao global.`;
-    el.classList.remove("hidden");
-    return;
-  }
-  el.textContent = "Dica: para pools com SOL use Alta \u2192 Outro e Baixa \u2192 SOL. Deixe em branco para usar o padrao global.";
-  el.classList.remove("hidden");
-}
-
 function formatTimestamp(value) {
   if (!value) return "-";
   const date = new Date(value);
@@ -547,23 +448,6 @@ function formatCloseTimestamp(item) {
   return formatTimestamp(item.positionClosedAt);
 }
 
-function formatTrendDirection(value) {
-  if (value === "up") return "Alta";
-  if (value === "down") return "Baixa";
-  return "-";
-}
-
-function formatHedgeEntryMode(value) {
-  if (!value) return "-";
-  return hedgeEntryModeLabels[value] ?? String(value);
-}
-
-function formatHedgeDecision(value) {
-  if (value === "opened") return "Abriu";
-  if (value === "skipped") return "Ignorado";
-  if (value === "failed") return "Falhou";
-  return value ?? "-";
-}
 
 function toCsvValue(value) {
   if (value === null || value === undefined) return "";
@@ -578,7 +462,6 @@ function buildHistoryCsv(items) {
     "Data fechamento",
     "Tipo",
     "Acao",
-    "Tendencia",
     "Preco",
     "Faixa alvo",
     "Mint posicao",
@@ -587,13 +470,6 @@ function buildHistoryCsv(items) {
     "Taxa TX (USD)",
     "Saida (USD)",
     "PnL liquido (USD)",
-    "Hedge simbolo",
-    "Hedge notional (USD)",
-    "Hedge lev",
-    "Hedge taxas (USD)",
-    "Hedge PnL (USD)",
-    "Hedge decisao",
-    "Hedge motivo",
     "PnL total (USD)",
     "PnL total sem taxas (USD)"
   ];
@@ -602,23 +478,18 @@ function buildHistoryCsv(items) {
     const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
     const isLoanClose = item.actionType === "fechamento-emprestimo";
     const pnlRaw = Number(isLoanClose ? item.kaminoLoanPnlUsd : item.positionPnlUsd);
-    const hedgeRaw = Number(item.hedgePnlUsd);
-    const hedgeSkipped = item.hedgeDecision === "skipped";
     const hasPnl = Number.isFinite(pnlRaw);
-    const hasHedge = Number.isFinite(hedgeRaw) || hedgeSkipped;
     const feesRaw = Number(item.positionFeesUsd);
     const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
     const poolPnl = hasPnl ? pnlRaw : 0;
-    const hedgePnl = Number.isFinite(hedgeRaw) ? hedgeRaw : 0;
-    const pnlTotal = hasPnl || hasHedge ? poolPnl + hedgePnl : null;
-    const pnlTotalNet = hasPnl || hasHedge ? (hasPnl ? poolPnl - fees : 0) + hedgePnl : null;
+    const pnlTotal = hasPnl ? poolPnl : null;
+    const pnlTotalNet = hasPnl ? poolPnl - fees : null;
     return [
       formatTimestamp(item.timestamp),
       formatTimestamp(item.positionOpenedAt),
       formatCloseTimestamp(item),
       typeLabel,
       actionLabel,
-      formatTrendDirection(item.trendDirection),
       formatNumber(normalizeDisplayPrice(item.price, getTokenInfo(cachedConfig)), 8),
       formatRange(item.targetRange, getTokenInfo(cachedConfig)),
       item.positionMint ?? "-",
@@ -627,13 +498,6 @@ function buildHistoryCsv(items) {
       formatNumber(item.txFeeUsd, 6),
       formatNumber(item.positionExitUsd, 2),
       formatNumber(isLoanClose ? item.kaminoLoanPnlUsd : item.positionPnlUsd, 2),
-      item.hedgeSymbol ?? "-",
-      formatNumber(item.hedgeNotionalUsd, 2),
-      formatNumber(item.hedgeLeverage, 2),
-      formatNumber(item.hedgeFeesUsd, 2),
-      formatNumber(item.hedgePnlUsd, 2),
-      formatHedgeDecision(item.hedgeDecision),
-      item.hedgeDecisionReason ?? "-",
       formatNumber(pnlTotal, 2),
       formatNumber(pnlTotalNet, 2)
     ].map(toCsvValue).join(";");
@@ -681,34 +545,6 @@ async function fetchPools() {
 async function fetchKaminoMarkets() {
   const res = await fetch("/api/kamino/markets");
   return res.json();
-}
-
-let hedgeSymbolsLoaded = false;
-let hedgeSymbolsLoading = false;
-
-function renderHedgeSymbols(symbols) {
-  if (!hedgeSymbolsList) {
-    return;
-  }
-  hedgeSymbolsList.innerHTML = symbols.map((symbol) => `<option value="${symbol}"></option>`).join("");
-}
-
-async function ensureHedgeSymbolsLoaded() {
-  if (!hedgeSymbolsList || hedgeSymbolsLoaded || hedgeSymbolsLoading) {
-    return;
-  }
-  hedgeSymbolsLoading = true;
-  try {
-    const res = await fetch("/api/hedge-symbols");
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data?.ok || !Array.isArray(data.symbols)) {
-      return;
-    }
-    renderHedgeSymbols(data.symbols);
-    hedgeSymbolsLoaded = true;
-  } finally {
-    hedgeSymbolsLoading = false;
-  }
 }
 
 function formatMarketAddress(address) {
@@ -800,30 +636,12 @@ function parseExitDirectionInput(value) {
   return null;
 }
 
-function parseTrendEnabledInput(value) {
+function parseBooleanInput(value) {
   if (value == null) return undefined;
   const trimmed = String(value).trim().toLowerCase();
   if (!trimmed) return undefined;
   if (["1", "true", "yes", "on", "sim"].includes(trimmed)) return true;
   if (["0", "false", "no", "off", "nao"].includes(trimmed)) return false;
-  return null;
-}
-
-function parseTrendTimeframeInput(value) {
-  if (value == null) return undefined;
-  const trimmed = String(value).trim().toLowerCase();
-  if (!trimmed) return undefined;
-  if (["1m", "5m", "15m", "30m", "1h"].includes(trimmed)) return trimmed;
-  return null;
-}
-
-function parseTrendTargetInput(value) {
-  if (value == null) return undefined;
-  const trimmed = String(value).trim().toLowerCase();
-  if (!trimmed) return undefined;
-  if (trimmed === "sol" || trimmed === "other") return trimmed;
-  if (trimmed === "tokena" || trimmed === "token_a") return "tokenA";
-  if (trimmed === "tokenb" || trimmed === "token_b") return "tokenB";
   return null;
 }
 
@@ -871,24 +689,6 @@ function parseKaminoAvgModeInput(value) {
   if (trimmed === "cumulative") return "cumulative";
   if (trimmed === "reset") return "reset";
   return null;
-}
-
-function formatTrendBadge(pool, usageLabel) {
-  if (!usageLabel) {
-    return "<span class=\"trend-badge trend-off\">Desativado</span>";
-  }
-  const timeframe = pool?.trendTimeframe ? ` ${pool.trendTimeframe}` : "";
-  const usage = usageLabel ? ` ${usageLabel}` : "";
-  if (pool?.trendStale) {
-    return `<span class="trend-badge trend-unknown">Desatualizado${timeframe}${usage}</span>`;
-  }
-  if (pool?.trendDirection === "up") {
-    return `<span class="trend-badge trend-up">Alta${timeframe}${usage}</span>`;
-  }
-  if (pool?.trendDirection === "down") {
-    return `<span class="trend-badge trend-down">Baixa${timeframe}${usage}</span>`;
-  }
-  return `<span class="trend-badge trend-unknown">Indisponivel${timeframe}${usage}</span>`;
 }
 
 function openModal(modal) {
@@ -1081,11 +881,6 @@ function openEditPoolModal(pool) {
   const defaultExitToken = cachedConfig?.preferredExitToken ?? null;
   const defaultExitDirection = cachedConfig?.preferredExitDirection ?? "down";
   const defaultExitBias = cachedConfig?.rangeExitBiasPct ?? "-";
-  const defaultTrendEnabled = cachedConfig?.trendEnabled ?? false;
-  const defaultTrendTimeframe = cachedConfig?.trendTimeframe ?? "1m";
-  const defaultTrendUp = cachedConfig?.trendTargetUp ?? "sol";
-  const defaultTrendDown = cachedConfig?.trendTargetDown ?? "other";
-  const defaultHedgeEnabled = cachedConfig?.hedgeEnabled ?? false;
   const defaultAutoAddEnabled = cachedConfig?.autoAddLiquidityEnabled ?? false;
   const defaultKaminoEnabled = cachedConfig?.kaminoRebalanceEnabled ?? false;
   const defaultKaminoDepositPct = cachedConfig?.kaminoDepositPct ?? "-";
@@ -1098,11 +893,6 @@ function openEditPoolModal(pool) {
   const defaultKaminoConvert = cachedConfig?.kaminoConvertToCollateral ?? false;
   const defaultKaminoAvgBasis = cachedConfig?.kaminoAvgPriceBasis ?? "deposit";
   const defaultKaminoAvgMode = cachedConfig?.kaminoAvgMode ?? "cumulative";
-  const defaultHedgePct = cachedConfig?.hedgePct ?? "-";
-  const defaultHedgeMarginPct = cachedConfig?.hedgeMarginPct ?? "-";
-  const defaultHedgeSymbol = cachedConfig?.hedgeSymbol ?? "-";
-  const defaultHedgeLeverage = cachedConfig?.hedgeLeverage ?? "-";
-  const defaultHedgeEntryMode = cachedConfig?.hedgeEntryMode ?? "off";
   const tokenInfo = getTokenInfo(pool);
 
   if (editPoolIdInput) editPoolIdInput.value = pool.id ?? "";
@@ -1172,30 +962,6 @@ function openEditPoolModal(pool) {
       : String(overrides.kaminoAutoCloseOnTokenChange);
     setSelectPlaceholder(editPoolKaminoAutoCloseInput, `Padrao (${defaultKaminoAutoClose ? "Sim" : "Nao"})`);
   }
-  if (editPoolHedgeEnabledInput) {
-    editPoolHedgeEnabledInput.value = overrides.hedgeEnabled === undefined ? "" : String(overrides.hedgeEnabled);
-    setSelectPlaceholder(editPoolHedgeEnabledInput, `Padrao (${defaultHedgeEnabled ? "Sim" : "Nao"})`);
-  }
-  if (editPoolHedgePctInput) {
-    editPoolHedgePctInput.value = overrides.hedgePct ?? "";
-    editPoolHedgePctInput.placeholder = `Padrao (${formatNumber(defaultHedgePct, 2)})`;
-  }
-  if (editPoolHedgeMarginPctInput) {
-    editPoolHedgeMarginPctInput.value = overrides.hedgeMarginPct ?? "";
-    editPoolHedgeMarginPctInput.placeholder = `Padrao (${formatNumber(defaultHedgeMarginPct, 2)})`;
-  }
-  if (editPoolHedgeSymbolInput) {
-    editPoolHedgeSymbolInput.value = overrides.hedgeSymbol ?? "";
-    editPoolHedgeSymbolInput.placeholder = `Padrao (${defaultHedgeSymbol || "-"})`;
-  }
-  if (editPoolHedgeLeverageInput) {
-    editPoolHedgeLeverageInput.value = overrides.hedgeLeverage ?? "";
-    editPoolHedgeLeverageInput.placeholder = `Padrao (${formatNumber(defaultHedgeLeverage, 2)})`;
-  }
-  if (editPoolHedgeEntryModeInput) {
-    editPoolHedgeEntryModeInput.value = overrides.hedgeEntryMode ?? "";
-    setSelectPlaceholder(editPoolHedgeEntryModeInput, `Padrao (${formatHedgeEntryMode(defaultHedgeEntryMode)})`);
-  }
   if (editPoolExitTokenInput) {
     updateExitTokenSelectHints(editPoolExitTokenInput, tokenInfo);
     editPoolExitTokenInput.value = overrides.preferredExitToken ?? "";
@@ -1210,27 +976,6 @@ function openEditPoolModal(pool) {
     editPoolExitBiasInput.value = overrides.rangeExitBiasPct ?? "";
     editPoolExitBiasInput.placeholder = `Padrao (${formatNumber(defaultExitBias, 2)})`;
   }
-  if (editPoolTrendEnabledInput) {
-    editPoolTrendEnabledInput.value = overrides.trendEnabled === undefined ? "" : String(overrides.trendEnabled);
-    setSelectPlaceholder(editPoolTrendEnabledInput, `Padrao (${defaultTrendEnabled ? "Sim" : "Nao"})`);
-  }
-  if (editPoolTrendTimeframeInput) {
-    editPoolTrendTimeframeInput.value = overrides.trendTimeframe ?? "";
-    setSelectPlaceholder(editPoolTrendTimeframeInput, `Padrao (${defaultTrendTimeframe})`);
-  }
-  if (editPoolTrendUpInput) {
-    updateTrendTargetSelectHints(editPoolTrendUpInput, tokenInfo);
-    editPoolTrendUpInput.value = overrides.trendTargetUp ?? "";
-    setSelectPlaceholder(editPoolTrendUpInput, `Padrao (${formatTrendTargetLabel(defaultTrendUp, tokenInfo)})`);
-  }
-  if (editPoolTrendDownInput) {
-    updateTrendTargetSelectHints(editPoolTrendDownInput, tokenInfo);
-    editPoolTrendDownInput.value = overrides.trendTargetDown ?? "";
-    setSelectPlaceholder(editPoolTrendDownInput, `Padrao (${formatTrendTargetLabel(defaultTrendDown, tokenInfo)})`);
-  }
-
-  updateTrendHint(editPoolTrendHint, tokenInfo);
-
   openModal(editPoolModal);
 }
 
@@ -1361,7 +1106,7 @@ function renderHistory(items) {
   const historyTokenInfo = getTokenInfo(cachedConfig);
   if (!filteredItems || filteredItems.length === 0) {
     selectedHistoryIds.clear();
-    historyBody.innerHTML = "<tr><td colspan=\"24\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"16\">Sem eventos ainda</td></tr>";
     updateHistorySelectionState();
     return;
   }
@@ -1377,16 +1122,12 @@ function renderHistory(items) {
     const checked = selectedHistoryIds.has(eventId) ? "checked" : "";
     const isLoanClose = item.actionType === "fechamento-emprestimo";
     const pnlRaw = Number(isLoanClose ? item.kaminoLoanPnlUsd : item.positionPnlUsd);
-    const hedgeRaw = Number(item.hedgePnlUsd);
-    const hedgeSkipped = item.hedgeDecision === "skipped";
     const hasPnl = Number.isFinite(pnlRaw);
-    const hasHedge = Number.isFinite(hedgeRaw) || hedgeSkipped;
     const feesRaw = Number(item.positionFeesUsd);
     const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
     const poolPnl = hasPnl ? pnlRaw : 0;
-    const hedgePnl = Number.isFinite(hedgeRaw) ? hedgeRaw : 0;
-    const pnlTotal = hasPnl || hasHedge ? poolPnl + hedgePnl : null;
-    const pnlTotalNet = hasPnl || hasHedge ? (hasPnl ? poolPnl - fees : 0) + hedgePnl : null;
+    const pnlTotal = hasPnl ? poolPnl : null;
+    const pnlTotalNet = hasPnl ? poolPnl - fees : null;
     const priceCell = renderEditableNumberCell(
       item.price,
       "price",
@@ -1400,18 +1141,14 @@ function renderHistory(items) {
     const loanTooltip = isLoanClose
       ? [
         `Colateral USD: ${formatNumber(item.kaminoCollateralUsd, 2)}`,
-        `Dívida USD: ${formatNumber(item.kaminoDebtUsd, 2)}`,
-        `Preço médio: ${formatNumber(item.kaminoCollateralAvgPriceUsdc, 2)}`,
-        `Preço alvo: ${formatNumber(item.kaminoCollateralTargetPriceUsdc, 2)}`
+        `DÃ­vida USD: ${formatNumber(item.kaminoDebtUsd, 2)}`,
+        `PreÃ§o mÃ©dio: ${formatNumber(item.kaminoCollateralAvgPriceUsdc, 2)}`,
+        `PreÃ§o alvo: ${formatNumber(item.kaminoCollateralTargetPriceUsdc, 2)}`
       ].join(" | ")
       : "";
     const pnlCell = isLoanClose
       ? `<span class="history-loan-pnl" title="${escapeHtml(loanTooltip)}">${formatNumber(item.kaminoLoanPnlUsd, 2)}</span>`
       : renderEditableNumberCell(item.positionPnlUsd, "positionPnlUsd", editId);
-    const hedgeNotionalCell = renderEditableNumberCell(item.hedgeNotionalUsd, "hedgeNotionalUsd", editId);
-    const hedgeLeverageCell = renderEditableNumberCell(item.hedgeLeverage, "hedgeLeverage", editId);
-    const hedgeFeesCell = renderEditableNumberCell(item.hedgeFeesUsd, "hedgeFeesUsd", editId);
-    const hedgePnlCell = renderEditableNumberCell(item.hedgePnlUsd, "hedgePnlUsd", editId);
     return `
       <tr>
         <td><input type="checkbox" class="history-select" data-id="${eventId}" ${checked}></td>
@@ -1420,7 +1157,6 @@ function renderHistory(items) {
         <td data-col="close">${formatCloseTimestamp(item)}</td>
         <td data-col="type">${typeLabel}</td>
         <td data-col="action">${actionLabel}</td>
-        <td data-col="trend">${formatTrendDirection(item.trendDirection)}</td>
         <td data-col="price">${priceCell}</td>
         <td data-col="targetRange">${formatRange(item.targetRange, historyTokenInfo)}</td>
         <td data-col="mint">${item.positionMint ?? "-"}</td>
@@ -1429,13 +1165,6 @@ function renderHistory(items) {
         <td data-col="txFeeUsd">${txFeeCell}</td>
         <td data-col="exitUsd">${exitCell}</td>
         <td data-col="pnlUsd">${pnlCell}</td>
-        <td data-col="hedgeSymbol">${item.hedgeSymbol ?? "-"}</td>
-        <td data-col="hedgeNotional">${hedgeNotionalCell}</td>
-        <td data-col="hedgeLeverage">${hedgeLeverageCell}</td>
-        <td data-col="hedgeFees">${hedgeFeesCell}</td>
-        <td data-col="hedgePnl">${hedgePnlCell}</td>
-        <td data-col="hedgeDecision">${formatHedgeDecision(item.hedgeDecision)}</td>
-        <td data-col="hedgeDecisionReason">${item.hedgeDecisionReason ?? "-"}</td>
         <td data-col="pnlTotal">${formatNumber(pnlTotal, 2)}</td>
         <td data-col="pnlTotalNet">${formatNumber(pnlTotalNet, 2)}</td>
       </tr>
@@ -1510,7 +1239,7 @@ function renderPools(data, config) {
   cachedPools = pools;
   cachedConfig = config;
   if (!pools.length) {
-    poolsBody.innerHTML = "<tr><td colspan=\"18\">Sem pools cadastradas</td></tr>";
+    poolsBody.innerHTML = "<tr><td colspan=\"13\">Sem pools cadastradas</td></tr>";
     return;
   }
   const rows = pools.map((pool) => {
@@ -1525,32 +1254,12 @@ function renderPools(data, config) {
     const exitTokenDisplay = pool.overrides?.preferredExitToken ?? null;
     const exitDirectionDisplay = pool.overrides?.preferredExitDirection ?? null;
     const exitBiasDisplay = pool.overrides?.rangeExitBiasPct ?? null;
-    const hedgeEnabledDisplay = pool.overrides?.hedgeEnabled ?? null;
-    const hedgePctDisplay = pool.overrides?.hedgePct ?? null;
-    const hedgeSymbolDisplay = pool.overrides?.hedgeSymbol ?? null;
-    const hedgeLeverageDisplay = pool.overrides?.hedgeLeverage ?? null;
-    const hedgeEntryModeDisplay = pool.overrides?.hedgeEntryMode ?? null;
     const defaultRange = config?.rangeWidthPct ?? "-";
     const defaultBudget = config?.budgetUsd ?? "-";
     const defaultExitToken = config?.preferredExitToken ?? null;
     const defaultExitDirection = config?.preferredExitDirection ?? "down";
     const defaultExitBias = config?.rangeExitBiasPct ?? "-";
-    const defaultHedgeEnabled = config?.hedgeEnabled ?? false;
-    const defaultHedgePct = config?.hedgePct ?? "-";
-    const defaultHedgeSymbol = config?.hedgeSymbol ?? "-";
-    const defaultHedgeLeverage = config?.hedgeLeverage ?? "-";
-    const defaultHedgeEntryMode = config?.hedgeEntryMode ?? "off";
     const poolTokenInfo = getTokenInfo(pool);
-    const hedgeEntryModeValue = hedgeEntryModeDisplay == null ? defaultHedgeEntryMode : hedgeEntryModeDisplay;
-    const hedgeUsesTrend = ["trend-down", "trend-up", "trend-any"].includes(String(hedgeEntryModeValue));
-    const poolUsesTrend = Boolean(pool.trendEnabled);
-    const trendUsageLabel = poolUsesTrend && hedgeUsesTrend
-      ? "pool/trade"
-      : poolUsesTrend
-        ? "pool"
-        : hedgeUsesTrend
-          ? "trade"
-          : "";
     const rangeLabel = rangeDisplay == null ? `Padrao (${defaultRange})` : Number(rangeDisplay).toFixed(2);
     const budgetLabel = budgetDisplay == null ? `Padrao (${defaultBudget})` : Number(budgetDisplay).toFixed(2);
     const exitTokenLabel = exitTokenDisplay == null
@@ -1562,19 +1271,6 @@ function renderPools(data, config) {
     const exitBiasLabel = exitBiasDisplay == null
       ? `Padrao (${formatNumber(defaultExitBias, 2)})`
       : formatNumber(exitBiasDisplay, 2);
-    const hedgeEnabledValue = hedgeEnabledDisplay == null ? defaultHedgeEnabled : hedgeEnabledDisplay;
-    const hedgePctLabel = hedgePctDisplay == null
-      ? `Padrao (${formatNumber(defaultHedgePct, 2)})`
-      : formatNumber(hedgePctDisplay, 2);
-    const hedgeSymbolLabel = hedgeSymbolDisplay == null
-      ? `Padrao (${defaultHedgeSymbol || "-"})`
-      : hedgeSymbolDisplay;
-    const hedgeLeverageLabel = hedgeLeverageDisplay == null
-      ? `Padrao (${formatNumber(defaultHedgeLeverage, 2)})`
-      : formatNumber(hedgeLeverageDisplay, 2);
-    const hedgeEntryModeLabel = hedgeEntryModeDisplay == null
-      ? `Padrao (${formatHedgeEntryMode(defaultHedgeEntryMode)})`
-      : formatHedgeEntryMode(hedgeEntryModeDisplay);
     const createdAt = formatTimestamp(pool.createdAt);
     return `
       <tr>
@@ -1585,12 +1281,7 @@ function renderPools(data, config) {
         <td>${exitTokenLabel}</td>
         <td>${exitDirectionLabel}</td>
         <td>${exitBiasLabel}</td>
-        <td>${formatTrendBadge(pool, trendUsageLabel)}</td>
         <td>${budgetLabel}</td>
-        <td>${hedgeEnabledValue ? hedgePctLabel : "Desativado"}</td>
-        <td>${hedgeEnabledValue ? hedgeSymbolLabel : "-"}</td>
-        <td>${hedgeEnabledValue ? hedgeLeverageLabel : "-"}</td>
-        <td>${hedgeEnabledValue ? hedgeEntryModeLabel : "-"}</td>
         <td>${statusLabel}</td>
         <td>${lastActionLabel}</td>
         <td>${formatNumber(pool.positionPnlUsd, 2)}</td>
@@ -1630,17 +1321,6 @@ async function updateUI() {
     lastErrorEl.textContent = status.lastError ?? "-";
     applyStatusTone(runningEl, runningEl.textContent);
     applyStatusTone(lastErrorEl, lastErrorEl.textContent);
-    if (hedgeStatusEl) {
-      const hedgeLabel = status.hedgeActive
-        ? `Ativo${status.hedgeSymbol ? " (" + status.hedgeSymbol + ")" : ""}`
-        : "Parado";
-      hedgeStatusEl.textContent = hedgeLabel;
-      applyStatusTone(hedgeStatusEl, hedgeLabel);
-    }
-    if (hedgeErrorEl) {
-      hedgeErrorEl.textContent = status.hedgeLastError ?? "-";
-      applyStatusTone(hedgeErrorEl, hedgeErrorEl.textContent);
-    }
     const tokenInfo = getTokenInfo(config);
     const selectedPool = Array.isArray(pools)
       ? pools.find((item) => item.id === config.selectedPoolId)
@@ -1756,17 +1436,6 @@ async function updateUI() {
     if (poolExitDirectionInput) {
       setSelectPlaceholder(poolExitDirectionInput, `Padrao (${formatExitDirection(config.preferredExitDirection ?? "down")})`);
     }
-    if (poolTrendUpInput) {
-      updateTrendTargetSelectHints(poolTrendUpInput, tokenInfo);
-      setSelectPlaceholder(poolTrendUpInput, `Padrao (${formatTrendTargetLabel(config.trendTargetUp, tokenInfo)})`);
-    }
-    if (poolTrendDownInput) {
-      updateTrendTargetSelectHints(poolTrendDownInput, tokenInfo);
-      setSelectPlaceholder(poolTrendDownInput, `Padrao (${formatTrendTargetLabel(config.trendTargetDown, tokenInfo)})`);
-    }
-    if (poolTrendEnabledInput) {
-      setSelectPlaceholder(poolTrendEnabledInput, `Padrao (${config.trendEnabled ? "Sim" : "Nao"})`);
-    }
     if (poolAutoAddEnabledInput) {
       setSelectPlaceholder(poolAutoAddEnabledInput, `Padrao (${config.autoAddLiquidityEnabled ? "Sim" : "Nao"})`);
     }
@@ -1816,14 +1485,6 @@ async function updateUI() {
     if (poolKaminoPriceBufferInput) {
       poolKaminoPriceBufferInput.placeholder = `Padrao (${formatNumber(config.kaminoPriceBufferPct, 2)})`;
     }
-    if (poolHedgeEntryModeInput) {
-      setSelectPlaceholder(poolHedgeEntryModeInput, `Padrao (${formatHedgeEntryMode(config.hedgeEntryMode ?? "off")})`);
-    }
-    if (poolTrendTimeframeInput) {
-      setSelectPlaceholder(poolTrendTimeframeInput, `Padrao (${config.trendTimeframe ?? "1m"})`);
-    }
-    updateTrendHint(poolTrendHint, tokenInfo);
-
     if (historyEditState) {
       historyEditPendingRender = true;
     } else {
@@ -2013,16 +1674,6 @@ if (swapToSolBtn) {
   });
 }
 
-const hedgeSymbolInputs = [poolHedgeSymbolInput, editPoolHedgeSymbolInput].filter(Boolean);
-hedgeSymbolInputs.forEach((input) => {
-  input.addEventListener("focus", () => {
-    void ensureHedgeSymbolsLoaded();
-  });
-  input.addEventListener("input", () => {
-    input.value = input.value.toUpperCase();
-  });
-});
-
 addPoolBtn.addEventListener("click", async () => {
   const name = poolNameInput.value.trim();
   const address = poolAddressInput.value.trim();
@@ -2030,10 +1681,6 @@ addPoolBtn.addEventListener("click", async () => {
   const rangeExitBiasPct = parseOptionalNumber(poolExitBiasInput?.value);
   const preferredExitToken = poolExitTokenInput?.value?.trim();
   const preferredExitDirection = poolExitDirectionInput?.value?.trim();
-  const trendEnabledRaw = poolTrendEnabledInput?.value ?? "";
-  const trendTimeframeRaw = poolTrendTimeframeInput?.value ?? "";
-  const trendTargetUpRaw = poolTrendUpInput?.value ?? "";
-  const trendTargetDownRaw = poolTrendDownInput?.value ?? "";
   const budgetUsd = parseOptionalNumber(poolBudgetInput.value);
   const autoAddRaw = poolAutoAddEnabledInput?.value ?? "";
   const kaminoEnabledRaw = poolKaminoEnabledInput?.value ?? "";
@@ -2048,12 +1695,6 @@ addPoolBtn.addEventListener("click", async () => {
   const kaminoAvgBasisRaw = poolKaminoAvgBasisInput?.value ?? "";
   const kaminoAvgModeRaw = poolKaminoAvgModeInput?.value ?? "";
   const kaminoAutoCloseRaw = poolKaminoAutoCloseInput?.value ?? "";
-  const hedgeEnabledRaw = poolHedgeEnabledInput?.value ?? "";
-  const hedgePct = parseOptionalNumber(poolHedgePctInput?.value);
-  const hedgeMarginPct = parseOptionalNumber(poolHedgeMarginPctInput?.value);
-  const hedgeSymbol = poolHedgeSymbolInput?.value?.trim();
-  const hedgeLeverage = parseOptionalNumber(poolHedgeLeverageInput?.value);
-  const hedgeEntryMode = poolHedgeEntryModeInput?.value?.trim();
   poolError.classList.add("hidden");
   try {
     const overrides = {};
@@ -2073,46 +1714,18 @@ addPoolBtn.addEventListener("click", async () => {
       }
       overrides.preferredExitDirection = parsed;
     }
-    if (trendEnabledRaw) {
-      const parsed = parseTrendEnabledInput(trendEnabledRaw);
-      if (parsed === null) {
-        throw new Error("Tendencia invalida. Use Sim ou Nao.");
-      }
-      overrides.trendEnabled = parsed;
-    }
-    if (trendTimeframeRaw) {
-      const parsed = parseTrendTimeframeInput(trendTimeframeRaw);
-      if (!parsed) {
-        throw new Error("Timeframe de tendencia invalido.");
-      }
-      overrides.trendTimeframe = parsed;
-    }
-    if (trendTargetUpRaw) {
-      const parsed = parseTrendTargetInput(trendTargetUpRaw);
-      if (!parsed) {
-        throw new Error("Target de alta invalido.");
-      }
-      overrides.trendTargetUp = parsed;
-    }
-    if (trendTargetDownRaw) {
-      const parsed = parseTrendTargetInput(trendTargetDownRaw);
-      if (!parsed) {
-        throw new Error("Target de baixa invalido.");
-      }
-      overrides.trendTargetDown = parsed;
-    }
     if (budgetUsd !== undefined) {
       overrides.budgetUsd = budgetUsd;
     }
     if (autoAddRaw) {
-      const parsed = parseTrendEnabledInput(autoAddRaw);
+      const parsed = parseBooleanInput(autoAddRaw);
       if (parsed === null) {
         throw new Error("Auto adicionar liquidez invalido. Use Sim ou Nao.");
       }
       overrides.autoAddLiquidityEnabled = parsed;
     }
     if (kaminoEnabledRaw) {
-      const parsed = parseTrendEnabledInput(kaminoEnabledRaw);
+      const parsed = parseBooleanInput(kaminoEnabledRaw);
       if (parsed === null) {
         throw new Error("Kamino rebalance invalido. Use Sim ou Nao.");
       }
@@ -2152,7 +1765,7 @@ addPoolBtn.addEventListener("click", async () => {
       overrides.kaminoCollateralMode = parsed;
     }
     if (kaminoConvertRaw) {
-      const parsed = parseTrendEnabledInput(kaminoConvertRaw);
+      const parsed = parseBooleanInput(kaminoConvertRaw);
       if (parsed === null) {
         throw new Error("Converter para colateral fixo invalido. Use Sim ou Nao.");
       }
@@ -2173,33 +1786,11 @@ addPoolBtn.addEventListener("click", async () => {
       overrides.kaminoAvgMode = parsed;
     }
     if (kaminoAutoCloseRaw) {
-      const parsed = parseTrendEnabledInput(kaminoAutoCloseRaw);
+      const parsed = parseBooleanInput(kaminoAutoCloseRaw);
       if (parsed === null) {
         throw new Error("Auto-fechar Kamino invalido. Use Sim ou Nao.");
       }
       overrides.kaminoAutoCloseOnTokenChange = parsed;
-    }
-    if (hedgeEnabledRaw) {
-      const parsed = parseTrendEnabledInput(hedgeEnabledRaw);
-      if (parsed === null) {
-        throw new Error("Protecao Bybit invalida. Use Sim ou Nao.");
-      }
-      overrides.hedgeEnabled = parsed;
-    }
-    if (hedgePct !== undefined) {
-      overrides.hedgePct = hedgePct;
-    }
-    if (hedgeMarginPct !== undefined) {
-      overrides.hedgeMarginPct = hedgeMarginPct;
-    }
-    if (hedgeSymbol) {
-      overrides.hedgeSymbol = hedgeSymbol;
-    }
-    if (hedgeLeverage !== undefined) {
-      overrides.hedgeLeverage = hedgeLeverage;
-    }
-    if (hedgeEntryMode) {
-      overrides.hedgeEntryMode = hedgeEntryMode;
     }
     const res = await fetch("/api/pools", {
       method: "POST",
@@ -2216,10 +1807,6 @@ addPoolBtn.addEventListener("click", async () => {
     if (poolExitTokenInput) poolExitTokenInput.value = "";
     if (poolExitDirectionInput) poolExitDirectionInput.value = "";
     if (poolExitBiasInput) poolExitBiasInput.value = "";
-    if (poolTrendEnabledInput) poolTrendEnabledInput.value = "";
-    if (poolTrendTimeframeInput) poolTrendTimeframeInput.value = "";
-    if (poolTrendUpInput) poolTrendUpInput.value = "";
-    if (poolTrendDownInput) poolTrendDownInput.value = "";
     poolBudgetInput.value = "";
     if (poolAutoAddEnabledInput) poolAutoAddEnabledInput.value = "";
     if (poolKaminoEnabledInput) poolKaminoEnabledInput.value = "";
@@ -2234,12 +1821,6 @@ addPoolBtn.addEventListener("click", async () => {
     if (poolKaminoAvgBasisInput) poolKaminoAvgBasisInput.value = "";
     if (poolKaminoAvgModeInput) poolKaminoAvgModeInput.value = "";
     if (poolKaminoAutoCloseInput) poolKaminoAutoCloseInput.value = "";
-    if (poolHedgeEnabledInput) poolHedgeEnabledInput.value = "";
-    if (poolHedgePctInput) poolHedgePctInput.value = "";
-    if (poolHedgeMarginPctInput) poolHedgeMarginPctInput.value = "";
-    if (poolHedgeSymbolInput) poolHedgeSymbolInput.value = "";
-    if (poolHedgeLeverageInput) poolHedgeLeverageInput.value = "";
-    if (poolHedgeEntryModeInput) poolHedgeEntryModeInput.value = "";
     updateUI();
   } catch (err) {
     poolError.textContent = err instanceof Error ? err.message : String(err);
@@ -2294,7 +1875,7 @@ if (editPoolForm) {
     if (!autoAddRaw) {
       overrides.autoAddLiquidityEnabled = null;
     } else {
-      const parsed = parseTrendEnabledInput(autoAddRaw);
+      const parsed = parseBooleanInput(autoAddRaw);
       if (parsed === null) {
         if (editPoolError) {
           editPoolError.textContent = "Auto adicionar liquidez invalido. Use Sim ou Nao.";
@@ -2309,7 +1890,7 @@ if (editPoolForm) {
     if (!kaminoEnabledRaw) {
       overrides.kaminoRebalanceEnabled = null;
     } else {
-      const parsed = parseTrendEnabledInput(kaminoEnabledRaw);
+      const parsed = parseBooleanInput(kaminoEnabledRaw);
       if (parsed === null) {
         if (editPoolError) {
           editPoolError.textContent = "Kamino rebalance invalido. Use Sim ou Nao.";
@@ -2421,7 +2002,7 @@ if (editPoolForm) {
     if (!kaminoConvertRaw) {
       overrides.kaminoConvertToCollateral = null;
     } else {
-      const parsed = parseTrendEnabledInput(kaminoConvertRaw);
+      const parsed = parseBooleanInput(kaminoConvertRaw);
       if (parsed === null) {
         if (editPoolError) {
           editPoolError.textContent = "Converter para colateral fixo invalido. Use Sim ou Nao.";
@@ -2466,7 +2047,7 @@ if (editPoolForm) {
     if (!kaminoAutoCloseRaw) {
       overrides.kaminoAutoCloseOnTokenChange = null;
     } else {
-      const parsed = parseTrendEnabledInput(kaminoAutoCloseRaw);
+      const parsed = parseBooleanInput(kaminoAutoCloseRaw);
       if (parsed === null) {
         if (editPoolError) {
           editPoolError.textContent = "Auto-fechar Kamino invalido. Use Sim ou Nao.";
@@ -2520,140 +2101,6 @@ if (editPoolForm) {
         return;
       }
       overrides.rangeExitBiasPct = parsed;
-    }
-
-    const trendEnabledRaw = editPoolTrendEnabledInput?.value ?? "";
-    if (!trendEnabledRaw) {
-      overrides.trendEnabled = null;
-    } else {
-      const parsed = parseTrendEnabledInput(trendEnabledRaw);
-      if (parsed === null) {
-        if (editPoolError) {
-          editPoolError.textContent = "Tendencia invalida. Use Sim ou Nao.";
-          editPoolError.classList.remove("hidden");
-        }
-        return;
-      }
-      overrides.trendEnabled = parsed;
-    }
-
-    const trendTimeframeRaw = editPoolTrendTimeframeInput?.value ?? "";
-    if (!trendTimeframeRaw) {
-      overrides.trendTimeframe = null;
-    } else {
-      const parsed = parseTrendTimeframeInput(trendTimeframeRaw);
-      if (!parsed) {
-        if (editPoolError) {
-          editPoolError.textContent = "Timeframe de tendencia invalido.";
-          editPoolError.classList.remove("hidden");
-        }
-        return;
-      }
-      overrides.trendTimeframe = parsed;
-    }
-
-    const trendUpRaw = editPoolTrendUpInput?.value ?? "";
-    if (!trendUpRaw) {
-      overrides.trendTargetUp = null;
-    } else {
-      const parsed = parseTrendTargetInput(trendUpRaw);
-      if (!parsed) {
-        if (editPoolError) {
-          editPoolError.textContent = "Target de alta invalido.";
-          editPoolError.classList.remove("hidden");
-        }
-        return;
-      }
-      overrides.trendTargetUp = parsed;
-    }
-
-    const trendDownRaw = editPoolTrendDownInput?.value ?? "";
-    if (!trendDownRaw) {
-      overrides.trendTargetDown = null;
-    } else {
-      const parsed = parseTrendTargetInput(trendDownRaw);
-      if (!parsed) {
-        if (editPoolError) {
-          editPoolError.textContent = "Target de baixa invalido.";
-          editPoolError.classList.remove("hidden");
-        }
-        return;
-      }
-      overrides.trendTargetDown = parsed;
-    }
-
-    const hedgeEnabledRaw = editPoolHedgeEnabledInput?.value ?? "";
-    if (!hedgeEnabledRaw) {
-      overrides.hedgeEnabled = null;
-    } else {
-      const parsed = parseTrendEnabledInput(hedgeEnabledRaw);
-      if (parsed === null) {
-        if (editPoolError) {
-          editPoolError.textContent = "Protecao Bybit invalida. Use Sim ou Nao.";
-          editPoolError.classList.remove("hidden");
-        }
-        return;
-      }
-      overrides.hedgeEnabled = parsed;
-    }
-
-    const hedgePctRaw = editPoolHedgePctInput?.value?.trim() ?? "";
-    if (!hedgePctRaw) {
-      overrides.hedgePct = null;
-    } else {
-      const parsed = parseOptionalNumber(hedgePctRaw);
-      if (parsed === undefined) {
-        if (editPoolError) {
-          editPoolError.textContent = "Hedge % invalido.";
-          editPoolError.classList.remove("hidden");
-        }
-        return;
-      }
-      overrides.hedgePct = parsed;
-    }
-
-    const hedgeMarginRaw = editPoolHedgeMarginPctInput?.value?.trim() ?? "";
-    if (!hedgeMarginRaw) {
-      overrides.hedgeMarginPct = null;
-    } else {
-      const parsed = parseOptionalNumber(hedgeMarginRaw);
-      if (parsed === undefined) {
-        if (editPoolError) {
-          editPoolError.textContent = "Hedge margem % invalida.";
-          editPoolError.classList.remove("hidden");
-        }
-        return;
-      }
-      overrides.hedgeMarginPct = parsed;
-    }
-
-    const hedgeSymbolRaw = editPoolHedgeSymbolInput?.value?.trim() ?? "";
-    if (!hedgeSymbolRaw) {
-      overrides.hedgeSymbol = null;
-    } else {
-      overrides.hedgeSymbol = hedgeSymbolRaw;
-    }
-
-    const hedgeLeverageRaw = editPoolHedgeLeverageInput?.value?.trim() ?? "";
-    if (!hedgeLeverageRaw) {
-      overrides.hedgeLeverage = null;
-    } else {
-      const parsed = parseOptionalNumber(hedgeLeverageRaw);
-      if (parsed === undefined) {
-        if (editPoolError) {
-          editPoolError.textContent = "Alavancagem invalida.";
-          editPoolError.classList.remove("hidden");
-        }
-        return;
-      }
-      overrides.hedgeLeverage = parsed;
-    }
-
-    const hedgeEntryModeRaw = editPoolHedgeEntryModeInput?.value?.trim() ?? "";
-    if (!hedgeEntryModeRaw) {
-      overrides.hedgeEntryMode = null;
-    } else {
-      overrides.hedgeEntryMode = hedgeEntryModeRaw;
     }
 
     try {
@@ -3131,3 +2578,4 @@ applyHistoryColumnVisibility();
 syncHistoryTypeControls();
 syncHistoryRowLimit();
 setInterval(updateUI, 5000);
+

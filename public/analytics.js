@@ -66,7 +66,6 @@ const analyticsColumnDefaults = {
   close: true,
   type: true,
   action: true,
-  trend: true,
   price: true,
   targetRange: true,
   mint: true,
@@ -75,13 +74,6 @@ const analyticsColumnDefaults = {
   txFeeUsd: true,
   exitUsd: true,
   pnlUsd: true,
-  hedgeSymbol: true,
-  hedgeNotional: true,
-  hedgeLeverage: true,
-  hedgeFees: true,
-  hedgePnl: true,
-  hedgeDecision: true,
-  hedgeDecisionReason: true,
   pnlTotal: true,
   pnlTotalNet: true
 };
@@ -126,8 +118,8 @@ const perfMetricLabels = {
   feeYieldPct: "Rendimento da taxa (%)",
   pnl: "PnL",
   pnlNet: "PnL sem taxas",
-  pnlTotal: "PnL com hedge e Taxas",
-  pnlTotalNet: "PnL total com hedge sem taxas (USD)",
+  pnlTotal: "PnL total (USD)",
+  pnlTotalNet: "PnL total sem taxas (USD)",
   pnlCum: "PnL acumulado",
   pnlNetCum: "PnL sem taxas acumulado"
 };
@@ -138,8 +130,8 @@ const perfMetricTooltipLabels = {
   feeYieldPct: "Rend. taxa (%)",
   pnl: "PnL",
   pnlNet: "PnL s/ taxas",
-  pnlTotal: "PnL hedge + taxas",
-  pnlTotalNet: "PnL hedge s/ taxas",
+  pnlTotal: "PnL total",
+  pnlTotalNet: "PnL total s/ taxas",
   pnlCum: "PnL acum.",
   pnlNetCum: "PnL s/ taxas acum."
 };
@@ -212,19 +204,6 @@ function formatCloseTimestamp(item) {
   if (!item) return "-";
   if (!item.positionClosedAt) return "-";
   return formatTimestamp(item.positionClosedAt);
-}
-
-function formatTrendDirection(value) {
-  if (value === "up") return "Alta";
-  if (value === "down") return "Baixa";
-  return "-";
-}
-
-function formatHedgeDecision(value) {
-  if (value === "opened") return "Abriu";
-  if (value === "skipped") return "Ignorado";
-  if (value === "failed") return "Falhou";
-  return value ?? "-";
 }
 
 function sumNumeric(items, key) {
@@ -353,7 +332,7 @@ async function fetchHistory(poolId) {
 
 function renderHistory(items) {
   if (!items || items.length === 0) {
-    historyBody.innerHTML = "<tr><td colspan=\"23\">Sem eventos ainda</td></tr>";
+    historyBody.innerHTML = "<tr><td colspan=\"15\">Sem eventos ainda</td></tr>";
     return;
   }
   const limit = analyticsRowLimit ?? 30;
@@ -361,16 +340,12 @@ function renderHistory(items) {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
     const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
     const pnlRaw = Number(item.positionPnlUsd);
-    const hedgeRaw = Number(item.hedgePnlUsd);
-    const hedgeSkipped = item.hedgeDecision === "skipped";
     const hasPnl = Number.isFinite(pnlRaw);
-    const hasHedge = Number.isFinite(hedgeRaw) || hedgeSkipped;
     const feesRaw = Number(item.positionFeesUsd);
     const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
     const poolPnl = hasPnl ? pnlRaw : 0;
-    const hedgePnl = Number.isFinite(hedgeRaw) ? hedgeRaw : 0;
-    const pnlTotal = hasPnl || hasHedge ? poolPnl + hedgePnl : null;
-    const pnlTotalNet = hasPnl || hasHedge ? (hasPnl ? poolPnl - fees : 0) + hedgePnl : null;
+    const pnlTotal = hasPnl ? poolPnl : null;
+    const pnlTotalNet = hasPnl ? poolPnl - fees : null;
     return `
       <tr>
         <td data-col="datetime">${formatTimestamp(item.timestamp)}</td>
@@ -378,7 +353,6 @@ function renderHistory(items) {
         <td data-col="close">${formatCloseTimestamp(item)}</td>
         <td data-col="type">${typeLabel}</td>
         <td data-col="action">${actionLabel}</td>
-        <td data-col="trend">${formatTrendDirection(item.trendDirection)}</td>
         <td data-col="price">${formatNumber(item.price, 8)}</td>
         <td data-col="targetRange">${formatRange(item.targetRange)}</td>
         <td data-col="mint">${item.positionMint ?? "-"}</td>
@@ -387,13 +361,6 @@ function renderHistory(items) {
         <td data-col="txFeeUsd">${formatNumber(item.txFeeUsd, 6)}</td>
         <td data-col="exitUsd">${formatNumber(item.positionExitUsd, 2)}</td>
         <td data-col="pnlUsd">${formatNumber(item.positionPnlUsd, 2)}</td>
-        <td data-col="hedgeSymbol">${item.hedgeSymbol ?? "-"}</td>
-        <td data-col="hedgeNotional">${formatNumber(item.hedgeNotionalUsd, 2)}</td>
-        <td data-col="hedgeLeverage">${formatNumber(item.hedgeLeverage, 2)}</td>
-        <td data-col="hedgeFees">${formatNumber(item.hedgeFeesUsd, 2)}</td>
-        <td data-col="hedgePnl">${formatNumber(item.hedgePnlUsd, 2)}</td>
-        <td data-col="hedgeDecision">${formatHedgeDecision(item.hedgeDecision)}</td>
-        <td data-col="hedgeDecisionReason">${item.hedgeDecisionReason ?? "-"}</td>
         <td data-col="pnlTotal">${formatNumber(pnlTotal, 2)}</td>
         <td data-col="pnlTotalNet">${formatNumber(pnlTotalNet, 2)}</td>
       </tr>
@@ -637,15 +604,11 @@ function aggregatePerformance(items, group) {
     };
     const fees = Number(item.positionFeesUsd) || 0;
     const pnlRaw = Number(item.positionPnlUsd);
-    const hedgeRaw = Number(item.hedgePnlUsd);
-    const hedgeSkipped = item.hedgeDecision === "skipped";
     const hasPnl = Number.isFinite(pnlRaw);
-    const hasHedge = Number.isFinite(hedgeRaw) || hedgeSkipped;
-    if (!hasPnl && !hasHedge) {
+    if (!hasPnl) {
       return;
     }
     const pnl = hasPnl ? pnlRaw : 0;
-    const hedgePnl = Number.isFinite(hedgeRaw) ? hedgeRaw : 0;
     const entryUsd = Number(item.positionEntryUsd);
     bucket.fees += fees;
     if (Number.isFinite(entryUsd) && entryUsd > 0) {
@@ -655,8 +618,8 @@ function aggregatePerformance(items, group) {
     const pnlNet = pnl - fees;
     bucket.pnl += pnl;
     bucket.pnlNet += pnlNet;
-    bucket.pnlTotal += pnl + hedgePnl;
-    bucket.pnlTotalNet += pnlNet + hedgePnl;
+    bucket.pnlTotal += pnl;
+    bucket.pnlTotalNet += pnlNet;
     buckets.set(key, bucket);
   });
   const series = Array.from(buckets.values()).sort((a, b) => a.date - b.date);
