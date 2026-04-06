@@ -1321,6 +1321,24 @@ function renderPools(data, config) {
     pools = cachedFallback;
   }
 
+  // Fallback final: usar a pool selecionada do /api/config para nao zerar a tabela.
+  if (!pools.length && config && (config.poolName || config.whirlpoolAddress)) {
+    pools = [
+      {
+        id: config.selectedPoolId ?? "selected",
+        name: config.poolName ?? "Pool selecionada",
+        whirlpoolAddress: config.whirlpoolAddress ?? "-",
+        createdAt: new Date().toISOString(),
+        selected: true,
+        running: cachedStatus?.running ?? false,
+        lastAction: cachedStatus?.lastAction ?? null,
+        lastError: cachedStatus?.lastError ?? null,
+        positionPnlUsd: cachedStatus?.positionPnlUsd ?? null,
+        overrides: null
+      }
+    ];
+  }
+
   if (pools.length > 0) {
     cachedPools = pools;
   }
