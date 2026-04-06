@@ -1527,7 +1527,7 @@ export class OrcaBot {
       }
       const nextUsd = baseUsd + (depositedUsd ?? 0);
       const nextDebtUsd = baseDebtUsd + (borrowSig ? borrowUsd : 0);
-      const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
+      const avgNumerator = nextUsd > 0 ? nextUsd : (avgBasis === "debt" ? nextDebtUsd : nextUsd);
       const avgPriceUsdc = nextAmount > 0 && avgNumerator > 0 ? avgNumerator / nextAmount : null;
       // Sanidade: para SOL, preço médio precisa estar num range plausível
       if (mint === NATIVE_MINT.toBase58() && avgPriceUsdc != null) {
@@ -2881,7 +2881,7 @@ export class OrcaBot {
     if (!state) {
       return null;
     }
-    const collaterals: KaminoCollateralEntry[] = Array.isArray(state.collaterals)
+    let collaterals: KaminoCollateralEntry[] = Array.isArray(state.collaterals)
       ? state.collaterals.map((item) => ({
         mint: String(item.mint ?? ""),
         amount: Number(item.amount ?? 0),
@@ -2905,6 +2905,39 @@ export class OrcaBot {
         targetPriceUsdc: state.targetPriceUsdc ?? null
       });
     }
+    const poolLossUsd = (() => {
+      const pnl = this.lastStatus.positionPnlUsd ?? null;
+      if (pnl != null && Number.isFinite(pnl) && pnl < 0) return Math.abs(pnl);
+      return 0;
+    })();
+    const totalUsdForLoss = collaterals.reduce((sum, item) => sum + (Number(item.usd ?? 0) || 0), 0);
+    const lossAdjPct = totalUsdForLoss > 0 && poolLossUsd > 0
+      ? (poolLossUsd / totalUsdForLoss) * 100
+      : 0;
+    const bufferPct = Number(this.config.kaminoPriceBufferPct ?? 0) || 0;
+    collaterals = collaterals.map((item) => {
+      const amount = Number(item.amount ?? 0);
+      const usd = item.usd == null ? null : Number(item.usd);
+      let avgPriceUsdc = item.avgPriceUsdc == null ? null : Number(item.avgPriceUsdc);
+      let targetPriceUsdc = item.targetPriceUsdc == null ? null : Number(item.targetPriceUsdc);
+      if (usd != null && Number.isFinite(usd) && usd > 0 && amount > 0) {
+        const derivedAvg = usd / amount;
+        const diff = avgPriceUsdc != null && Number.isFinite(avgPriceUsdc) && avgPriceUsdc > 0
+          ? Math.abs(avgPriceUsdc - derivedAvg) / derivedAvg
+          : Infinity;
+        if (diff > 0.2) {
+          avgPriceUsdc = derivedAvg;
+          if (state.active) {
+            targetPriceUsdc = derivedAvg * (1 + ((bufferPct + lossAdjPct) / 100));
+          }
+        }
+      }
+      return {
+        ...item,
+        avgPriceUsdc,
+        targetPriceUsdc
+      };
+    });
     const collateralUsd = collaterals.length
       ? collaterals.reduce((sum, item) => sum + (Number(item.usd ?? 0) || 0), 0)
       : (state.collateralUsd ?? null);
@@ -3074,6 +3107,9 @@ export class OrcaBot {
   }
 
   private syncKaminoStatus(): void {
+    if (this.kaminoState) {
+      this.kaminoState = this.normalizeKaminoState(this.kaminoState);
+    }
     const state = this.kaminoState;
     this.lastStatus.kaminoActive = Boolean(state?.active);
     this.lastStatus.kaminoEnabled = Boolean(this.config.kaminoRebalanceEnabled);
@@ -6541,7 +6577,7 @@ export class OrcaBot {
         const nextAmount = baseAmount + entry.depositAmount;
         const nextUsd = baseUsd + (entry.safeDepositUsd ?? 0);
         const nextDebtUsd = baseDebtUsd + debtUsd;
-        const avgNumerator = avgBasis === "debt" ? nextDebtUsd : nextUsd;
+        const avgNumerator = nextUsd > 0 ? nextUsd : (avgBasis === "debt" ? nextDebtUsd : nextUsd);
         const avgPriceUsdc = nextAmount > 0 ? avgNumerator / nextAmount : null;
         if (!avgPriceUsdc || !Number.isFinite(avgPriceUsdc) || avgPriceUsdc <= 0) {
           logger.error({ avgPriceUsdc }, "avgPriceUsdc invalido; abortando deposito Kamino");
@@ -8446,7 +8482,4 @@ function truncateJupiterError(value: string, max = 160): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max - 1)}...`;
 }
-
-
-
 
