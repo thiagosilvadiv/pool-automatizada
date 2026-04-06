@@ -446,6 +446,7 @@ export class OrcaBot {
   private pendingHistoryActions: BotStatus[] = [];
   private pendingKaminoLogs: KaminoLogItem[] = [];
   private stableMintCache = new Map<string, { mint: string; decimals: number }>();
+  private lastSolBalanceFallback = false;
   private lastStatus: BotStatus = {
     running: false,
     lastAction: null,
@@ -930,7 +931,7 @@ export class OrcaBot {
           }
         }
       }
-      if (finalSol < this.config.minSolBalance && !this.config.allowLowSolOperations) {
+      if (finalSol < this.config.minSolBalance) {
         logger.warn({ solBalance: finalSol, reason: topupResult.reason }, "SOL balance below minSolBalance; skipping");
         await this.loadExistingPosition();
         if (this.currentPosition) {
@@ -959,9 +960,6 @@ export class OrcaBot {
         this.lastStatus.positionRange = null;
         this.lastStatus.positionMint = this.currentPositionMint;
         return this.getStatus();
-      }
-      if (finalSol < this.config.minSolBalance && this.config.allowLowSolOperations) {
-        logger.warn({ solBalance: finalSol, reason: topupResult.reason }, "SOL balance below minSolBalance; continuing by config");
       }
     }
     const price = await this.getCurrentPrice();
@@ -2932,6 +2930,7 @@ export class OrcaBot {
       const usd = item.usd == null ? null : Number(item.usd);
       let avgPriceUsdc = item.avgPriceUsdc == null ? null : Number(item.avgPriceUsdc);
       let targetPriceUsdc = item.targetPriceUsdc == null ? null : Number(item.targetPriceUsdc);
+      let avgUpdated = false;
       if (usd != null && Number.isFinite(usd) && usd > 0 && amount > 0) {
         const derivedAvg = usd / amount;
         const diff = avgPriceUsdc != null && Number.isFinite(avgPriceUsdc) && avgPriceUsdc > 0
@@ -2939,9 +2938,20 @@ export class OrcaBot {
           : Infinity;
         if (diff > 0.2) {
           avgPriceUsdc = derivedAvg;
+          avgUpdated = true;
           if (state.active) {
             targetPriceUsdc = derivedAvg * (1 + ((bufferPct + lossAdjPct) / 100));
           }
+        }
+      }
+      if (state.active && avgPriceUsdc != null && Number.isFinite(avgPriceUsdc) && avgPriceUsdc > 0) {
+        const desiredTarget = avgPriceUsdc * (1 + ((bufferPct + lossAdjPct) / 100));
+        const targetInvalid = targetPriceUsdc == null || !Number.isFinite(targetPriceUsdc) || targetPriceUsdc < avgPriceUsdc;
+        const targetDrift = targetPriceUsdc != null && Number.isFinite(targetPriceUsdc)
+          ? Math.abs(targetPriceUsdc - desiredTarget) / desiredTarget
+          : Infinity;
+        if (avgUpdated || targetInvalid || targetDrift > 0.001) {
+          targetPriceUsdc = desiredTarget;
         }
       }
       return {
@@ -3525,11 +3535,22 @@ export class OrcaBot {
       const existingCollaterals = Array.isArray(this.kaminoState?.collaterals)
         ? this.kaminoState!.collaterals
         : [];
+      const poolLossUsd = (() => {
+        const pnl = this.lastStatus.positionPnlUsd ?? null;
+        if (pnl != null && Number.isFinite(pnl) && pnl < 0) return Math.abs(pnl);
+        return 0;
+      })();
+      const totalUsdForLoss = existingCollaterals.reduce((sum, item) => sum + (Number(item.usd ?? 0) || 0), 0);
+      const lossAdjPct = totalUsdForLoss > 0 && poolLossUsd > 0
+        ? (poolLossUsd / totalUsdForLoss) * 100
+        : 0;
+      const bufferPct = Number(this.config.kaminoPriceBufferPct ?? 0) || 0;
       const priceRecovered = async (mint: string | null | undefined, amount: number | null | undefined, prev?: KaminoCollateralEntry) => {
         const safeMint = mint ?? "";
         const safeAmount = amount ?? 0;
         let usd = prev?.usd ?? null;
         let avg = prev?.avgPriceUsdc ?? null;
+        let target = prev?.targetPriceUsdc ?? null;
         if (safeMint && safeAmount > 0) {
           try {
             const priced = await this.tryPriceCollateral(safeMint, safeAmount);
@@ -3541,13 +3562,21 @@ export class OrcaBot {
             // mantém valores anteriores se o preço falhar
           }
         }
+        if (avg != null && Number.isFinite(avg) && avg > 0) {
+          const prevAvg = prev?.avgPriceUsdc ?? null;
+          const avgChanged = prevAvg == null || !Number.isFinite(prevAvg) || Math.abs(avg - prevAvg) > 0;
+          const targetInvalid = target == null || !Number.isFinite(target) || target < avg;
+          if (avgChanged || targetInvalid) {
+            target = avg * (1 + ((bufferPct + lossAdjPct) / 100));
+          }
+        }
         return {
           mint: safeMint,
           amount: safeAmount,
           usd,
           debtUsd: prev?.debtUsd ?? null,
           avgPriceUsdc: avg,
-          targetPriceUsdc: prev?.targetPriceUsdc ?? null
+          targetPriceUsdc: target
         };
       };
 
@@ -6312,10 +6341,19 @@ export class OrcaBot {
     this.outOfRangeSince = null;
 
     let preCloseBalancesRaw: { tokenA: number; tokenB: number } | null = null;
+    let preCloseSnapshotOk = false;
+    let preCloseSolFallback = false;
     try {
       preCloseBalancesRaw = await this.getTokenBalancesRaw();
+      preCloseSolFallback = this.lastSolBalanceFallback;
+      preCloseSnapshotOk = Boolean(preCloseBalancesRaw)
+        && Number.isFinite(preCloseBalancesRaw.tokenA)
+        && Number.isFinite(preCloseBalancesRaw.tokenB)
+        && !preCloseSolFallback;
     } catch {
       preCloseBalancesRaw = null;
+      preCloseSnapshotOk = false;
+      preCloseSolFallback = false;
     }
     this.captureCloseSnapshot();
     await this.closePosition(this.currentPosition);
@@ -6327,6 +6365,16 @@ export class OrcaBot {
     if (this.currentPosition) {
       this.setError("Fechamento falhou: posicao ainda aberta");
       return "close-failed";
+    }
+    if (!preCloseSnapshotOk) {
+      const message = "Snapshot pre-fechamento invalido; deposito Kamino cancelado.";
+      this.setError(message);
+      logger.error(
+        { preCloseBalancesRaw, solFallback: preCloseSolFallback },
+        "kamino pre-close snapshot invalido; deposit abortado"
+      );
+      this.queueKaminoLog("rebalance-snapshot-invalid", message, "error");
+      return "kamino-rebalance-failed";
     }
 
     const resolveTokens = async (balancesInput: { tokenA: number; tokenB: number }) => {
@@ -7051,6 +7099,8 @@ export class OrcaBot {
       throw new Error("poolState not initialized");
     }
 
+    this.lastSolBalanceFallback = false;
+
     const ataA = getAssociatedTokenAddressSync(this.poolState.tokenMintA, this.wallet.publicKey);
     const ataB = getAssociatedTokenAddressSync(this.poolState.tokenMintB, this.wallet.publicKey);
 
@@ -7063,7 +7113,15 @@ export class OrcaBot {
     let tokenB = balB?.value?.uiAmount ?? 0;
 
     if (this.poolState.isTokenASol || this.poolState.isTokenBSol) {
-      const nativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
+      let nativeSol = 0;
+      try {
+        nativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
+      } catch (err) {
+        const fallback = Number(this.lastStatus.solBalance ?? 0);
+        nativeSol = Number.isFinite(fallback) ? fallback : 0;
+        this.lastSolBalanceFallback = true;
+        logger.warn({ err, fallbackSol: nativeSol }, "falha ao ler SOL; usando cache");
+      }
       const availableSol = Math.max(0, nativeSol - this.config.minSolBalance);
       if (this.poolState.isTokenASol) {
         tokenA += availableSol;

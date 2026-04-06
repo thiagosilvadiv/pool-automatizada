@@ -1657,22 +1657,16 @@ class RealKaminoClient implements KaminoClient {
       const ltv = obligation.refreshedStats?.loanToValue?.toNumber?.();
       const depositsRaw = obligation.getDeposits() ?? [];
       const borrowsRaw = obligation.getBorrows() ?? [];
-       const parseAmountToUi = async (mint: string, amountValue: any): Promise<number> => {
+      const parseAmountToUi = async (mint: string, amountValue: any): Promise<number> => {
          if (amountValue == null) return 0;
          const decimals = await this.resolveDecimals(mint);
          const text = typeof amountValue === "string" ? amountValue : amountValue?.toString?.() ?? String(amountValue);
          if (!text) return 0;
          const dec = new Decimal(text);
          if (!dec.isFinite()) return 0;
-         // Correção Bug 1: usar 10^decimals como threshold (não 10^(decimals-1)).
-         // A heurística anterior com (decimals-1) falhava para saldos pequenos de SOL
-         // (ex: 59.526.116 lamports < 100.000.000 threshold → tratado como UI em vez de raw).
-         // Com 10^decimals: qualquer valor >= 1 unidade inteira em raw é corretamente dividido.
-         const rawThreshold = Math.pow(10, Math.max(0, decimals));
-         if (dec.greaterThanOrEqualTo(rawThreshold)) {
-           return dec.div(Math.pow(10, Math.max(0, decimals))).toNumber();
-         }
-         return dec.toNumber();
+         const scale = new Decimal(10).pow(Math.max(0, decimals));
+         if (scale.isZero()) return dec.toNumber();
+         return dec.div(scale).toNumber();
        };
 
       const deposits = await Promise.all(depositsRaw.map(async (item) => {
