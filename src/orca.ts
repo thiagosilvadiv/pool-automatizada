@@ -6507,7 +6507,10 @@ export class OrcaBot {
       tokenA: Math.max(0, baselineBalances.tokenA - (preCloseBalancesRaw?.tokenA ?? 0)),
       tokenB: Math.max(0, baselineBalances.tokenB - (preCloseBalancesRaw?.tokenB ?? 0))
     };
-    let balances = this.applyBalanceCoordinator(exitBalancesRaw);
+    // O delta de fechamento já desconta o saldo pré-fechamento da wallet,
+    // então não deve passar pelo balanceCoordinator (que remove reservas
+    // de outras pools). Usamos o delta bruto para o depósito Kamino.
+    let balances = { ...exitBalancesRaw };
     const collateralMode = this.config.kaminoCollateralMode ?? "max-value";
     if (this.config.kaminoConvertToCollateral && (collateralMode === "tokenA" || collateralMode === "tokenB")) {
       const tokenAMint = this.poolState.tokenMintA.toBase58();
@@ -6546,7 +6549,7 @@ export class OrcaBot {
           tokenA: Math.max(0, baselineBalances.tokenA - (preCloseBalancesRaw?.tokenA ?? 0)),
           tokenB: Math.max(0, baselineBalances.tokenB - (preCloseBalancesRaw?.tokenB ?? 0))
         };
-        balances = this.applyBalanceCoordinator(exitBalancesRaw);
+        balances = { ...exitBalancesRaw };
       }
     }
     let exitTokens: Awaited<ReturnType<typeof resolveTokens>>;
