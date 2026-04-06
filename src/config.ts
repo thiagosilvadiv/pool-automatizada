@@ -55,6 +55,7 @@ export type Config = {
   kaminoAvgMode: "cumulative" | "reset";
   kaminoRepayRetrySec: number;
   kaminoRepayMaxAttempts: number;
+  kaminoRepayWithCollFirst: boolean;
   kaminoGracePeriodSec: number;
   autoResumeEnabled: boolean;
   autoResumeMaxAttempts: number;
@@ -421,6 +422,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   const envKaminoRepayRetrySec = parseEnvNumber(process.env.KAMINO_REPAY_RETRY_SEC);
   const envKaminoRepayMaxAttempts = parseEnvNumber(process.env.KAMINO_REPAY_MAX_ATTEMPTS);
+  const envKaminoRepayWithCollFirst = parseEnvBool(process.env.KAMINO_REPAY_WITH_COLL_FIRST);
   const envKaminoGracePeriodSec = parseEnvNumber(process.env.KAMINO_GRACE_PERIOD_SEC);
 
   const envTrendTimeframeRaw = process.env.TREND_TIMEFRAME ?? "";
@@ -636,6 +638,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? Number((data as any).kaminoRepayRetrySec ?? 15),
     kaminoRepayMaxAttempts: envKaminoRepayMaxAttempts
       ?? Number((data as any).kaminoRepayMaxAttempts ?? 3),
+    kaminoRepayWithCollFirst: envKaminoRepayWithCollFirst
+      ?? Boolean((data as any).kaminoRepayWithCollFirst ?? false),
     kaminoGracePeriodSec: envKaminoGracePeriodSec
       ?? Number((data as any).kaminoGracePeriodSec ?? 120),
     autoResumeEnabled,

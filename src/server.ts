@@ -469,6 +469,7 @@ export async function startServer(config: Config): Promise<void> {
       kaminoConvertToCollateral: config.kaminoConvertToCollateral,
       kaminoAvgPriceBasis: config.kaminoAvgPriceBasis,
       kaminoAvgMode: config.kaminoAvgMode,
+      kaminoRepayWithCollFirst: config.kaminoRepayWithCollFirst,
       tokenAMint: selectedStatus?.tokenAMint ?? null,
       tokenBMint: selectedStatus?.tokenBMint ?? null,
       isTokenASol: selectedStatus?.isTokenASol ?? null,

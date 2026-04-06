@@ -37,7 +37,7 @@ const MIN_ENTRY_BUDGET_FACTOR = 0;
 const MAX_USD_SANITY = 1_000_000_000;
 const DEFAULT_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const KAMINO_REPAY_CHUNK_FACTOR = 0.5;
-const KAMINO_REPAY_MIN_STABLE = 0.1; // unidade do stable
+const KAMINO_REPAY_MIN_STABLE = 0.01; // reduzido para evitar loop em dívidas residuais pequenas
 const KAMINO_WITHDRAW_MIN = 0.000001;
 const KAMINO_REBALANCE_RETRY_SEC = 10;
 const DEFAULT_TX_SIZE_THRESHOLD = 1200;
@@ -5626,6 +5626,49 @@ export class OrcaBot {
 
       let stableBalance = await this.getWalletTokenBalance(stable.mint);
       const repayTarget = debtAmount * (1 + repayBufferPct / 100);
+
+      // Se kaminoRepayWithCollFirst ativo: tentar repayWithCollateral PRIMEIRO,
+      // antes de qualquer swap de carteira (método oficial Kamino, 1 tx atômica).
+      if (this.config.kaminoRepayWithCollFirst && this.config.jupiterApiKey) {
+        const hasNonStableCollateral = collaterals.some((c) => {
+          const available = onChainDeposits.get(c.mint) ?? 0;
+          return c.mint !== stable.mint && available > 1e-8;
+        });
+        if (hasNonStableCollateral) {
+          this.queueKaminoLog(
+            "repay-with-collateral",
+            `kaminoRepayWithCollFirst: tentando repayWithCollateral nativo primeiro (dívida: ${debtAmount.toFixed(8)} ${stable.mint}).`,
+            "info"
+          );
+          const firstAttempt = await this.tryRepayWithCollateral({
+            kamino,
+            collaterals,
+            debtMint: stable.mint,
+            debtAmount,
+            onChainDeposits
+          });
+          if (firstAttempt.performed) {
+            debtAmount = firstAttempt.debtAmount;
+            onChainDeposits = firstAttempt.onChainDeposits;
+            stableBalance = await this.getWalletTokenBalance(stable.mint);
+            this.queueKaminoLog(
+              "repay-with-collateral",
+              `repayWithCollateral inicial concluido. Dívida restante: ${debtAmount.toFixed(8)}`,
+              "info"
+            );
+          } else if (firstAttempt.retryable && firstAttempt.error) {
+            const wait = this.scheduleKaminoRepayRetry(state, firstAttempt.error, mode, debtAmount);
+            if (wait) return false;
+          } else if (firstAttempt.error) {
+            this.queueKaminoLog(
+              "repay-with-collateral-failed",
+              `repayWithCollateral inicial falhou (${firstAttempt.error}); continuando com wallet.`,
+              "warn"
+            );
+          }
+        }
+      }
+
       const convertibleUsd = await estimateConvertibleUsd();
       if (stableBalance + convertibleUsd + epsilon < repayTarget) {
         const missing = repayTarget - (stableBalance + convertibleUsd);
@@ -5758,36 +5801,34 @@ export class OrcaBot {
                 debtAmount = 0;
                 stableBalance = await this.getWalletTokenBalance(stable.mint);
               } else {
-                const message = "Net value remaining too small; aguardando nova tentativa.";
-                this.setKaminoState({ ...state, lastError: message });
-                const wait = this.scheduleKaminoRepayRetry(state, message, mode, debtAmount);
-                if (wait) {
-                  return false;
-                }
-                return false;
+                // NetValueRemainingTooSmall no repay da wallet: NÃO agendar retry.
+                // O repayWithCollateral nativo usa isClosingPosition: true, que não
+                // tem restrição de valor mínimo residual.
+                this.queueKaminoLog(
+                  "repay-wallet",
+                  `NetValueRemainingTooSmall no repay da wallet (dívida: ${debtAmount.toFixed(8)}); prosseguindo para repayWithCollateral nativo.`,
+                  "warn"
+                );
+                stableBalance = 0; // forçar fluxo para tryRepayWithCollateral
               }
-            } else if (
-              /\b0x1\b/.test(String((repayWalletErr as any)?.message ?? repayWalletErr)) ||
-              /custom program error: 0x1(?![0-9a-f])/i.test(String((repayWalletErr as any)?.message ?? repayWalletErr)) ||
-              String((repayWalletErr as any)?.message ?? repayWalletErr).toLowerCase().includes("insufficient funds")
-            ) {
-              stableBalance = await this.getWalletTokenBalance(stable.mint);
-              this.queueKaminoLog(
-                "repay-wallet",
-                `Saldo insuficiente para repay (0x1); saldo real: ${stableBalance.toFixed(8)}`,
-                "warn"
-              );
-              // Saldo insuficiente é um estado terminal neste ciclo.
-              // Registrar e retornar false para que o chamador agende um retry
-              // apenas após rebalanceamento de saldo externo.
-              this.setKaminoState({
-                ...state,
-                lastError: `Saldo insuficiente para repay: wallet tem ${stableBalance.toFixed(8)} ${stable.mint}`
-              });
-              return false;
-            } else {
-              throw repayWalletErr;
-            }
+          } else if (
+            /\b0x1\b/.test(String((repayWalletErr as any)?.message ?? repayWalletErr)) ||
+            /custom program error: 0x1(?![0-9a-f])/i.test(String((repayWalletErr as any)?.message ?? repayWalletErr)) ||
+            String((repayWalletErr as any)?.message ?? repayWalletErr).toLowerCase().includes("insufficient funds")
+          ) {
+            stableBalance = await this.getWalletTokenBalance(stable.mint);
+            this.queueKaminoLog(
+              "repay-wallet",
+              `Saldo insuficiente na wallet para repay (0x1); saldo real: ${stableBalance.toFixed(8)}. Prosseguindo para repayWithCollateral nativo.`,
+              "warn"
+            );
+            // NÃO é estado terminal: pode haver colateral depositado para quitar
+            // via repayWithCollateral nativo (flash loan atômico Kamino, 1 tx).
+            // Forçar stableBalance = 0 para acionar tryRepayWithCollateral abaixo.
+            stableBalance = 0;
+          } else {
+            throw repayWalletErr;
+          }
           }
         }
       }
@@ -6128,13 +6169,15 @@ export class OrcaBot {
               debtAmount = 0;
               stableBalance = await this.getWalletTokenBalance(stable.mint);
             } else {
-              const messageNet = "Net value remaining too small; aguardando nova tentativa.";
-              this.setKaminoState({ ...state, lastError: messageNet });
-              const wait = this.scheduleKaminoRepayRetry(state, messageNet, mode, debtAmount);
-              if (wait) {
-                return false;
-              }
-              return false;
+              // NetValueRemainingTooSmall no repay da wallet: NÃO agendar retry.
+              // O repayWithCollateral nativo usa isClosingPosition: true, que não
+              // tem restrição de valor mínimo residual.
+              this.queueKaminoLog(
+                "repay-wallet",
+                `NetValueRemainingTooSmall no repay da wallet (dívida: ${debtAmount.toFixed(8)}); prosseguindo para repayWithCollateral nativo.`,
+                "warn"
+              );
+              stableBalance = 0; // forçar fluxo para tryRepayWithCollateral
             }
           } else if (this.isKaminoRetryableError(err)) {
             const wait = this.scheduleKaminoRepayRetry(state, message, mode, debtAmount);

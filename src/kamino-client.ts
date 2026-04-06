@@ -15,17 +15,21 @@ import {
   signTransactionMessageWithSigners,
   type Address
 } from "@solana/kit";
+import { fetchAllAddressLookupTable } from "@solana-program/address-lookup-table";
 import { AccountRole, type Instruction } from "@solana/instructions";
 import { compressTransactionMessageUsingAddressLookupTables } from "@solana/transaction-messages";
 import { createKeyPairSignerFromBytes, type TransactionSigner } from "@solana/signers";
 import { getMint } from "@solana/spl-token";
+import { KswapSdk } from "@kamino-finance/kswap-sdk";
 import {
   KaminoAction,
   KaminoMarket,
   PROGRAM_ID,
   VanillaObligation,
   calcMaxWithdrawCollateral,
+  getComputeBudgetAndPriorityFeeIxs,
   getRepayWithCollIxs,
+  getUserLutAddressAndSetupIxs,
   type SwapIxsProvider,
   type SwapQuoteProvider,
   type SwapQuote,
@@ -38,6 +42,7 @@ import { getSolanaErrorFromJsonRpcError, SolanaError } from "@solana/errors";
 import { Config } from "./config.js";
 import { logger } from "./logger.js";
 import { loadKeypair, WalletLike } from "./solana.js";
+import { getKswapQuoter, getKswapSwapper } from "./kswap-utils.js";
 
 export type KaminoClientContext = {
   connection: Connection;
@@ -371,6 +376,11 @@ class RealKaminoClient implements KaminoClient {
   private rpcIndex = 0;
   private readRpcIndex = 0;
   private onRateLimit?: (source: string, err?: any) => void;
+  private kswapSdk: KswapSdk | null = null;
+  private userLookupTable: Address | null = null;
+  private readonly KAMINO_CDN_URL = "https://cdn.kamino.finance";
+  private readonly KAMINO_API_URL = "https://api.kamino.finance";
+  private readonly MAIN_MARKET_LUT_ADDRESS = "GprZNyWk67655JhX6Rq9KoebQ6WkQYRhATWzkx2P2LNc";
 
   constructor(options: {
     ctx: KaminoClientContext;
@@ -1219,6 +1229,111 @@ class RealKaminoClient implements KaminoClient {
     }
   }
 
+  // Obtém ou inicializa o KSwap SDK
+  private getKswapSdk(): KswapSdk {
+    if (!this.kswapSdk) {
+      this.kswapSdk = new KswapSdk(
+        `${this.KAMINO_API_URL}/kswap`,
+        this.rpc as any,
+        this.rpcSubscriptions as any
+      );
+    }
+    return this.kswapSdk;
+  }
+
+  // Configura User Lookup Table (necessário para comprimir a transação)
+  private async ensureUserLookupTable(market: KaminoMarket): Promise<Address | null> {
+    if (this.userLookupTable) return this.userLookupTable;
+    try {
+      const [lutAddress, setupIxsBatches] = await getUserLutAddressAndSetupIxs(
+        market,
+        this.signer,
+        none(),
+        false
+      );
+      for (const setupIxBatch of setupIxsBatches) {
+        if (!setupIxBatch || setupIxBatch.length === 0) continue;
+        const { value: bh } = await (this.rpc as any)
+          .getLatestBlockhash({ commitment: "finalized" })
+          .send();
+        const setupMsg = pipe(
+          createTransactionMessage({ version: 0 }),
+          (tx) => appendTransactionMessageInstructions(setupIxBatch, tx),
+          (tx) => setTransactionMessageFeePayerSigner(this.signer, tx),
+          (tx) => setTransactionMessageLifetimeUsingBlockhash(bh, tx)
+        );
+        const signed = await signTransactionMessageWithSigners(setupMsg);
+        await this.sendAndConfirmSafe(signed as any, getSignatureFromTransaction(signed));
+        await sleep(2000); // aguardar propagação entre setup txs
+      }
+      this.userLookupTable = lutAddress;
+      logger.info({ lut: lutAddress }, "User LUT configurada para repay-with-collateral");
+      return lutAddress;
+    } catch (err) {
+      logger.warn({ err }, "falha ao configurar User LUT; continuando sem ela");
+      return null;
+    }
+  }
+
+  // Busca CDN LUTs específicas do par colateral/dívida
+  private async fetchRepayWithCollLuts(
+    collateralMint: string,
+    debtMint: string
+  ): Promise<Address[]> {
+    try {
+      const res = await fetch(`${this.KAMINO_CDN_URL}/resources.json`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      const key = `${collateralMint}-${debtMint}`;
+      const luts: string[] = data?.["mainnet-beta"]?.repayWithCollLUTs?.[key] ?? [];
+      logger.info({ pair: key, lutsFound: luts.length }, "CDN LUTs para repay-with-collateral");
+      return luts.map((l) => address(l));
+    } catch (err) {
+      logger.warn({ err }, "falha ao buscar CDN LUTs para repay-with-collateral");
+      return [];
+    }
+  }
+
+  // Busca LUTs adicionais via API find-minimal para contas não cobertas
+  private async fetchMissingLuts(
+    ixs: Instruction[],
+    coveredAddresses: Set<Address>
+  ): Promise<any[]> {
+    try {
+      const instructionAccounts = new Set<string>();
+      for (const ix of ixs) {
+        if (ix?.accounts) {
+          for (const acc of ix.accounts) {
+            if (acc?.address) instructionAccounts.add(String(acc.address));
+          }
+        }
+      }
+      const missing = Array.from(instructionAccounts).filter(
+        (addr) => !coveredAddresses.has(addr as Address)
+      );
+      if (missing.length === 0) return [];
+
+      const res = await fetch(`${this.KAMINO_API_URL}/luts/find-minimal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ addresses: missing, verify: false })
+      });
+      if (!res.ok) return [];
+      const result = await res.json();
+      const additionalLuts: string[] = result?.lutAddresses ?? [];
+      if (additionalLuts.length === 0) return [];
+
+      logger.info({ count: additionalLuts.length }, "LUTs adicionais encontradas via find-minimal");
+      return await fetchAllAddressLookupTable(
+        this.rpc as any,
+        additionalLuts.map((l) => address(l))
+      );
+    } catch (err) {
+      logger.warn({ err }, "falha ao buscar LUTs adicionais via find-minimal");
+      return [];
+    }
+  }
+
   async repayWithCollateral(input: {
     collateralMint: string;
     debtMint: string;
@@ -1228,189 +1343,283 @@ class RealKaminoClient implements KaminoClient {
     if (!Number.isFinite(input.repayAmount) || input.repayAmount <= 0) {
       throw new Error("Valor de repay invalido");
     }
-    if (!this.ctx.config.jupiterApiKey) {
-      throw new Error("Jupiter API key ausente");
-    }
+
     let market = await this.loadMarket();
     market = await this.ensureMarketHasReserves(market, {
       debtMint: input.debtMint,
       collateralMint: input.collateralMint,
       label: "repay-with-collateral"
     });
-    // Tenta encontrar a obligation com retry para tolerar leitura transitória de RPC.
+
     let obligation = await this.loadObligationWithRetry(market);
     if (!obligation) {
       this.invalidateMarket();
       throw new Error("Posicao Kamino nao encontrada");
     }
+
     const currentSlot = await (this.rpc as any).getSlot({ commitment: "confirmed" }).send();
     const slippageBps = Number.isFinite(input.slippageBps)
       ? Math.max(1, Math.min(10_000, Number(input.slippageBps)))
       : Math.max(1, Math.min(10_000, Number(this.ctx.config.slippageBps ?? 50)));
-    let lastLookupTables: string[] = [];
 
-    const quoter: SwapQuoteProvider<any> = async (swapInputs: SwapInputs) => {
-      const amountLamports = swapInputs.inputAmountLamports?.toFixed?.(0) ?? "0";
-      const quoteResponse = await this.fetchJupiterQuote(
-        String(swapInputs.inputMint),
-        String(swapInputs.outputMint),
-        amountLamports,
-        slippageBps
-      );
-      const inAmount = new Decimal(quoteResponse?.inAmount ?? "0");
-      const outAmount = new Decimal(quoteResponse?.outAmount ?? "0");
-      const priceAInB = inAmount.gt(0) ? outAmount.div(inAmount) : new Decimal(0);
-      const quote: SwapQuote<any> = {
-        priceAInB,
-        quoteResponse
-      };
-      return quote;
-    };
+    // Obter reserves para quoter/swapper do KSwap
+    const collReserve = market.getReserveByMint(address(input.collateralMint));
+    const debtReserve = market.getReserveByMint(address(input.debtMint));
+    if (!collReserve || !debtReserve) {
+      throw new Error("Reserve de colateral ou divida nao encontrada no market");
+    }
 
-    const swapper: SwapIxsProvider<any> = async (_swapInputs, _klendAccounts, quote) => {
-      const quoteResponse = (quote as SwapQuote<any>)?.quoteResponse;
-      if (!quoteResponse) {
-        throw new Error("Quote Jupiter ausente");
-      }
-      const swapIxs = await this.fetchJupiterSwapInstructions(quoteResponse);
-      lastLookupTables = swapIxs.lookupTableAddresses ?? [];
-      return [
-        {
-          preActionIxs: swapIxs.preActionIxs,
-          swapIxs: swapIxs.swapIxs,
-          lookupTables: [],
-          quote
-        }
-      ];
-    };
+    // Inicializar KSwap SDK (metodo oficial Kamino)
+    const kswap = this.getKswapSdk();
+    const quoter = getKswapQuoter(kswap, this.signer.address, slippageBps, collReserve, debtReserve);
+    const swapper = getKswapSwapper(kswap, this.signer.address, slippageBps, collReserve, debtReserve);
 
-    let responses: Awaited<ReturnType<typeof getRepayWithCollIxs>>;
+    // Compute budget conforme documentacao Kamino
+    const computeIxs = getComputeBudgetAndPriorityFeeIxs(1_400_000, new Decimal(500_000));
+
+    // Gerar rotas via getRepayWithCollIxs (flash loan + swap + repay, atomico)
+    let routes: Awaited<ReturnType<typeof getRepayWithCollIxs>>;
     try {
-      responses = await getRepayWithCollIxs({
-        repayAmount: new Decimal(input.repayAmount),
-        isClosingPosition: true,
-        budgetAndPriorityFeeIxs: undefined,
-        collTokenMint: address(input.collateralMint),
-        debtTokenMint: address(input.debtMint),
+      routes = await getRepayWithCollIxs({
         kaminoMarket: market,
+        debtTokenMint: address(input.debtMint),
+        collTokenMint: address(input.collateralMint),
         owner: this.signer,
         obligation,
         referrer: none(),
         currentSlot,
+        repayAmount: new Decimal(input.repayAmount),
+        isClosingPosition: true,
+        budgetAndPriorityFeeIxs: computeIxs,
         scopeRefreshIx: [],
         useV2Ixs: true,
         quoter,
         swapper,
         logger: (msg: string, ...extra: any[]) => {
-          logger.info({ msg, extra }, "kamino repay-with-collateral");
+          logger.info({ msg, extra }, "kamino repay-with-collateral kswap");
         }
       });
     } catch (err) {
-      const msg = String((err as any)?.message ?? err);
-      // Se o erro é "reserveAddress" ou "reserve nao encontrada", o market
-      // está com cache desatualizado (ex: após troca de token de dívida).
-      // Invalida o cache e tenta novamente com um market recarregado.
-      if (this.isReserveMissingError(err) || msg.includes("reserveAddress") || msg.includes("reserve") || msg.includes("Reserve")) {
-        logger.warn({ err }, "repayWithCollateral falhou por reserve ausente; recarregando market e tentando novamente");
+      if (this.isReserveMissingError(err)) {
+        logger.warn({ err }, "repayWithCollateral: reserve ausente; recarregando market e tentando novamente");
         this.invalidateMarket(true);
-        let freshMarket = await this.loadMarket();
-        freshMarket = await this.ensureMarketHasReserves(freshMarket, {
+        market = await this.loadMarket();
+        market = await this.ensureMarketHasReserves(market, {
           debtMint: input.debtMint,
           collateralMint: input.collateralMint,
-          label: "repay-with-collateral"
+          label: "repay-with-collateral-retry"
         });
-        const freshObligation = await this.loadObligationWithRetry(freshMarket);
-        if (!freshObligation) {
-          this.invalidateMarket();
-          throw new Error("Posicao Kamino nao encontrada");
-        }
-        try {
-          responses = await getRepayWithCollIxs({
-            repayAmount: new Decimal(input.repayAmount),
-            isClosingPosition: true,
-            budgetAndPriorityFeeIxs: undefined,
-            collTokenMint: address(input.collateralMint),
-            debtTokenMint: address(input.debtMint),
-            kaminoMarket: freshMarket,
-            owner: this.signer,
-            obligation: freshObligation,
-            referrer: none(),
-            currentSlot,
-            scopeRefreshIx: [],
-            useV2Ixs: true,
-            quoter,
-            swapper,
-            logger: (msg: string, ...extra: any[]) => {
-              logger.info({ msg, extra }, "kamino repay-with-collateral");
-            }
-          });
-        } catch (retryErr) {
-          if (this.isReserveMissingError(retryErr)) {
-            throw this.createReserveMissingError(
-              `Reserva nao encontrada no market (repay-with-collateral): ${input.collateralMint}, ${input.debtMint}`
-            );
+        const freshObligation = await this.loadObligationWithRetry(market);
+        if (!freshObligation) throw new Error("Posicao Kamino nao encontrada apos reload de market");
+        routes = await getRepayWithCollIxs({
+          kaminoMarket: market,
+          debtTokenMint: address(input.debtMint),
+          collTokenMint: address(input.collateralMint),
+          owner: this.signer,
+          obligation: freshObligation,
+          referrer: none(),
+          currentSlot,
+          repayAmount: new Decimal(input.repayAmount),
+          isClosingPosition: true,
+          budgetAndPriorityFeeIxs: computeIxs,
+          scopeRefreshIx: [],
+          useV2Ixs: true,
+          quoter,
+          swapper,
+          logger: (msg: string, ...extra: any[]) => {
+            logger.info({ msg, extra }, "kamino repay-with-collateral kswap retry");
           }
-          throw retryErr;
-        }
+        });
       } else {
         throw err;
       }
     }
 
-    if (!responses.length) {
-      throw new Error("Nenhuma instrucao para repay-with-collateral");
+    if (!routes || routes.length === 0) {
+      throw new Error("getRepayWithCollIxs retornou 0 rotas");
     }
-    if (!responses[0].ixs || responses[0].ixs.length === 0) {
-      throw new Error(
-        "repay-with-collateral gerou 0 instrucoes - obligation em estado invalido ou divida ja zerada"
-      );
+
+    // Preparar Lookup Tables (conforme documentacao Kamino)
+    // 1. User LUT (especifico desta wallet)
+    const userLut = await this.ensureUserLookupTable(market);
+    // 2. CDN LUTs especificas do par colateral/divida
+    const pairLutKeys = await this.fetchRepayWithCollLuts(input.collateralMint, input.debtMint);
+    // 3. Main Market LUT
+    const mainMarketLutKey = address(this.MAIN_MARKET_LUT_ADDRESS);
+
+    const klendLutKeys: Address[] = [];
+    if (userLut) klendLutKeys.push(userLut);
+    klendLutKeys.push(...pairLutKeys);
+    klendLutKeys.push(mainMarketLutKey);
+
+    const klendLutAccounts = klendLutKeys.length > 0
+      ? await fetchAllAddressLookupTable(this.rpc as any, klendLutKeys).catch(() => [])
+      : [];
+
+    // Selecionar melhor rota por tamanho de transacao
+    // Conforme doc. Kamino: priorizar menor tx size (nao melhor preco)
+    // para garantir que a tx caiba no limite de 1232 bytes.
+    const bestRouteData = routes.reduce((best, current) => {
+      const sizeOf = (r: typeof routes[0]) =>
+        (r.ixs ?? []).reduce((t: number, ix: Instruction) => {
+          if (!ix?.data || !ix?.accounts) return t;
+          return t + ix.accounts.length * 32 + ix.data.byteLength + 1;
+        }, 0);
+      return sizeOf(best) <= sizeOf(current) ? best : current;
+    });
+
+    const routeIxs: Instruction[] = bestRouteData.ixs ?? [];
+    if (routeIxs.length === 0) {
+      throw new Error("Rota KSwap selecionada tem 0 instrucoes");
     }
-    logger.info(
-      {
-        ixCount: responses[0].ixs.length,
-        collateral: input.collateralMint,
-        debt: input.debtMint,
-        repayAmount: input.repayAmount
-      },
-      "repay-with-collateral instrucoes prontas"
-    );
-    let signature: string;
-    try {
-      signature = await this.sendInstructions(responses[0].ixs, lastLookupTables);
-    } catch (err) {
-      const decoded = decodeRpcError(err);
-      const protocolError = parseKaminoProtocolError(err);
-      const attempt = (err as any)?.__attempt;
-      logger.error(
-        {
-          err: decoded,
-          label: "repayWithCollateral",
-          collateral: input.collateralMint,
-          debt: input.debtMint,
-          repayAmount: input.repayAmount,
-          attempt,
-          errorCode: decoded.code,
-          errorName: decoded.name,
-          logs: decoded.logs,
-          protocolError
-        },
-        "kamino repay-with-collateral falhou"
-      );
-      throw err;
+
+    // Combinar lookup tables da rota com LUTs Klend
+    const routeLuts: any[] = bestRouteData.lookupTables ?? [];
+    let allLutAccounts = [...routeLuts, ...klendLutAccounts];
+
+    // Buscar LUTs adicionais para contas nao cobertas
+    const coveredAddresses = new Set<Address>();
+    for (const lut of allLutAccounts) {
+      const addresses: Address[] = lut?.data?.addresses ?? lut?.addresses ?? [];
+      addresses.forEach((a: Address) => coveredAddresses.add(a));
     }
-    // Invalida o cache do market para refletir o novo estado da obligation.
-    this.invalidateMarket(true);
-    this.invalidatePositionCache();
-    logger.info(
-      {
-        sig: signature,
-        collateral: input.collateralMint,
-        debt: input.debtMint,
-        amount: input.repayAmount
-      },
-      "kamino repay-with-collateral concluido"
-    );
-    return signature;
+    const missingLuts = await this.fetchMissingLuts(routeIxs, coveredAddresses);
+    allLutAccounts = [...allLutAccounts, ...missingLuts];
+
+    // Construir mapa LUT para compressao da transacao
+    const lutsByAddress: Record<string, Address[]> = {};
+    for (const lut of allLutAccounts) {
+      const lutAddr = lut?.address ?? lut?.pubkey;
+      const lutAddresses: Address[] = lut?.data?.addresses ?? lut?.addresses ?? [];
+      if (lutAddr && lutAddresses.length > 0) {
+        lutsByAddress[String(lutAddr)] = lutAddresses;
+      }
+    }
+
+    // Enviar transacao com retry de blockhash
+    let attempt = 0;
+    let lastErr: any;
+    let lastSignature: string | null = null;
+
+    while (attempt < 3) {
+      attempt++;
+      try {
+        if (attempt > 1) await sleep(2000);
+
+        // Usar 'finalized' para blockhash conforme documentacao Kamino
+        const { value: latestBlockhash } = await (this.rpc as any)
+          .getLatestBlockhash({ commitment: "finalized" })
+          .send();
+
+        let txMessage = pipe(
+          createTransactionMessage({ version: 0 }),
+          (tx) => appendTransactionMessageInstructions(routeIxs, tx),
+          (tx) => setTransactionMessageFeePayerSigner(this.signer, tx),
+          (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx)
+        );
+
+        // Comprimir transacao com lookup tables
+        if (Object.keys(lutsByAddress).length > 0) {
+          try {
+            txMessage = compressTransactionMessageUsingAddressLookupTables(
+              txMessage,
+              lutsByAddress as any
+            );
+          } catch (compressErr) {
+            logger.warn({ compressErr }, "falha ao comprimir tx com LUTs; enviando sem compressao");
+          }
+        }
+
+        const signed = await signTransactionMessageWithSigners(txMessage);
+        const signature = getSignatureFromTransaction(signed);
+        lastSignature = signature;
+
+        // Enviar com 'processed' conforme documentacao Kamino (evita falsos timeouts)
+        await this.sendAndConfirmSafe(
+          signed as any,
+          signature,
+          {
+            commitment: "processed",
+            skipPreflight: false
+          },
+          {
+            blockhash: (latestBlockhash as any)?.blockhash ?? latestBlockhash,
+            slot: currentSlot
+          }
+        );
+
+        this.invalidateMarket(true);
+        this.invalidatePositionCache();
+        logger.info(
+          {
+            sig: signature,
+            collateral: input.collateralMint,
+            debt: input.debtMint,
+            amount: input.repayAmount
+          },
+          "kamino repay-with-collateral kswap concluido"
+        );
+        return signature;
+      } catch (err) {
+        lastErr = err;
+        const decoded = decodeRpcError(err);
+        const isBlockhash = isBlockhashError(err);
+
+        logger.error(
+          {
+            err: decoded,
+            label: "repayWithCollateral-kswap",
+            attempt,
+            isRateLimit: isRateLimitError(err),
+            isInsufficientFunds: isInsufficientFundsError(err),
+            isBlockhash
+          },
+          "kamino repay-with-collateral kswap falhou"
+        );
+
+        if (isObligationBorrowsEmptyError(err)) {
+          const clean = new Error("ObligationBorrowsEmpty: divida ja quitada on-chain");
+          (clean as any).__obligationBorrowsEmpty = true;
+          (clean as any).__originalErr = err;
+          throw clean;
+        }
+        if (isInsufficientFundsError(err)) throw err;
+        if (isRateLimitError(err)) {
+          this.onRateLimit?.("kamino-repayWithCollateral", err);
+          throw err;
+        }
+
+        // Se a tx foi enviada, tentar confirmar antes de retentar
+        if (isBlockhash && lastSignature) {
+          try {
+            await this.confirmSignatureWithRetry(lastSignature, 20_000, 1_000);
+            logger.info({ sig: lastSignature }, "repayWithCollateral confirmado apos erro blockhash");
+            this.invalidateMarket(true);
+            this.invalidatePositionCache();
+            return lastSignature;
+          } catch {
+            logger.warn({ sig: lastSignature }, "blockhash: confirmacao falhou, retentando com blockhash novo");
+          }
+        }
+
+        if (isBlockhash && attempt < 3) {
+          logger.warn({ attempt }, "repayWithCollateral blockhash expirado; retentando");
+          continue;
+        }
+
+        // Propagar para que o chamador decida sobre retry
+        if (isBlockhash) {
+          const retryable = new Error("blockhash not found/expired (-32002) - retryable");
+          (retryable as any).__code = -32002;
+          (retryable as any).__retryable = true;
+          (retryable as any).__originalErr = lastErr;
+          throw retryable;
+        }
+
+        throw err;
+      }
+    }
+    throw lastErr ?? new Error("repayWithCollateral: todas as tentativas falharam");
   }
 
   async getWithdrawCapacity(input: {
