@@ -7,7 +7,7 @@ import { logger } from "./logger.js";
 import { HistoryStore, type KaminoLoanEntry } from "./storage.js";
 import { HedgeManager, HedgeCloseResult, HedgeState } from "./hedge.js";
 
-const MIN_ENTRY_BUDGET_FACTOR = 0.25;
+const MIN_ENTRY_BUDGET_FACTOR = 0;
 const MAX_USD_SANITY = 1_000_000_000;
 
 function isEntryUsdSane(
@@ -1145,6 +1145,14 @@ export class BotRunner {
         const actionType = resolveActionType("resume-position");
         const trendForMint = this.resolveTrendForMint(mergedPositionMint, trendNow);
         const hedgeDecision = decisionForMint(mergedPositionMint);
+        const entryFallback = resolveEntryFallback(
+          mergedPositionEntryUsd,
+          mergedPositionMint,
+          mergedPositionEntrySource
+        );
+        if (entryFallback != null) {
+          mergedPositionEntryUsd = entryFallback;
+        }
         if (mergedPositionMint && trendNow && !this.trendByMint.has(mergedPositionMint)) {
           this.trendByMint.set(mergedPositionMint, trendNow);
         }
@@ -1172,8 +1180,8 @@ export class BotRunner {
       closeTokenA: null,
       closeTokenB: null,
       positionEntrySource: mergedPositionEntrySource,
-      positionEntryUsd: mergedPositionEntryUsd,
-      positionFeesUsd: mergedPositionFeesUsd,
+          positionEntryUsd: mergedPositionEntryUsd,
+          positionFeesUsd: mergedPositionFeesUsd,
       positionPnlUsd: mergedPositionPnlUsd,
           positionExitUsd: null,
           txFeeLamports,
@@ -1393,6 +1401,16 @@ export class BotRunner {
     const kaminoCycleOpenedAt = isKaminoClose
       ? (mergedPositionMint ? this.openedAtByMint.get(mergedPositionMint) ?? null : null)
       : null;
+    if (action === "skip-low-sol-position") {
+      const entryFallback = resolveEntryFallback(
+        mergedPositionEntryUsd,
+        mergedPositionMint,
+        mergedPositionEntrySource
+      );
+      if (entryFallback != null) {
+        mergedPositionEntryUsd = entryFallback;
+      }
+    }
     const event: HistoryEvent = {
       id: this.createEventId(timestamp),
       timestamp,

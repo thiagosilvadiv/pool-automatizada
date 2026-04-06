@@ -33,7 +33,7 @@ import { BalanceCoordinator } from "./balance-coordinator.js";
 const whirlpools = whirlpoolsSdk as any;
 const common = commonSdk as any;
 const Decimal: any = DecimalJs;
-const MIN_ENTRY_BUDGET_FACTOR = 0.25;
+const MIN_ENTRY_BUDGET_FACTOR = 0;
 const MAX_USD_SANITY = 1_000_000_000;
 const DEFAULT_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const KAMINO_REPAY_CHUNK_FACTOR = 0.5;
@@ -7342,12 +7342,19 @@ export class OrcaBot {
         ? baseTokens.filter((token) => this.isSwapAllowed(token.mint))
         : baseTokens;
 
-      const candidates = allowlisted.filter((token) => {
+      let candidates = allowlisted.filter((token) => {
         if (this.config.autoSolAllowAll) {
           return true;
         }
         return whitelist.has(token.mint);
-      }).sort((a, b) => {
+      });
+
+      if (!candidates.length && !this.config.autoSolAllowAll && whitelist.size === 0 && allowlisted.length > 0) {
+        logger.warn({ reason: "whitelist-empty", fallback: "allow-all" }, "sol topup: whitelist vazia; usando todos os tokens elegiveis");
+        candidates = allowlisted.slice();
+      }
+
+      candidates = candidates.sort((a, b) => {
         if (a.rawAmountBigint === b.rawAmountBigint) return 0;
         return a.rawAmountBigint > b.rawAmountBigint ? -1 : 1;
       });
