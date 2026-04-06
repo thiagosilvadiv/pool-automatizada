@@ -3,8 +3,6 @@ const runningEl = document.getElementById("running");
 const lastTickEl = document.getElementById("lastTick");
 const lastActionEl = document.getElementById("lastAction");
 const lastErrorEl = document.getElementById("lastError");
-const effectiveExitTokenEl = document.getElementById("effectiveExitToken");
-const effectiveExitDirectionEl = document.getElementById("effectiveExitDirection");
 const effectiveExitSideEl = document.getElementById("effectiveExitSide");
 const priceEl = document.getElementById("price");
 const priceTopEl = document.getElementById("priceTop");
@@ -59,8 +57,7 @@ const poolNameLabelTop = document.getElementById("poolNameLabelTop");
 const poolNameInput = document.getElementById("poolName");
 const poolAddressInput = document.getElementById("poolAddress");
 const poolRangeInput = document.getElementById("poolRange");
-const poolExitTokenInput = document.getElementById("poolExitToken");
-const poolExitDirectionInput = document.getElementById("poolExitDirection");
+const poolRangeAnchorInput = document.getElementById("poolRangeAnchor");
 const poolExitBiasInput = document.getElementById("poolExitBias");
 const poolBudgetInput = document.getElementById("poolBudget");
 const poolAutoAddEnabledInput = document.getElementById("poolAutoAddEnabled");
@@ -83,8 +80,7 @@ const editPoolModal = document.getElementById("editPoolModal");
 const editPoolForm = document.getElementById("editPoolForm");
 const editPoolIdInput = document.getElementById("editPoolId");
 const editPoolRangeInput = document.getElementById("editPoolRange");
-const editPoolExitTokenInput = document.getElementById("editPoolExitToken");
-const editPoolExitDirectionInput = document.getElementById("editPoolExitDirection");
+const editPoolRangeAnchorInput = document.getElementById("editPoolRangeAnchor");
 const editPoolExitBiasInput = document.getElementById("editPoolExitBias");
 const editPoolBudgetInput = document.getElementById("editPoolBudget");
 const editPoolAutoAddEnabledInput = document.getElementById("editPoolAutoAddEnabled");
@@ -675,6 +671,39 @@ function parseExitDirectionInput(value) {
   return null;
 }
 
+function parseRangeAnchorInput(value) {
+  if (value == null) return undefined;
+  const trimmed = String(value).trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "lower") return "lower";
+  if (trimmed === "middle") return "middle";
+  if (trimmed === "upper") return "upper";
+  return null;
+}
+
+function formatRangeAnchor(value) {
+  if (value === "lower") return "Mais perto do limite inferior";
+  if (value === "middle") return "No meio";
+  if (value === "upper") return "Mais perto do limite superior";
+  return "-";
+}
+
+function formatRangeAnchorPlaceholder(value) {
+  const label = formatRangeAnchor(value);
+  return label === "-" ? "Sem âncora" : label;
+}
+
+function formatAnchorFromExitSide(exitSide, info) {
+  if (exitSide !== "lower" && exitSide !== "upper") {
+    return formatRangeAnchor("middle");
+  }
+  let anchor = exitSide;
+  if (isVisualPriceAxisInverted(info)) {
+    anchor = anchor === "lower" ? "upper" : "lower";
+  }
+  return formatRangeAnchor(anchor);
+}
+
 function parseBooleanInput(value) {
   if (value == null) return undefined;
   const trimmed = String(value).trim().toLowerCase();
@@ -917,9 +946,8 @@ function openEditPoolModal(pool) {
   const overrides = pool.overrides ?? {};
   const defaultRange = cachedConfig?.rangeWidthPct ?? "-";
   const defaultBudget = cachedConfig?.budgetUsd ?? "-";
-  const defaultExitToken = cachedConfig?.preferredExitToken ?? null;
-  const defaultExitDirection = cachedConfig?.preferredExitDirection ?? "down";
   const defaultExitBias = cachedConfig?.rangeExitBiasPct ?? "-";
+  const defaultRangeAnchor = cachedConfig?.rangeAnchor ?? null;
   const defaultAutoAddEnabled = cachedConfig?.autoAddLiquidityEnabled ?? false;
   const defaultKaminoEnabled = cachedConfig?.kaminoRebalanceEnabled ?? false;
   const defaultKaminoDepositPct = cachedConfig?.kaminoDepositPct ?? "-";
@@ -1001,15 +1029,10 @@ function openEditPoolModal(pool) {
       : String(overrides.kaminoAutoCloseOnTokenChange);
     setSelectPlaceholder(editPoolKaminoAutoCloseInput, `Padrao (${defaultKaminoAutoClose ? "Sim" : "Nao"})`);
   }
-  if (editPoolExitTokenInput) {
-    updateExitTokenSelectHints(editPoolExitTokenInput, tokenInfo);
-    editPoolExitTokenInput.value = overrides.preferredExitToken ?? "";
-    const exitLabel = formatExitToken(defaultExitToken, tokenInfo);
-    setSelectPlaceholder(editPoolExitTokenInput, `Padrao (${exitLabel === "-" ? "Sem" : exitLabel})`);
-  }
-  if (editPoolExitDirectionInput) {
-    editPoolExitDirectionInput.value = overrides.preferredExitDirection ?? "";
-    setSelectPlaceholder(editPoolExitDirectionInput, `Padrao (${formatExitDirection(defaultExitDirection)})`);
+  if (editPoolRangeAnchorInput) {
+    editPoolRangeAnchorInput.value = overrides.rangeAnchor ?? "";
+    const anchorLabel = formatRangeAnchorPlaceholder(defaultRangeAnchor);
+    setSelectPlaceholder(editPoolRangeAnchorInput, `Padrao (${anchorLabel})`);
   }
   if (editPoolExitBiasInput) {
     editPoolExitBiasInput.value = overrides.rangeExitBiasPct ?? "";
@@ -1278,7 +1301,7 @@ function renderPools(data, config) {
   cachedPools = pools;
   cachedConfig = config;
   if (!pools.length) {
-    poolsBody.innerHTML = "<tr><td colspan=\"13\">Sem pools cadastradas</td></tr>";
+    poolsBody.innerHTML = "<tr><td colspan=\"12\">Sem pools cadastradas</td></tr>";
     return;
   }
   const rows = pools.map((pool) => {
@@ -1290,23 +1313,18 @@ function renderPools(data, config) {
       : "<button class=\"primary\" data-action=\"start\" data-id=\"" + pool.id + "\">Iniciar</button>";
     const rangeDisplay = pool.overrides?.rangeWidthPct ?? null;
     const budgetDisplay = pool.overrides?.budgetUsd ?? null;
-    const exitTokenDisplay = pool.overrides?.preferredExitToken ?? null;
-    const exitDirectionDisplay = pool.overrides?.preferredExitDirection ?? null;
+    const rangeAnchorDisplay = pool.overrides?.rangeAnchor ?? null;
     const exitBiasDisplay = pool.overrides?.rangeExitBiasPct ?? null;
     const defaultRange = config?.rangeWidthPct ?? "-";
     const defaultBudget = config?.budgetUsd ?? "-";
-    const defaultExitToken = config?.preferredExitToken ?? null;
-    const defaultExitDirection = config?.preferredExitDirection ?? "down";
+    const defaultRangeAnchor = config?.rangeAnchor ?? null;
     const defaultExitBias = config?.rangeExitBiasPct ?? "-";
-    const poolTokenInfo = getTokenInfo(pool);
     const rangeLabel = rangeDisplay == null ? `Padrao (${defaultRange})` : Number(rangeDisplay).toFixed(2);
     const budgetLabel = budgetDisplay == null ? `Padrao (${defaultBudget})` : Number(budgetDisplay).toFixed(2);
-    const exitTokenLabel = exitTokenDisplay == null
-      ? `Padrao (${formatExitToken(defaultExitToken, poolTokenInfo)})`
-      : formatExitToken(exitTokenDisplay, poolTokenInfo);
-    const exitDirectionLabel = exitDirectionDisplay == null
-      ? `Padrao (${formatExitDirection(defaultExitDirection)})`
-      : formatExitDirection(exitDirectionDisplay);
+    const anchorDefaultLabel = formatRangeAnchorPlaceholder(defaultRangeAnchor);
+    const rangeAnchorLabel = rangeAnchorDisplay == null
+      ? `Padrao (${anchorDefaultLabel})`
+      : formatRangeAnchor(rangeAnchorDisplay);
     const exitBiasLabel = exitBiasDisplay == null
       ? `Padrao (${formatNumber(defaultExitBias, 2)})`
       : formatNumber(exitBiasDisplay, 2);
@@ -1317,8 +1335,7 @@ function renderPools(data, config) {
         <td>${createdAt}</td>
         <td>${pool.whirlpoolAddress}</td>
         <td>${rangeLabel}</td>
-        <td>${exitTokenLabel}</td>
-        <td>${exitDirectionLabel}</td>
+        <td>${rangeAnchorLabel}</td>
         <td>${exitBiasLabel}</td>
         <td>${budgetLabel}</td>
         <td>${statusLabel}</td>
@@ -1472,18 +1489,12 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
   statusBadge.classList.toggle("running", status.running);
   statusBadge.classList.toggle("stopped", !status.running);
 
-  if (effectiveExitTokenEl) {
-    effectiveExitTokenEl.textContent = formatExitToken(status.effectiveExitToken, tokenInfo);
-  }
-  if (effectiveExitDirectionEl) {
-    effectiveExitDirectionEl.textContent = formatExitDirection(status.effectiveExitDirection ?? config.preferredExitDirection ?? "down");
-  }
   if (effectiveExitSideEl) {
-    effectiveExitSideEl.textContent = formatExitSide(status.effectiveExitSide, tokenInfo);
+    effectiveExitSideEl.textContent = formatAnchorFromExitSide(status.effectiveExitSide, tokenInfo);
   }
-  updateExitTokenSelectHints(poolExitTokenInput, tokenInfo);
-  if (poolExitDirectionInput) {
-    setSelectPlaceholder(poolExitDirectionInput, `Padrao (${formatExitDirection(config.preferredExitDirection ?? "down")})`);
+  if (poolRangeAnchorInput) {
+    const anchorLabel = formatRangeAnchorPlaceholder(config.rangeAnchor ?? null);
+    setSelectPlaceholder(poolRangeAnchorInput, `Padrao (${anchorLabel})`);
   }
   if (poolAutoAddEnabledInput) {
     setSelectPlaceholder(poolAutoAddEnabledInput, `Padrao (${config.autoAddLiquidityEnabled ? "Sim" : "Nao"})`);
@@ -1771,8 +1782,7 @@ addPoolBtn.addEventListener("click", async () => {
   const address = poolAddressInput.value.trim();
   const rangeWidthPct = parseOptionalNumber(poolRangeInput.value);
   const rangeExitBiasPct = parseOptionalNumber(poolExitBiasInput?.value);
-  const preferredExitToken = poolExitTokenInput?.value?.trim();
-  const preferredExitDirection = poolExitDirectionInput?.value?.trim();
+  const rangeAnchorRaw = poolRangeAnchorInput?.value?.trim();
   const budgetUsd = parseOptionalNumber(poolBudgetInput.value);
   const autoAddRaw = poolAutoAddEnabledInput?.value ?? "";
   const kaminoEnabledRaw = poolKaminoEnabledInput?.value ?? "";
@@ -1796,15 +1806,12 @@ addPoolBtn.addEventListener("click", async () => {
     if (rangeExitBiasPct !== undefined) {
       overrides.rangeExitBiasPct = rangeExitBiasPct;
     }
-    if (preferredExitToken) {
-      overrides.preferredExitToken = preferredExitToken;
-    }
-    if (preferredExitDirection) {
-      const parsed = parseExitDirectionInput(preferredExitDirection);
+    if (rangeAnchorRaw) {
+      const parsed = parseRangeAnchorInput(rangeAnchorRaw);
       if (!parsed) {
-        throw new Error("Direcao da saida preferida invalida. Use Alta ou Baixa.");
+        throw new Error("Âncora do range inválida. Use inferior, meio ou superior.");
       }
-      overrides.preferredExitDirection = parsed;
+      overrides.rangeAnchor = parsed;
     }
     if (budgetUsd !== undefined) {
       overrides.budgetUsd = budgetUsd;
@@ -1896,8 +1903,7 @@ addPoolBtn.addEventListener("click", async () => {
     poolNameInput.value = "";
     poolAddressInput.value = "";
     poolRangeInput.value = "";
-    if (poolExitTokenInput) poolExitTokenInput.value = "";
-    if (poolExitDirectionInput) poolExitDirectionInput.value = "";
+    if (poolRangeAnchorInput) poolRangeAnchorInput.value = "";
     if (poolExitBiasInput) poolExitBiasInput.value = "";
     poolBudgetInput.value = "";
     if (poolAutoAddEnabledInput) poolAutoAddEnabledInput.value = "";
@@ -2150,34 +2156,19 @@ if (editPoolForm) {
       overrides.kaminoAutoCloseOnTokenChange = parsed;
     }
 
-    const exitTokenRaw = editPoolExitTokenInput?.value?.trim() ?? "";
-    if (!exitTokenRaw) {
-      overrides.preferredExitToken = null;
+    const rangeAnchorRaw = editPoolRangeAnchorInput?.value?.trim() ?? "";
+    if (!rangeAnchorRaw) {
+      overrides.rangeAnchor = null;
     } else {
-      const parsed = parseExitTokenInput(exitTokenRaw);
+      const parsed = parseRangeAnchorInput(rangeAnchorRaw);
       if (!parsed) {
         if (editPoolError) {
-          editPoolError.textContent = "Saida preferida invalida. Use tokenA ou tokenB.";
+          editPoolError.textContent = "Âncora do range inválida. Use inferior, meio ou superior.";
           editPoolError.classList.remove("hidden");
         }
         return;
       }
-      overrides.preferredExitToken = parsed;
-    }
-
-    const exitDirectionRaw = editPoolExitDirectionInput?.value?.trim() ?? "";
-    if (!exitDirectionRaw) {
-      overrides.preferredExitDirection = null;
-    } else {
-      const parsed = parseExitDirectionInput(exitDirectionRaw);
-      if (!parsed) {
-        if (editPoolError) {
-          editPoolError.textContent = "Direcao da saida preferida invalida. Use Alta ou Baixa.";
-          editPoolError.classList.remove("hidden");
-        }
-        return;
-      }
-      overrides.preferredExitDirection = parsed;
+      overrides.rangeAnchor = parsed;
     }
 
     const exitBiasRaw = editPoolExitBiasInput?.value?.trim() ?? "";

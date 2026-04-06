@@ -11,6 +11,7 @@ export type Config = {
   whirlpoolAddress: string;
   rangeWidthPct: number;
   rangeExitBiasPct: number;
+  rangeAnchor: "lower" | "middle" | "upper" | null;
   preferredExitToken: "tokenA" | "tokenB" | null;
   preferredExitDirection: "down" | "up";
   slippageBps: number;
@@ -206,6 +207,17 @@ function parseExitDirection(value: unknown): "down" | "up" | undefined {
   return undefined;
 }
 
+function parseRangeAnchor(value: unknown): "lower" | "middle" | "upper" | null | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return undefined;
+  if (trimmed === "lower" || trimmed === "low" || trimmed === "inferior") return "lower";
+  if (trimmed === "middle" || trimmed === "mid" || trimmed === "center" || trimmed === "meio") return "middle";
+  if (trimmed === "upper" || trimmed === "high" || trimmed === "superior") return "upper";
+  return undefined;
+}
+
 function parseHedgeEntryMode(value: unknown): HedgeEntryMode | undefined {
   if (value == null) return undefined;
   if (typeof value !== "string") return undefined;
@@ -341,6 +353,16 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const dataExitDirection = parseExitDirection(dataExitDirectionRaw);
   if (dataExitDirectionRaw != null && dataExitDirection === undefined) {
     throw new Error("preferredExitDirection must be down or up");
+  }
+  const envRangeAnchorRaw = process.env.RANGE_ANCHOR ?? "";
+  const envRangeAnchor = parseRangeAnchor(envRangeAnchorRaw);
+  if (envRangeAnchorRaw && envRangeAnchor === undefined) {
+    throw new Error("RANGE_ANCHOR must be lower, middle, or upper");
+  }
+  const dataRangeAnchorRaw = (data as any).rangeAnchor;
+  const dataRangeAnchor = parseRangeAnchor(dataRangeAnchorRaw);
+  if (dataRangeAnchorRaw != null && dataRangeAnchor === undefined) {
+    throw new Error("rangeAnchor must be lower, middle, or upper");
   }
 
   const envKaminoBorrowAssetRaw = process.env.KAMINO_BORROW_ASSET ?? "";
@@ -520,6 +542,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     rangeExitBiasPct: parseEnvNumber(process.env.RANGE_EXIT_BIAS_PCT)
       ?? (data.rangeExitBiasPct == null ? undefined : Number(data.rangeExitBiasPct))
       ?? 0,
+    rangeAnchor: envRangeAnchor ?? dataRangeAnchor ?? null,
     preferredExitToken: envExitToken
       ?? dataExitToken
       ?? null,
@@ -692,6 +715,14 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     || config.rangeExitBiasPct < 0
     || config.rangeExitBiasPct >= 100) {
     throw new Error("rangeExitBiasPct must be between 0 and 99.9");
+  }
+  if (
+    config.rangeAnchor != null
+    && config.rangeAnchor !== "lower"
+    && config.rangeAnchor !== "middle"
+    && config.rangeAnchor !== "upper"
+  ) {
+    throw new Error("rangeAnchor must be lower, middle, upper, or null");
   }
   if (config.preferredExitToken != null
     && config.preferredExitToken !== "tokenA"

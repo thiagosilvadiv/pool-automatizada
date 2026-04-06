@@ -35,19 +35,12 @@
             <input id="poolRange" type="number" min="0" step="0.01" placeholder="Padrão" />
           </div>
           <div class="field">
-            <label for="poolExitToken">Saída preferida</label>
-            <select id="poolExitToken">
+            <label for="poolRangeAnchor">Âncora do range</label>
+            <select id="poolRangeAnchor">
               <option value="">Padrão</option>
-              <option value="tokenA">Token A</option>
-              <option value="tokenB">Token B</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="poolExitDirection">Direção da saída preferida</label>
-            <select id="poolExitDirection">
-              <option value="">Padrão</option>
-              <option value="down">Baixa (padrão atual)</option>
-              <option value="up">Alta (novo)</option>
+              <option value="lower">Mais perto do limite inferior</option>
+              <option value="middle">No meio</option>
+              <option value="upper">Mais perto do limite superior</option>
             </select>
           </div>
           <div class="field">
@@ -165,8 +158,7 @@
                 <th>Criada em</th>
                 <th>Whirlpool</th>
                 <th>Range %</th>
-                <th>Saída pref.</th>
-                <th>Direção</th>
+                <th>Âncora</th>
                 <th>Bias %</th>
                 <th>Budget USD</th>
                 <th>Status</th>
@@ -251,9 +243,7 @@
                 <div class="kv"><span>Preço atual</span><span id="price">-</span></div>
                 <div class="kv"><span>Faixa alvo</span><span id="targetRange">-</span></div>
                 <div class="kv"><span>Faixa posição</span><span id="positionRange">-</span></div>
-                <div class="kv"><span>Saída efetiva (token)</span><span id="effectiveExitToken">-</span></div>
-                <div class="kv"><span>Saída efetiva (direcao)</span><span id="effectiveExitDirection">-</span></div>
-                <div class="kv"><span>Saída efetiva (lado)</span><span id="effectiveExitSide">-</span></div>
+                <div class="kv"><span>Âncora efetiva</span><span id="effectiveExitSide">-</span></div>
               </div>
             </div>
             <div class="card compact monitor-card log-card">
@@ -457,19 +447,12 @@
             <input id="editPoolRange" type="number" min="0" step="0.01" placeholder="Padrão" />
           </div>
           <div class="field">
-            <label for="editPoolExitToken">Saída preferida</label>
-            <select id="editPoolExitToken">
+            <label for="editPoolRangeAnchor">Âncora do range</label>
+            <select id="editPoolRangeAnchor">
               <option value="">Padrão</option>
-              <option value="tokenA">Token A</option>
-              <option value="tokenB">Token B</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="editPoolExitDirection">Direção da saída preferida</label>
-            <select id="editPoolExitDirection">
-              <option value="">Padrão</option>
-              <option value="down">Baixa (padrão atual)</option>
-              <option value="up">Alta (novo)</option>
+              <option value="lower">Mais perto do limite inferior</option>
+              <option value="middle">No meio</option>
+              <option value="upper">Mais perto do limite superior</option>
             </select>
           </div>
           <div class="field">

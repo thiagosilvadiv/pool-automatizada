@@ -851,6 +851,19 @@ export class OrcaBot {
     return manual;
   }
 
+  private resolveRangeAnchorExitSide(
+    anchor: "lower" | "middle" | "upper" | null
+  ): "lower" | "upper" | null {
+    if (!anchor || anchor === "middle") {
+      return null;
+    }
+    const invert = this.shouldInvertUserPriceAxis();
+    if (anchor === "lower") {
+      return invert ? "upper" : "lower";
+    }
+    return invert ? "lower" : "upper";
+  }
+
   private resolvePreferredExitToken(trendDirection: TrendDirection | null, trendStale: boolean | null): "tokenA" | "tokenB" | null {
     const manual = this.config.preferredExitToken ?? null;
     if (!this.config.trendEnabled) {
@@ -933,18 +946,28 @@ export class OrcaBot {
       }
     }
     const trendSnapshot = await this.updateTrendStatus();
-    const preferredExitToken = this.resolvePreferredExitToken(trendSnapshot.direction, trendSnapshot.stale);
-    this.lastStatus.trendPreferredExitToken = preferredExitToken;
+    const rangeAnchor = this.config.rangeAnchor ?? null;
+    let preferredExitToken: "tokenA" | "tokenB" | null = null;
     const preferredExitDirection = this.config.preferredExitDirection === "up" ? "up" : "down";
-    const exitPreference = resolveDirectionalExitPreference(preferredExitToken, preferredExitDirection, {
-      invertPriceAxis: this.shouldInvertUserPriceAxis()
-    });
-    const exitSide = exitPreference?.exitSide;
-    const valueToken = exitPreference?.valueToken;
+    let exitSide: "lower" | "upper" | null = null;
+    let valueToken: "tokenA" | "tokenB" | null = null;
+    if (rangeAnchor) {
+      exitSide = this.resolveRangeAnchorExitSide(rangeAnchor);
+      valueToken = null;
+      this.lastStatus.trendPreferredExitToken = null;
+    } else {
+      preferredExitToken = this.resolvePreferredExitToken(trendSnapshot.direction, trendSnapshot.stale);
+      this.lastStatus.trendPreferredExitToken = preferredExitToken;
+      const exitPreference = resolveDirectionalExitPreference(preferredExitToken, preferredExitDirection, {
+        invertPriceAxis: this.shouldInvertUserPriceAxis()
+      });
+      exitSide = exitPreference?.exitSide ?? null;
+      valueToken = exitPreference?.valueToken ?? null;
+    }
     this.lastStatus.effectiveExitToken = preferredExitToken;
     this.lastStatus.effectiveExitDirection = preferredExitDirection;
-    this.lastStatus.effectiveExitSide = exitSide ?? null;
-    this.lastStatus.effectiveValueToken = valueToken ?? null;
+    this.lastStatus.effectiveExitSide = exitSide;
+    this.lastStatus.effectiveValueToken = valueToken;
 
     const solBalance = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
     this.lastStatus.solBalance = solBalance;

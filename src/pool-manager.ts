@@ -53,6 +53,7 @@ export type PoolOverrides = {
   rangeWidthPct?: number;
   budgetUsd?: number | null;
   rangeExitBiasPct?: number;
+  rangeAnchor?: "lower" | "middle" | "upper" | null;
   preferredExitToken?: "tokenA" | "tokenB" | null;
   preferredExitDirection?: "down" | "up";
   trendEnabled?: boolean;
@@ -1395,6 +1396,14 @@ export class PoolManager {
       normalized.rangeExitBiasPct = value;
     }
 
+    if (overrides.rangeAnchor != null) {
+      const value = String(overrides.rangeAnchor).trim().toLowerCase();
+      if (value !== "lower" && value !== "middle" && value !== "upper") {
+        throw new Error("rangeAnchor override must be lower, middle, or upper");
+      }
+      normalized.rangeAnchor = value as "lower" | "middle" | "upper";
+    }
+
     if (overrides.preferredExitToken != null) {
       const value = String(overrides.preferredExitToken);
       if (value !== "tokenA" && value !== "tokenB") {
@@ -1736,6 +1745,18 @@ export class PoolManager {
           throw new Error("rangeExitBiasPct override must be between 0 and 99.9");
         }
         next.rangeExitBiasPct = value;
+      }
+    }
+
+    if ("rangeAnchor" in updates) {
+      if (updates.rangeAnchor == null) {
+        delete next.rangeAnchor;
+      } else {
+        const value = String(updates.rangeAnchor).trim().toLowerCase();
+        if (value !== "lower" && value !== "middle" && value !== "upper") {
+          throw new Error("rangeAnchor override must be lower, middle, or upper");
+        }
+        next.rangeAnchor = value as "lower" | "middle" | "upper";
       }
     }
 
