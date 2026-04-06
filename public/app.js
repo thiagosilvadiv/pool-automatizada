@@ -1509,30 +1509,40 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
 }
 
 async function updateUI() {
-  try {
-    const [status, config, history, pools, kaminoLogs] = await Promise.all([
-      fetchStatus(),
-      fetchConfig(),
-      fetchHistory(),
-      fetchPools(),
-      fetchKaminoLogs()
-    ]);
-    uiErrorCount = 0;
-    setUiError("");
-    renderUiSnapshot(status, config, history, pools, kaminoLogs);
-  } catch (err) {
+  const results = await Promise.allSettled([
+    fetchStatus(),
+    fetchConfig(),
+    fetchHistory(),
+    fetchPools(),
+    fetchKaminoLogs()
+  ]);
+  const [statusResult, configResult, historyResult, poolsResult, kaminoLogsResult] = results;
+  const hasError = results.some((item) => item.status === "rejected");
+  if (hasError) {
     uiErrorCount += 1;
     const message = `Falha temporaria ao atualizar (${uiErrorCount}/${UI_ERROR_LIMIT}).`;
     setUiError(message);
-    const fallbackPools = cachedPoolsResponse ?? (Array.isArray(cachedPools) ? { pools: cachedPools } : null);
-    if (cachedStatus && cachedConfig && fallbackPools) {
-      renderUiSnapshot(cachedStatus, cachedConfig, cachedHistory, fallbackPools, cachedKaminoLogs);
-    }
-    if (uiErrorCount >= UI_ERROR_LIMIT) {
-      statusBadge.textContent = "Erro";
-      statusBadge.classList.remove("running");
-      statusBadge.classList.add("stopped");
-    }
+  } else {
+    uiErrorCount = 0;
+    setUiError("");
+  }
+
+  const status = statusResult.status === "fulfilled" ? statusResult.value : cachedStatus;
+  const config = configResult.status === "fulfilled" ? configResult.value : cachedConfig;
+  const history = historyResult.status === "fulfilled" ? historyResult.value : cachedHistory;
+  const pools = poolsResult.status === "fulfilled"
+    ? poolsResult.value
+    : (cachedPoolsResponse ?? (Array.isArray(cachedPools) ? { pools: cachedPools } : null));
+  const kaminoLogs = kaminoLogsResult.status === "fulfilled" ? kaminoLogsResult.value : cachedKaminoLogs;
+
+  if (status && config && pools) {
+    renderUiSnapshot(status, config, history, pools, kaminoLogs);
+  }
+
+  if (uiErrorCount >= UI_ERROR_LIMIT) {
+    statusBadge.textContent = "Erro";
+    statusBadge.classList.remove("running");
+    statusBadge.classList.add("stopped");
   }
 }
 
