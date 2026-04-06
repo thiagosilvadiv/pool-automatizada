@@ -447,6 +447,7 @@ export class OrcaBot {
   private pendingKaminoLogs: KaminoLogItem[] = [];
   private stableMintCache = new Map<string, { mint: string; decimals: number }>();
   private lastSolBalanceFallback = false;
+  private rateLimitUntil: number | null = null;
   private lastStatus: BotStatus = {
     running: false,
     lastAction: null,
@@ -542,6 +543,35 @@ export class OrcaBot {
       || String(code) === "8100002"
       || message.includes("too many requests")
       || message.includes("429");
+  }
+
+  private getRateLimitRemainingSec(): number {
+    if (!this.rateLimitUntil) return 0;
+    const remainingMs = this.rateLimitUntil - Date.now();
+    return Math.max(0, Math.ceil(remainingMs / 1000));
+  }
+
+  private isRateLimited(): boolean {
+    if (!this.rateLimitUntil) return false;
+    if (Date.now() < this.rateLimitUntil) {
+      return true;
+    }
+    this.rateLimitUntil = null;
+    return false;
+  }
+
+  public noteRateLimit(source: string, retryAfterSec?: number): void {
+    const baseCooldown = Math.max(1, Number(this.config.rateLimitCooldownSec ?? 30));
+    const retryHint = Number.isFinite(Number(retryAfterSec)) ? Math.max(0, Number(retryAfterSec)) : 0;
+    const cooldownSec = Math.max(baseCooldown, retryHint);
+    const nextUntil = Date.now() + cooldownSec * 1000;
+    if (!this.rateLimitUntil || nextUntil > this.rateLimitUntil) {
+      this.rateLimitUntil = nextUntil;
+    }
+    const remaining = this.getRateLimitRemainingSec();
+    const origin = source ? ` (${source})` : "";
+    this.lastStatus.lastAction = "rate-limit-wait";
+    this.lastStatus.lastError = `Rate limit detectado${origin}; aguardando ${remaining}s.`;
   }
 
   private normalizeError(reason: string | null | undefined): string {
@@ -877,6 +907,12 @@ export class OrcaBot {
     this.lastStatus.eventPositionFeesUsd = null;
     this.lastStatus.eventPositionExitUsd = null;
     this.resetActionFee();
+    if (this.isRateLimited()) {
+      const remaining = this.getRateLimitRemainingSec();
+      this.lastStatus.lastAction = "rate-limit-wait";
+      this.lastStatus.lastError = `Rate limit ativo; aguardando ${remaining}s.`;
+      return this.getStatus();
+    }
     await this.reconcileKaminoState();
     this.syncKaminoStatus();
     const health = this.lastStatus.kaminoHealth ?? this.getKaminoHealth();
@@ -1358,6 +1394,12 @@ export class OrcaBot {
   async closeKaminoCycleNow(): Promise<{ ok: boolean; reason?: string; status: BotStatus }> {
     this.lastStatus.running = true;
     this.resetActionFee();
+    if (this.isRateLimited()) {
+      const remaining = this.getRateLimitRemainingSec();
+      this.lastStatus.lastAction = "rate-limit-wait";
+      this.lastStatus.lastError = `Rate limit ativo; aguardando ${remaining}s.`;
+      return { ok: false, reason: "rate-limit", status: this.getStatus() };
+    }
     try {
       const closed = await this.closeKaminoCycle("manual");
       if (closed) {
@@ -1909,6 +1951,12 @@ export class OrcaBot {
   async topUpSolNow(): Promise<{ ok: boolean; reason?: string }> {
     this.lastStatus.running = true;
     this.resetActionFee();
+    if (this.isRateLimited()) {
+      const remaining = this.getRateLimitRemainingSec();
+      this.lastStatus.lastAction = "rate-limit-wait";
+      this.lastStatus.lastError = `Rate limit ativo; aguardando ${remaining}s.`;
+      return { ok: false, reason: "rate-limit" };
+    }
     await this.refreshPoolState();
     const solBalance = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
     this.lastStatus.solBalance = solBalance;
@@ -1922,6 +1970,12 @@ export class OrcaBot {
   async swapWalletToSolNow(): Promise<{ ok: boolean; reason?: string; swaps: number; failed: number; totalOutLamports: number; details: SwapWalletToSolDetail[] }> {
     this.lastStatus.running = true;
     this.resetActionFee();
+    if (this.isRateLimited()) {
+      const remaining = this.getRateLimitRemainingSec();
+      this.lastStatus.lastAction = "rate-limit-wait";
+      this.lastStatus.lastError = `Rate limit ativo; aguardando ${remaining}s.`;
+      return { ok: false, reason: "rate-limit", swaps: 0, failed: 0, totalOutLamports: 0, details: [] };
+    }
     const result = await this.swapWalletToSol("manual");
     if (result.swaps > 0) {
       this.lastStatus.lastAction = "manual-swap-to-sol";
@@ -3356,7 +3410,8 @@ export class OrcaBot {
           {
             connection: this.connection,
             wallet: this.wallet,
-            config: this.config
+            config: this.config,
+            onRateLimit: (source, err) => this.noteRateLimit(source, undefined)
           },
           market
         );
@@ -3381,7 +3436,8 @@ export class OrcaBot {
           {
             connection: this.connection,
             wallet: this.wallet,
-            config: this.config
+            config: this.config,
+            onRateLimit: (source, err) => this.noteRateLimit(source, undefined)
           },
           DEFAULT_KAMINO_MARKET
         );
@@ -3609,6 +3665,29 @@ export class OrcaBot {
         if (onChainDebt <= epsilon) {
           if (onChainCollateral > epsilon || dustAmount > epsilon) {
             const dustTotal = onChainCollateral > epsilon ? onChainCollateral : dustAmount;
+            const dustThreshold = Math.max(KAMINO_WITHDRAW_MIN, epsilon);
+            if (dustTotal <= dustThreshold) {
+              this.queueKaminoLog(
+                "debt-zero-dust",
+                `Colateral residual abaixo do minimo (${dustTotal.toFixed(8)}); encerrando ciclo localmente.`,
+                "warn"
+              );
+              this.setKaminoState({
+                ...this.kaminoState,
+                active: false,
+                collateralMint: position.collateralMint ?? this.kaminoState.collateralMint ?? null,
+                collateralAmount: dustTotal,
+                debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
+                debtAmount: 0,
+                reservedCollateralDust: dustTotal,
+                collaterals: recoveredCollaterals,
+                lastError: "Colateral residual abaixo do minimo; ciclo encerrado localmente.",
+                updatedAt: new Date().toISOString()
+              });
+              this.kaminoPoolOpenedAt = null;
+              this.releaseKaminoLockIfOwned();
+              return;
+            }
             let reconciledUsd: number | null = null;
             try {
               const mint = position.collateralMint ?? this.kaminoState.collateralMint ?? null;
@@ -3648,26 +3727,13 @@ export class OrcaBot {
               await this.closeKaminoCycle("target");
             } catch (closeErr) {
               this.kaminoHealth.recordError(closeErr, "kamino-close");
-              this.queueKaminoLog(
-                "debt-zero-close-failed",
-                `Falha ao sacar colateral residual: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}. Sera tentado no proximo tick.`,
-                "error"
-              );
-              const updated: KaminoCycleState = {
-                ...this.kaminoState,
-                active: false,
-                collateralMint: position.collateralMint ?? this.kaminoState.collateralMint ?? null,
-                collateralAmount: onChainCollateral > epsilon ? onChainCollateral : dustTotal,
-                debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
-                debtAmount: 0,
-                reservedCollateralDust: dustTotal,
-                collaterals: recoveredCollaterals,
-                lastError: `Colateral residual nao sacado: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`,
-                updatedAt: new Date().toISOString()
-              };
-              this.setKaminoState(updated);
-              this.kaminoPoolOpenedAt = null;
-              this.releaseKaminoLockIfOwned();
+              const msg = `Falha ao sacar colateral residual: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}.`;
+              this.queueKaminoLog("debt-zero-close-failed", `${msg} Nova tentativa agendada.`, "error");
+              const currentState = this.kaminoState ?? state;
+              const wait = this.scheduleKaminoRepayRetry(currentState, msg, "target", 0);
+              if (wait) {
+                return;
+              }
             }
             return;
           }
@@ -3724,11 +3790,20 @@ export class OrcaBot {
 
   if (!this.kaminoState?.active) {
     const previous = this.kaminoState;
+    const retryHold = this.kaminoState?.repayRetryUntil
+      ? Date.parse(this.kaminoState.repayRetryUntil)
+      : 0;
+    if (Number.isFinite(retryHold) && retryHold > Date.now()) {
+      return;
+    }
     // Só reconstrói o ciclo se realmente há dívida ou colateral on-chain.
     // Sem dívida E sem colateral = ciclo foi fechado, não há nada a recuperar.
     const onChainDebt = Number(position?.debtAmount ?? 0);
     const onChainCollateral = Number(position?.collateralAmount ?? 0);
     const epsilon = 1e-8;
+    if (onChainDebt <= epsilon && onChainCollateral > 0 && onChainCollateral <= KAMINO_WITHDRAW_MIN) {
+      return;
+    }
     if (onChainDebt <= epsilon && onChainCollateral <= epsilon) {
       // Nada on-chain — não reconstruir o ciclo.
       return;
@@ -3871,7 +3946,8 @@ export class OrcaBot {
         {
           connection: this.connection,
           wallet: this.wallet,
-          config: this.config
+          config: this.config,
+          onRateLimit: (source, err) => this.noteRateLimit(source, undefined)
         },
         desiredMarket
       );
@@ -5834,6 +5910,20 @@ export class OrcaBot {
         targetPriceUsdc: null
       }));
 
+    const dustThreshold = Math.max(KAMINO_WITHDRAW_MIN, epsilon);
+    const dustTotal = withdrawTargets.reduce((sum, entry) => {
+      if (!entry.mint || entry.amount <= 0) return sum;
+      return entry.amount <= dustThreshold ? sum + entry.amount : sum;
+    }, 0);
+    if (dustTotal > 0) {
+      reservedDust += dustTotal;
+      this.queueKaminoLog(
+        "withdraw-dust",
+        `Colateral residual abaixo do minimo detectado (${dustTotal.toFixed(8)}); tratando como dust.`,
+        "warn"
+      );
+    }
+
     for (const entry of withdrawTargets) {
       if (entry.mint && entry.amount > 0) {
         let amountToWithdraw = entry.amount;
@@ -7033,14 +7123,13 @@ export class OrcaBot {
         const res = await fetch(url, init);
         const text = await res.text().catch(() => "");
         if ([429, 502, 503, 504].includes(res.status)) {
+          const retryAfter = res.headers.get("retry-after");
+          const parsedRetry = retryAfter ? Number(retryAfter) : 0;
+          this.noteRateLimit(`jupiter-${res.status}`, Number.isFinite(parsedRetry) ? parsedRetry : undefined);
           if (attempt < retries) {
-            const retryAfter = res.headers.get("retry-after");
             let delay = 800 * Math.pow(2, attempt);
-            if (retryAfter) {
-              const parsed = Number(retryAfter);
-              if (Number.isFinite(parsed) && parsed > 0) {
-                delay = parsed * 1000;
-              }
+            if (Number.isFinite(parsedRetry) && parsedRetry > 0) {
+              delay = parsedRetry * 1000;
             }
             attempt += 1;
             await sleep(delay);
@@ -7049,6 +7138,10 @@ export class OrcaBot {
         }
         return { res, text };
       } catch (err) {
+        const errText = String((err as any)?.message ?? err).toLowerCase();
+        if (errText.includes("429") || errText.includes("too many requests")) {
+          this.noteRateLimit("jupiter-error");
+        }
         if (attempt < retries) {
           const delay = 800 * Math.pow(2, attempt);
           attempt += 1;
@@ -7458,6 +7551,12 @@ export class OrcaBot {
 
   private async swapWalletToSol(reason: "auto" | "manual"): Promise<SwapWalletToSolResult> {
     const details: SwapWalletToSolDetail[] = [];
+    if (this.isRateLimited()) {
+      const remaining = this.getRateLimitRemainingSec();
+      this.lastStatus.lastAction = "rate-limit-wait";
+      this.lastStatus.lastError = `Rate limit ativo; aguardando ${remaining}s.`;
+      return { swaps: 0, failed: 0, totalOutLamports: 0, reason: "rate-limit", details };
+    }
     if (!this.config.jupiterApiKey) {
       logger.warn("swap-to-sol skipped: missing Jupiter API key");
       return { swaps: 0, failed: 0, totalOutLamports: 0, reason: "missing-api-key", details };

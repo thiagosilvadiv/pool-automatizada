@@ -880,9 +880,14 @@ export class BotRunner {
       this.maybeRequestAutoAdd(status);
     } catch (err) {
       if (isRateLimitError(err)) {
-        const backoffMs = 15000;
+        const cooldownSec = Math.max(1, Number(this.config.rateLimitCooldownSec ?? 30));
+        const backoffMs = Math.max(1000, Math.floor(cooldownSec * 1000));
         this.rateLimitUntil = Date.now() + backoffMs;
-        this.bot.setError("RPC rate limit (429). Aguardando para tentar novamente.");
+        if (typeof (this.bot as any).noteRateLimit === "function") {
+          (this.bot as any).noteRateLimit("runner", cooldownSec);
+        } else {
+          this.bot.setError("RPC rate limit (429). Aguardando para tentar novamente.");
+        }
         logger.warn({ err, backoffMs }, "tick rate-limited");
       } else {
         logger.error({ err }, "tick failed");

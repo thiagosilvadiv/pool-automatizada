@@ -15,6 +15,7 @@ export type Config = {
   preferredExitDirection: "down" | "up";
   slippageBps: number;
   pollIntervalMs: number;
+  rateLimitCooldownSec: number;
   historyMaxEvents: number;
   outOfRangeConfirmSec: number;
   rebalanceCooldownSec: number;
@@ -484,6 +485,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const envNetwork = parseEnvString(process.env.NETWORK);
   const envRpcUrl = parseEnvString(process.env.RPC_URL);
   const envWhirlpoolAddress = parseEnvString(process.env.WHIRLPOOL_ADDRESS);
+  const envRateLimitCooldownSec = parseEnvNumber(process.env.RATE_LIMIT_COOLDOWN_SEC);
   const envAutoSwapFeesToUsdcTargetMint = parseEnvString(process.env.AUTO_SWAP_FEES_TO_USDC_TARGET_MINT);
   const envAutoSwapFeesToUsdcDestWallet = parseEnvString(process.env.AUTO_SWAP_FEES_TO_USDC_DEST_WALLET);
   const envJupiterApiKey = parseEnvString(process.env.JUPITER_API_KEY);
@@ -526,6 +528,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? "down",
     slippageBps: parseEnvNumber(process.env.SLIPPAGE_BPS) ?? Number(data.slippageBps ?? 50),
     pollIntervalMs: parseEnvNumber(process.env.POLL_INTERVAL_MS) ?? Number(data.pollIntervalMs ?? 30000),
+    rateLimitCooldownSec: envRateLimitCooldownSec ?? Number((data as any).rateLimitCooldownSec ?? 30),
     historyMaxEvents: parseEnvNumber(process.env.HISTORY_MAX_EVENTS) ?? Number((data as any).historyMaxEvents ?? 200),
     outOfRangeConfirmSec: parseEnvNumber(process.env.OUT_OF_RANGE_CONFIRM_SEC) ?? Number(data.outOfRangeConfirmSec ?? 0),
     rebalanceCooldownSec: parseEnvNumber(process.env.REBALANCE_COOLDOWN_SEC) ?? Number(data.rebalanceCooldownSec ?? 300),
@@ -703,6 +706,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.pollIntervalMs) || config.pollIntervalMs < 1000) {
     throw new Error("pollIntervalMs must be >= 1000");
+  }
+  if (!Number.isFinite(config.rateLimitCooldownSec) || config.rateLimitCooldownSec < 0) {
+    throw new Error("rateLimitCooldownSec must be >= 0");
   }
   if (!Number.isFinite(config.historyMaxEvents) || config.historyMaxEvents < 0) {
     throw new Error("historyMaxEvents must be >= 0");

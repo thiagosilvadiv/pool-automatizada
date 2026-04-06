@@ -43,6 +43,7 @@ export type KaminoClientContext = {
   connection: Connection;
   wallet: WalletLike;
   config: Config;
+  onRateLimit?: (source: string, err?: any) => void;
 };
 
 export type KaminoPositionState = {
@@ -369,6 +370,7 @@ class RealKaminoClient implements KaminoClient {
   private readRpcUrls: string[];
   private rpcIndex = 0;
   private readRpcIndex = 0;
+  private onRateLimit?: (source: string, err?: any) => void;
 
   constructor(options: {
     ctx: KaminoClientContext;
@@ -379,6 +381,7 @@ class RealKaminoClient implements KaminoClient {
     marketAddress: Address;
     rpcUrls?: string[];
     readRpcUrls?: string[];
+    onRateLimit?: (source: string, err?: any) => void;
   }) {
     this.ctx = options.ctx;
     this.rpc = options.rpc;
@@ -388,6 +391,7 @@ class RealKaminoClient implements KaminoClient {
     this.marketAddress = options.marketAddress;
     this.rpcUrls = options.rpcUrls?.length ? [...options.rpcUrls] : [];
     this.readRpcUrls = options.readRpcUrls?.length ? [...options.readRpcUrls] : [];
+    this.onRateLimit = options.onRateLimit;
     this.obligationType = new VanillaObligation(PROGRAM_ID);
     this.sendAndConfirm = sendAndConfirmTransactionFactory({
       rpc: this.rpc as any,
@@ -612,7 +616,7 @@ class RealKaminoClient implements KaminoClient {
           throw err;
         }
         if (isRateLimitError(err)) {
-          this.rotateRpcEndpoint("rate-limit");
+          this.onRateLimit?.("kamino-sendAction", err);
         }
         const errMsg = String((err as any)?.message ?? err).toLowerCase();
         const isSimulation = isBlockhash && errMsg.includes("simulation failed");
@@ -747,7 +751,7 @@ class RealKaminoClient implements KaminoClient {
           throw err;
         }
         if (isRateLimitError(err)) {
-          this.rotateRpcEndpoint("rate-limit");
+          this.onRateLimit?.("kamino-sendInstructions", err);
         }
         const errMsg = String((err as any)?.message ?? err).toLowerCase();
         const isSimulation = isBlockhash && errMsg.includes("simulation failed");
@@ -1702,11 +1706,12 @@ class RealKaminoClient implements KaminoClient {
       this.lastState = state;
       this.lastStateAt = Date.now();
       return state;
-    } catch (err) {
-      if (isRateLimitError(err)) {
-        logger.warn({ err }, "kamino rate limit ao ler posicao; usando cache");
-        return this.lastState;
-      }
+      } catch (err) {
+        if (isRateLimitError(err)) {
+          this.onRateLimit?.("kamino-getPosition", err);
+          logger.warn({ err }, "kamino rate limit ao ler posicao; usando cache");
+          return this.lastState;
+        }
       logger.warn({ err }, "falha ao ler posicao Kamino");
       return null;
     }
@@ -1881,6 +1886,7 @@ export async function createKaminoClient(
     signer,
     marketAddress,
     rpcUrls,
-    readRpcUrls
+    readRpcUrls,
+    onRateLimit: ctx.onRateLimit
   });
 }
