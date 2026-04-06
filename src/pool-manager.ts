@@ -250,40 +250,20 @@ export class PoolManager {
       const poolConfig: Config = {
         ...this.baseConfig,
         whirlpoolAddress: entry.whirlpoolAddress,
-        ...(entry.overrides ?? {})
+        ...(entry.overrides ?? {}),
+        // Força hedge/trend desligados na listagem (evita chamadas externas)
+        trendEnabled: false,
+        hedgeEnabled: false,
+        hedgeEntryMode: "off"
       };
-      const trendEnabled = Boolean(poolConfig.trendEnabled);
-      const hedgeEntryMode = poolConfig.hedgeEntryMode ?? "off";
-      const hedgeUsesTrend = ["trend-down", "trend-up", "trend-any"].includes(hedgeEntryMode);
-      const trendRequested = trendEnabled || hedgeUsesTrend;
-      let trendDirection: "up" | "down" | null = null;
-      let trendUpdatedAt: string | null = null;
-      let trendTimeframe: "1m" | "5m" | "15m" | "30m" | "1h" | null = trendRequested ? poolConfig.trendTimeframe : null;
-      let trendStale = false;
-      if (trendRequested) {
-        const trendTimeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
-        const snapshot = await Promise.race([
-          getTrendSnapshot({
-            networkId: poolConfig.trendNetworkId,
-            poolAddress: entry.whirlpoolAddress,
-            timeframe: poolConfig.trendTimeframe,
-            staleSec: poolConfig.trendStaleSec,
-            cacheSec: poolConfig.trendCacheSec
-          }),
-          trendTimeout
-        ]).catch(() => null);
-        if (snapshot) {
-          trendDirection = snapshot.direction ?? null;
-          trendUpdatedAt = snapshot.updatedAt ?? null;
-          trendTimeframe = snapshot.timeframe ?? poolConfig.trendTimeframe ?? null;
-          trendStale = snapshot.stale ?? false;
-        } else {
-          trendDirection = null;
-          trendUpdatedAt = null;
-          trendTimeframe = poolConfig.trendTimeframe ?? null;
-          trendStale = true;
-        }
-      }
+      const trendEnabled = false;
+      const hedgeEntryMode = "off";
+      const trendUses = false;
+      const trendRequested = false;
+      const trendDirection: "up" | "down" | null = null;
+      const trendUpdatedAt: string | null = null;
+      const trendTimeframe: "1m" | "5m" | "15m" | "30m" | "1h" | null = null;
+      const trendStale = false;
       return {
         id: entry.id,
         name: entry.name,
