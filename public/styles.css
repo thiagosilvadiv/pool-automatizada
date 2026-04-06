@@ -335,6 +335,19 @@ button.danger:not(.ghost):hover {
   color: var(--danger);
 }
 
+.ui-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  background: rgba(255, 107, 107, 0.12);
+  color: var(--danger);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
 .link-btn {
   display: inline-flex;
   align-items: center;

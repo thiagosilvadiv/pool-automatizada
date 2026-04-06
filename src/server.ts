@@ -629,7 +629,18 @@ export async function startServer(config: Config): Promise<void> {
   });
 
   const publicDir = path.join(__dirname, "..", "public");
-  app.use(express.static(publicDir));
+  app.use(express.static(publicDir, {
+    setHeaders: (res, filePath) => {
+      const ext = path.extname(filePath).toLowerCase();
+      if (ext === ".html") {
+        res.setHeader("Content-Type", "text/html; charset=UTF-8");
+      } else if (ext === ".js") {
+        res.setHeader("Content-Type", "application/javascript; charset=UTF-8");
+      } else if (ext === ".css") {
+        res.setHeader("Content-Type", "text/css; charset=UTF-8");
+      }
+    }
+  }));
 
   app.listen(port, () => {
     logger.info({ port }, "UI server started");

@@ -1360,7 +1360,7 @@ export class BotRunner {
 
     const timestamp = new Date().toISOString();
     let positionOpenedAt = mergedPositionMint ? this.openedAtByMint.get(mergedPositionMint) ?? null : null;
-    if ((action === "open-position" || action === "rebalanced" || action === "kamino-rebalanced") && mergedPositionMint) {
+    if ((action === "open-position" || action === "rebalanced" || action === "kamino-rebalanced" || action === "kamino-reopen") && mergedPositionMint) {
       this.openedAtByMint.set(mergedPositionMint, timestamp);
       positionOpenedAt = timestamp;
     }

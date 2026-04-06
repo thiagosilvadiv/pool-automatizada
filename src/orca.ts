@@ -6939,7 +6939,6 @@ export class OrcaBot {
     }
     if (openResult === "open-position") {
       this.lastRebalanceAt = Date.now();
-      this.queueHistoryAction("kamino-reopen");
       this.kaminoPoolOpenedAt = Date.now();
       if (this.config.autoSwapToSolEnabled) {
         try {
@@ -6960,6 +6959,7 @@ export class OrcaBot {
         });
       }
       await this.updatePortfolioSnapshot(input.price, input.solUsdPrice);
+      this.queueHistoryAction("kamino-reopen");
     } else {
       if (openResult === "insufficient-balance") {
         this.queueKaminoLog("wait-funds", "Saldo emprestado insuficiente para reabrir a pool.", "warn");
