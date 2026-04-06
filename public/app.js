@@ -682,9 +682,9 @@ function parseRangeAnchorInput(value) {
 }
 
 function formatRangeAnchor(value) {
-  if (value === "lower") return "Mais perto do limite inferior";
+  if (value === "lower") return "Mais perto do limite superior";
   if (value === "middle") return "No meio";
-  if (value === "upper") return "Mais perto do limite superior";
+  if (value === "upper") return "Mais perto do limite inferior";
   return "-";
 }
 
