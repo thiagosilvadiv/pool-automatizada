@@ -147,12 +147,6 @@ export async function startServer(config: Config): Promise<void> {
         lastAction: "no-pool",
         lastError: null,
         lastPrice: null,
-        hedgeActive: false,
-        hedgeSymbol: null,
-        hedgeNotionalUsd: null,
-        hedgeLeverage: null,
-        hedgeOpenedAt: null,
-        hedgeLastError: null,
         effectiveExitToken: null,
         effectiveExitDirection: config.preferredExitDirection,
         effectiveExitSide: null,
@@ -229,7 +223,29 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
-  app.post("/api/kamino/test", async (req: Request, res: Response) => {
+  // Desligar teste/hedge/bybit rotas herdadas
+  app.post("/api/kamino/test", (_req: Request, res: Response) => {
+    res.status(404).json({ ok: false, error: "disabled" });
+  });
+
+  app.post("/api/hedge/open", (_req: Request, res: Response) => {
+    res.status(404).json({ ok: false, error: "disabled" });
+  });
+
+  app.post("/api/hedge/close", (_req: Request, res: Response) => {
+    res.status(404).json({ ok: false, error: "disabled" });
+  });
+
+  app.get("/api/hedge/price", (_req: Request, res: Response) => {
+    res.status(404).json({ ok: false, error: "disabled" });
+  });
+
+  app.post("/api/bybit/order", (_req: Request, res: Response) => {
+    res.status(404).json({ ok: false, error: "disabled" });
+  });
+
+  // Manter rota kamino/test desabilitada acima
+  /* app.post("/api/kamino/test", async (req: Request, res: Response) => {
     try {
       const mint = String(req.body?.collateralMint ?? "").trim();
       const amount = Number(req.body?.collateralAmount);
@@ -264,12 +280,13 @@ export async function startServer(config: Config): Promise<void> {
     } catch (err) {
       res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
     }
-  });
+  }); */
 
-  app.post("/api/reset", async (_req: Request, res: Response) => {
+  app.post("/api/reset", async (req: Request, res: Response) => {
     try {
       await poolManager.stopSelected();
-      await poolManager.resetSelectedKaminoCycle();
+      const clearPools = String(req.query?.clearPools ?? "").toLowerCase() === "true";
+      await poolManager.resetSelectedKaminoCycle(clearPools);
       await clearLocalData();
       res.json({ ok: true, restarting: false });
     } catch (err) {

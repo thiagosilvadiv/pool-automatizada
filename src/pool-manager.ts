@@ -494,16 +494,20 @@ export class PoolManager {
     await this.closePool(this.selectedPoolId);
   }
 
-  async resetSelectedKaminoCycle(): Promise<void> {
+  async resetSelectedKaminoCycle(clearPools = false): Promise<void> {
     if (!this.selectedPoolId) {
       return;
     }
-    await this.resetKaminoCycle(this.selectedPoolId);
+    await this.resetKaminoCycle(this.selectedPoolId, clearPools);
   }
 
-  async resetKaminoCycle(id: string): Promise<void> {
+  async resetKaminoCycle(id: string, clearPools = false): Promise<void> {
     const record = this.getRecord(id);
     record.runner.resetKaminoCycle();
+    if (clearPools) {
+      const store = await createPoolsStore<PoolEntry>();
+      await store.save({ selectedPoolId: null, activePoolIds: [], pools: [] });
+    }
   }
 
   async closeKaminoCycleSelected(): Promise<{ ok: boolean; reason?: string }> {
