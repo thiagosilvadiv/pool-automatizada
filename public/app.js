@@ -118,6 +118,68 @@ let cachedStatus = null;
 let cachedPoolsResponse = null;
 let uiErrorCount = 0;
 const UI_ERROR_LIMIT = 3;
+const POOLS_CACHE_KEY = "orcaPoolsCacheV1";
+
+function loadPoolsCache() {
+  try {
+    const raw = window.localStorage.getItem(POOLS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.pools)) return null;
+    return parsed;
+  } catch (err) {
+    return null;
+  }
+}
+
+function savePoolsCache(pools, selectedPoolId) {
+  try {
+    const payload = {
+      pools,
+      selectedPoolId: selectedPoolId ?? null,
+      savedAt: new Date().toISOString()
+    };
+    window.localStorage.setItem(POOLS_CACHE_KEY, JSON.stringify(payload));
+  } catch (err) {
+    // ignore storage errors
+  }
+}
+
+async function restorePoolsFromCache() {
+  const cached = loadPoolsCache();
+  if (!cached || !Array.isArray(cached.pools) || cached.pools.length === 0) {
+    return;
+  }
+  for (const pool of cached.pools) {
+    if (!pool?.whirlpoolAddress || !pool?.name) {
+      continue;
+    }
+    try {
+      const res = await fetch("/api/pools", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: pool.name,
+          whirlpoolAddress: pool.whirlpoolAddress,
+          overrides: pool.overrides ?? undefined
+        })
+      });
+      const data = await res.json().catch(() => null);
+      if (data?.error && String(data.error).toLowerCase().includes("exists")) {
+        continue;
+      }
+    } catch (err) {
+      // ignore and continue
+    }
+  }
+  updateUI();
+}
+
+const cachedPoolsLocal = loadPoolsCache();
+if (cachedPoolsLocal?.pools?.length) {
+  cachedPools = cachedPoolsLocal.pools;
+  cachedPoolsResponse = cachedPoolsLocal;
+}
 
 function normalizePoolsResponse(raw) {
   if (!raw) return null;
@@ -1307,6 +1369,7 @@ function renderPools(data, config) {
   let pools = Array.isArray(data) ? data : (data?.pools ?? []);
   const cachedFallback = normalizePoolsResponse(cachedPoolsResponse)?.pools
     ?? (Array.isArray(cachedPools) ? cachedPools : []);
+  let fromCache = false;
 
   if (hasError && poolError) {
     poolError.textContent = errorMsg || "Falha ao carregar pools.";
@@ -1319,6 +1382,7 @@ function renderPools(data, config) {
   // Se a API devolver lista vazia, preserva o cache anterior.
   if (pools.length === 0 && cachedFallback.length > 0) {
     pools = cachedFallback;
+    fromCache = true;
   }
 
   // Fallback final: usar a pool selecionada do /api/config para nao zerar a tabela.
@@ -1337,15 +1401,29 @@ function renderPools(data, config) {
         overrides: null
       }
     ];
+    fromCache = true;
   }
 
   if (pools.length > 0) {
     cachedPools = pools;
+    savePoolsCache(pools, config?.selectedPoolId ?? cachedPoolsResponse?.selectedPoolId ?? null);
   }
   cachedConfig = config;
   if (!pools.length) {
     poolsBody.innerHTML = "<tr><td colspan=\"12\">Sem pools cadastradas</td></tr>";
     return;
+  }
+  if (fromCache && poolError) {
+    poolError.innerHTML = "Pools carregadas do cache local. Servidor sem dados. "
+      + "<button id=\"restorePoolsBtn\" class=\"ghost\">Restaurar no servidor</button>";
+    poolError.classList.remove("hidden");
+    const btn = document.getElementById("restorePoolsBtn");
+    if (btn) {
+      btn.addEventListener("click", (event) => {
+        event.preventDefault();
+        restorePoolsFromCache();
+      });
+    }
   }
   const rows = pools.map((pool) => {
     const selected = pool.selected ? "Sim" : "Nao";
