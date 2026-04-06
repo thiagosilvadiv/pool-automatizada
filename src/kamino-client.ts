@@ -452,6 +452,65 @@ class RealKaminoClient implements KaminoClient {
     return this.marketPromise;
   }
 
+  private createReserveMissingError(message: string): Error {
+    const err = new Error(message);
+    (err as any).__reserveMissing = true;
+    return err;
+  }
+
+  private isReserveMissingError(err: any): boolean {
+    if (!err) return false;
+    if ((err as any).__reserveMissing) return true;
+    const msg = String(err?.message ?? err).toLowerCase();
+    return msg.includes("reserveaddress")
+      || msg.includes("reserve nao encontrada")
+      || msg.includes("reserva nao encontrada")
+      || msg.includes("reserva ausente")
+      || msg.includes("reserve not found")
+      || msg.includes("reserve missing");
+  }
+
+  private getMissingReserves(market: KaminoMarket, mints: string[]): string[] {
+    const missing: string[] = [];
+    for (const mint of mints) {
+      if (!mint) continue;
+      if (!market.getReserveByMint(address(mint))) {
+        missing.push(mint);
+      }
+    }
+    return missing;
+  }
+
+  private async ensureMarketHasReserves(
+    market: KaminoMarket,
+    params: { debtMint?: string; collateralMint?: string; label: string }
+  ): Promise<KaminoMarket> {
+    const mints = [params.debtMint, params.collateralMint].filter(Boolean) as string[];
+    let missing = this.getMissingReserves(market, mints);
+    if (!missing.length) return market;
+    this.invalidateMarket(true);
+    const freshMarket = await this.loadMarket();
+    missing = this.getMissingReserves(freshMarket, mints);
+    if (!missing.length) return freshMarket;
+    throw this.createReserveMissingError(
+      `Reserva nao encontrada no market (${params.label}): ${missing.join(", ")}`
+    );
+  }
+
+  private async loadObligationWithRetry(market: KaminoMarket): Promise<any | null> {
+    let obligation = null;
+    for (let attempt = 0; attempt < 3 && !obligation; attempt += 1) {
+      obligation = await market.getObligationByWallet(
+        this.signer.address,
+        this.obligationType
+      ).catch(() => null);
+      if (!obligation && attempt < 2) {
+        await sleep(2000);
+      }
+    }
+    return obligation;
+  }
+
   private async resolveDecimals(mint: string): Promise<number> {
     try {
       const market = await this.loadMarket();
@@ -1168,18 +1227,14 @@ class RealKaminoClient implements KaminoClient {
     if (!this.ctx.config.jupiterApiKey) {
       throw new Error("Jupiter API key ausente");
     }
-    const market = await this.loadMarket();
+    let market = await this.loadMarket();
+    market = await this.ensureMarketHasReserves(market, {
+      debtMint: input.debtMint,
+      collateralMint: input.collateralMint,
+      label: "repay-with-collateral"
+    });
     // Tenta encontrar a obligation com retry para tolerar leitura transitória de RPC.
-    let obligation = null;
-    for (let attempt = 0; attempt < 3 && !obligation; attempt += 1) {
-      obligation = await market.getObligationByWallet(
-        this.signer.address,
-        this.obligationType
-      ).catch(() => null);
-      if (!obligation && attempt < 2) {
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-    }
+    let obligation = await this.loadObligationWithRetry(market);
     if (!obligation) {
       this.invalidateMarket();
       throw new Error("Posicao Kamino nao encontrada");
@@ -1251,29 +1306,48 @@ class RealKaminoClient implements KaminoClient {
       // Se o erro é "reserveAddress" ou "reserve nao encontrada", o market
       // está com cache desatualizado (ex: após troca de token de dívida).
       // Invalida o cache e tenta novamente com um market recarregado.
-      if (msg.includes("reserveAddress") || msg.includes("reserve") || msg.includes("Reserve")) {
+      if (this.isReserveMissingError(err) || msg.includes("reserveAddress") || msg.includes("reserve") || msg.includes("Reserve")) {
         logger.warn({ err }, "repayWithCollateral falhou por reserve ausente; recarregando market e tentando novamente");
         this.invalidateMarket(true);
-        const freshMarket = await this.loadMarket();
-        responses = await getRepayWithCollIxs({
-          repayAmount: new Decimal(input.repayAmount),
-          isClosingPosition: true,
-          budgetAndPriorityFeeIxs: undefined,
-          collTokenMint: address(input.collateralMint),
-          debtTokenMint: address(input.debtMint),
-          kaminoMarket: freshMarket,
-          owner: this.signer,
-          obligation,
-          referrer: none(),
-          currentSlot,
-          scopeRefreshIx: [],
-          useV2Ixs: true,
-          quoter,
-          swapper,
-          logger: (msg: string, ...extra: any[]) => {
-            logger.info({ msg, extra }, "kamino repay-with-collateral");
-          }
+        let freshMarket = await this.loadMarket();
+        freshMarket = await this.ensureMarketHasReserves(freshMarket, {
+          debtMint: input.debtMint,
+          collateralMint: input.collateralMint,
+          label: "repay-with-collateral"
         });
+        const freshObligation = await this.loadObligationWithRetry(freshMarket);
+        if (!freshObligation) {
+          this.invalidateMarket();
+          throw new Error("Posicao Kamino nao encontrada");
+        }
+        try {
+          responses = await getRepayWithCollIxs({
+            repayAmount: new Decimal(input.repayAmount),
+            isClosingPosition: true,
+            budgetAndPriorityFeeIxs: undefined,
+            collTokenMint: address(input.collateralMint),
+            debtTokenMint: address(input.debtMint),
+            kaminoMarket: freshMarket,
+            owner: this.signer,
+            obligation: freshObligation,
+            referrer: none(),
+            currentSlot,
+            scopeRefreshIx: [],
+            useV2Ixs: true,
+            quoter,
+            swapper,
+            logger: (msg: string, ...extra: any[]) => {
+              logger.info({ msg, extra }, "kamino repay-with-collateral");
+            }
+          });
+        } catch (retryErr) {
+          if (this.isReserveMissingError(retryErr)) {
+            throw this.createReserveMissingError(
+              `Reserva nao encontrada no market (repay-with-collateral): ${input.collateralMint}, ${input.debtMint}`
+            );
+          }
+          throw retryErr;
+        }
       } else {
         throw err;
       }
@@ -1345,21 +1419,13 @@ class RealKaminoClient implements KaminoClient {
       throw new Error("Valor de repay invalido");
     }
     let market = await this.loadMarket();
+    market = await this.ensureMarketHasReserves(market, {
+      debtMint: input.debtMint,
+      collateralMint: input.collateralMint,
+      label: "withdraw-capacity"
+    });
     // Se o reserve do debtMint não está no market cacheado, força reload.
-    if (!market.getReserveByMint(address(input.debtMint))) {
-      this.invalidateMarket(true);
-      market = await this.loadMarket();
-    }
-    let obligation = null;
-    for (let attempt = 0; attempt < 3 && !obligation; attempt += 1) {
-      obligation = await market.getObligationByWallet(
-        this.signer.address,
-        this.obligationType
-      ).catch(() => null);
-      if (!obligation && attempt < 2) {
-        await sleep(2000);
-      }
-    }
+    let obligation = await this.loadObligationWithRetry(market);
     if (!obligation) {
       this.invalidateMarket();
       throw new Error("Posicao Kamino nao encontrada");

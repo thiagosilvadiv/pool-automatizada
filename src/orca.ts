@@ -597,6 +597,18 @@ export class OrcaBot {
       || message.includes("quote-failed");
   }
 
+  private isKaminoReserveMissingError(err: any): boolean {
+    if (!err) return false;
+    if ((err as any).__reserveMissing) return true;
+    const message = String(err?.message ?? err).toLowerCase();
+    return message.includes("reserveaddress")
+      || message.includes("reserve nao encontrada")
+      || message.includes("reserva nao encontrada")
+      || message.includes("reserva ausente")
+      || message.includes("reserve not found")
+      || message.includes("reserve missing");
+  }
+
   private scheduleKaminoRepayRetry(
     state: KaminoCycleState,
     reason: string,
@@ -4618,6 +4630,29 @@ export class OrcaBot {
     if (!candidates.length) {
       return { performed: false, debtAmount: input.debtAmount, onChainDeposits: input.onChainDeposits };
     }
+    const totalCandidates = candidates.length;
+    const unsupportedMints = new Set<string>();
+    const reserveMissingMints = new Set<string>();
+    const supportsCache = new Map<string, boolean>();
+    const isSupported = async (mint: string): Promise<boolean> => {
+      if (supportsCache.has(mint)) {
+        return supportsCache.get(mint) as boolean;
+      }
+      let supported = false;
+      try {
+        supported = await input.kamino.supportsCollateral(mint);
+      } catch (err) {
+        reserveMissingMints.add(mint);
+        this.queueKaminoLog(
+          "repay-with-collateral",
+          `Falha ao validar colateral ${mint}; ignorando por ora.`,
+          "warn"
+        );
+        supported = false;
+      }
+      supportsCache.set(mint, supported);
+      return supported;
+    };
     const epsilon = 1e-8;
     let lastQuoteError: string | null = null;
     let onChainDeposits = new Map(input.onChainDeposits);
@@ -4663,6 +4698,16 @@ export class OrcaBot {
           this.queueKaminoLog(
             "repay-with-collateral",
             `Token ${candidate.mint} nao permitido para swap; ignorando colateral.`,
+            "warn"
+          );
+          continue;
+        }
+        const supported = await isSupported(candidate.mint);
+        if (!supported) {
+          unsupportedMints.add(candidate.mint);
+          this.queueKaminoLog(
+            "repay-with-collateral",
+            `Colateral ${candidate.mint} nao suportado no market; ignorando.`,
             "warn"
           );
           continue;
@@ -4821,6 +4866,15 @@ export class OrcaBot {
           this.kaminoHealth.recordError(err, "kamino-repay-with-collateral");
           const message = stringifyError(err);
           lastFailure = message;
+          if (this.isKaminoReserveMissingError(err)) {
+            reserveMissingMints.add(candidate.mint);
+            this.queueKaminoLog(
+              "repay-with-collateral",
+              `Reserve ausente para ${candidate.mint}; ignorando colateral.`,
+              "warn"
+            );
+            continue;
+          }
           const lower = message.toLowerCase();
           if (lower.includes("0x1553") || lower.includes("sqrtprice")) {
             this.queueKaminoLog(
@@ -4918,6 +4972,22 @@ export class OrcaBot {
       }
     }
 
+    const skippedCount = reserveMissingMints.size + unsupportedMints.size;
+    if (!performed && totalCandidates > 0 && skippedCount >= totalCandidates) {
+      const shouldOverride = !lastFailure || lastFailure.toLowerCase().includes("nenhum colateral");
+      if (shouldOverride) {
+        const parts: string[] = [];
+        if (reserveMissingMints.size) {
+          parts.push(`reserva ausente: ${Array.from(reserveMissingMints).join(", ")}`);
+        }
+        if (unsupportedMints.size) {
+          parts.push(`nao suportado: ${Array.from(unsupportedMints).join(", ")}`);
+        }
+        const detail = parts.length ? parts.join("; ") : "colateral indisponivel";
+        lastFailure = `Colateral ignorado por market (${detail})`;
+      }
+    }
+
     if (lastQuoteError) {
       return {
         performed,
@@ -4934,7 +5004,7 @@ export class OrcaBot {
         debtAmount: debtRemaining,
         onChainDeposits,
         error: lastFailure,
-        retryable: this.isKaminoRetryableError(lastFailure)
+        retryable: this.isKaminoRetryableError(lastFailure) || this.isKaminoReserveMissingError(lastFailure)
       };
     }
 
@@ -5456,13 +5526,36 @@ export class OrcaBot {
 
       if (debtAmount > epsilon && stableBalance + epsilon < debtAmount) {
         const shortfall = debtAmount - stableBalance;
-        const candidates = collaterals
+        const rawCandidates = collaterals
           .map((entry) => ({
             mint: entry.mint,
             amount: Math.max(0, onChainDeposits.get(entry.mint) ?? 0),
             usd: entry.usd ?? null
           }))
           .filter((c) => c.mint && c.amount > 0 && c.mint !== stable.mint);
+        const candidates: typeof rawCandidates = [];
+        for (const candidate of rawCandidates) {
+          let supported = true;
+          try {
+            supported = await kamino.supportsCollateral(candidate.mint);
+          } catch (err) {
+            supported = false;
+            this.queueKaminoLog(
+              "repay-fallback",
+              `Falha ao validar colateral ${candidate.mint}; ignorando.`,
+              "warn"
+            );
+          }
+          if (!supported) {
+            this.queueKaminoLog(
+              "repay-fallback",
+              `Colateral ${candidate.mint} nao suportado no market; ignorando.`,
+              "warn"
+            );
+            continue;
+          }
+          candidates.push(candidate);
+        }
         if (candidates.length > 0) {
           candidates.sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0) || b.amount - a.amount);
           const pick = candidates[0];
@@ -5564,6 +5657,11 @@ export class OrcaBot {
               } catch (err) {
                 const msg = stringifyError(err);
                 const msgLower = msg.toLowerCase();
+                if (this.isKaminoReserveMissingError(msg)) {
+                  const wait = this.scheduleKaminoRepayRetry(state, msg, mode, debtAmount);
+                  if (wait) return false;
+                  break;
+                }
                 if (msgLower.includes("0x1553") || msgLower.includes("sqrtprice")) {
                   this.queueKaminoLog(
                     "sqrt-price-bounds",
@@ -8482,4 +8580,3 @@ function truncateJupiterError(value: string, max = 160): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max - 1)}...`;
 }
-
