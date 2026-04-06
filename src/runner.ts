@@ -239,6 +239,7 @@ export class BotRunner {
       return;
     }
     await this.loadHistoryIfNeeded();
+    this.bot.clearKaminoAutoCloseHold();
     this.running = true;
     await this.tickOnce();
     this.schedule();

@@ -430,6 +430,7 @@ export class OrcaBot {
   private lastRebalanceAt: number | null = null;
   private missingPositionSince: number | null = null;
   private nullPnlNoFeesTicks: number = 0;
+  private kaminoAutoCloseHold = false;
   private kaminoPoolOpenedAt: number | null = null;
   private onLowSol?: () => Promise<void>;
   private kaminoTooLargeSeen = false;
@@ -1102,20 +1103,22 @@ export class OrcaBot {
             `Tentando quitar divida Kamino (${pendingDebtWallet.toFixed(4)}) via colateral depositado.`,
             "warn"
           );
-          try {
-            const closed = await this.closeKaminoCycle("target");
-            if (closed) {
-              this.lastStatus.lastAction = "kamino-close";
-              this.lastStatus.positionRange = null;
-              this.lastStatus.positionMint = this.currentPositionMint;
-              return this.getStatus();
+          if (!this.isKaminoAutoCloseSuppressed()) {
+            try {
+              const closed = await this.closeKaminoCycle("target");
+              if (closed) {
+                this.lastStatus.lastAction = "kamino-close";
+                this.lastStatus.positionRange = null;
+                this.lastStatus.positionMint = this.currentPositionMint;
+                return this.getStatus();
+              }
+            } catch (err) {
+              this.queueKaminoLog(
+                "wait-funds",
+                `Falha ao fechar ciclo Kamino: ${err instanceof Error ? err.message : String(err)}. Aguardando proximo tick.`,
+                "warn"
+              );
             }
-          } catch (err) {
-            this.queueKaminoLog(
-              "wait-funds",
-              `Falha ao fechar ciclo Kamino: ${err instanceof Error ? err.message : String(err)}. Aguardando proximo tick.`,
-              "warn"
-            );
           }
           this.lastStatus.lastAction = "kamino-wait-funds";
           this.lastStatus.positionRange = null;
@@ -1137,20 +1140,22 @@ export class OrcaBot {
             `Tentando quitar divida Kamino (${pendingDebt.toFixed(4)}) para reabrir a pool.`,
             "warn"
           );
-          try {
-            const closed = await this.closeKaminoCycle("target");
-            if (closed) {
-              this.lastStatus.lastAction = "kamino-close";
-              this.lastStatus.positionRange = null;
-              this.lastStatus.positionMint = this.currentPositionMint;
-              return this.getStatus();
+          if (!this.isKaminoAutoCloseSuppressed()) {
+            try {
+              const closed = await this.closeKaminoCycle("target");
+              if (closed) {
+                this.lastStatus.lastAction = "kamino-close";
+                this.lastStatus.positionRange = null;
+                this.lastStatus.positionMint = this.currentPositionMint;
+                return this.getStatus();
+              }
+            } catch (err) {
+              this.queueKaminoLog(
+                "wait-funds",
+                `Falha ao fechar ciclo Kamino: ${err instanceof Error ? err.message : String(err)}. Aguardando proximo tick.`,
+                "warn"
+              );
             }
-          } catch (err) {
-            this.queueKaminoLog(
-              "wait-funds",
-              `Falha ao fechar ciclo Kamino: ${err instanceof Error ? err.message : String(err)}. Aguardando proximo tick.`,
-              "warn"
-            );
           }
           this.lastStatus.lastAction = "kamino-wait-funds";
           this.lastStatus.positionRange = null;
@@ -1359,6 +1364,8 @@ export class OrcaBot {
   }
 
   async closeActivePosition(): Promise<BotStatus> {
+    // Fechamento manual da posição não deve acionar auto-close do Kamino.
+    this.suppressKaminoAutoClose();
     this.lastStatus.running = true;
     this.lastStatus.eventPositionMint = null;
     this.lastStatus.eventPositionEntryUsd = null;
@@ -1407,6 +1414,25 @@ export class OrcaBot {
     this.lastStatus.positionMint = null;
     this.lastStatus.positionRange = null;
     return this.getStatus();
+  }
+
+  clearKaminoAutoCloseHold(): void {
+    this.kaminoAutoCloseHold = false;
+  }
+
+  private suppressKaminoAutoClose(): void {
+    if (!this.kaminoAutoCloseHold) {
+      this.kaminoAutoCloseHold = true;
+      this.queueKaminoLog(
+        "auto-close-suppressed",
+        "Auto-fechamento Kamino suprimido após fechamento manual da posição.",
+        "warn"
+      );
+    }
+  }
+
+  private isKaminoAutoCloseSuppressed(): boolean {
+    return this.kaminoAutoCloseHold;
   }
 
   setPoolMeta(meta: { id: string; name: string | null }): void {
@@ -3746,6 +3772,9 @@ export class OrcaBot {
               // Ainda em espera de retry — não chamar closeKaminoCycle agora
               return;
             }
+            if (this.isKaminoAutoCloseSuppressed()) {
+              return;
+            }
             try {
               await this.closeKaminoCycle("target");
             } catch (closeErr) {
@@ -3893,6 +3922,9 @@ export class OrcaBot {
         ? Date.parse(this.kaminoState.repayRetryUntil)
         : 0;
       if (Number.isFinite(retryAtRecover) && retryAtRecover > Date.now()) {
+        return;
+      }
+      if (this.isKaminoAutoCloseSuppressed()) {
         return;
       }
       try {
@@ -4521,6 +4553,9 @@ export class OrcaBot {
   private async maybeCloseKaminoCycle(currentPrice: number): Promise<boolean> {
     const state = this.kaminoState;
     if (!state || !state.active) {
+      return false;
+    }
+    if (this.isKaminoAutoCloseSuppressed()) {
       return false;
     }
     if (!this.isKaminoOwner(state)) {
