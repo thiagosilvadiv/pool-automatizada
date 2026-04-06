@@ -192,8 +192,8 @@ const KAMINO_ERROR_CODES: Record<string, string> = {
   "0x1780": "BorrowingDisabled - borrow desativado para este ativo",
   "0x1785": "ObligationBorrowsEmpty - obligation nao tem borrows (divida ja quitada on-chain)",
   "6021":  "ObligationBorrowsEmpty - obligation nao tem borrows (divida ja quitada on-chain)",
-  "0x1784": "ReserveStale - reserve desatualizado, reload necessario",
-  "6020": "ReserveStale - reserve desatualizado, reload necessario",
+  "0x1784": "ObligationDepositsEmpty - obligation nao tem deposits (colateral ja sacado)",
+  "6020": "ObligationDepositsEmpty - obligation nao tem deposits (colateral ja sacado)",
   "0x178a": "UtilizationTooHigh - utilizacao do mercado muito alta"
 };
 
@@ -257,6 +257,9 @@ export function isBlockhashError(err: any): boolean {
   // Se for ObligationBorrowsEmpty, NÃO classificar como blockhash.
   // O erro chega com código -32002 mas a causa real é semântica (divida zerada).
   if (isObligationBorrowsEmptyError(err)) return false;
+  // Se for ObligationDepositsEmpty, NÃO classificar como blockhash.
+  // O erro chega com código -32002 mas a causa real é semântica (colateral já sacado).
+  if (isObligationDepositsEmptyError(err)) return false;
   return (
     msg.includes("blockhash not found") ||
     msg.includes("blockhash expired") ||
@@ -292,6 +295,34 @@ export function isObligationBorrowsEmptyError(err: any): boolean {
     logsText.includes("obligation has no borrows") ||
     logsText.includes("0x1785") ||
     logsText.includes("error code: 6021")
+  );
+}
+
+/**
+ * Verifica se o erro é ObligationDepositsEmpty (código 6020 / 0x1784).
+ * Isso ocorre quando se tenta withdraw numa obligation sem depósitos.
+ * Deve ser tratado como "colateral já sacado on-chain", não como erro fatal nem blockhash.
+ */
+export function isObligationDepositsEmptyError(err: any): boolean {
+  const msg = String(err?.message ?? err).toLowerCase();
+  const logs: string[] = (err as any)?.__originalErr?.context?.logs
+    ?? (err as any)?.context?.logs
+    ?? (err as any)?.logs
+    ?? [];
+  const logsText = logs.join(" ").toLowerCase();
+  return (
+    msg.includes("obligationdepositsempty") ||
+    msg.includes("obligation deposits are empty") ||
+    msg.includes("obligation has no deposits") ||
+    msg.includes("has no deposits") ||
+    msg.includes("0x1784") ||
+    msg.includes("6020") ||
+    logsText.includes("obligationdepositsempty") ||
+    logsText.includes("obligation deposits are empty") ||
+    logsText.includes("obligation has no deposits") ||
+    logsText.includes("has no deposits") ||
+    logsText.includes("0x1784") ||
+    logsText.includes("error code: 6020")
   );
 }
 
@@ -596,6 +627,7 @@ class RealKaminoClient implements KaminoClient {
         const isBlockhash = isBlockhashError(err);
         const protocolError = parseKaminoProtocolError(err);
         const isObligationEmpty = isObligationBorrowsEmptyError(err);
+        const isObligationDepositsEmpty = isObligationDepositsEmptyError(err);
         if (isInvalidAccountInputError(err)) {
           this.invalidateMarket(true);
         }
@@ -610,13 +642,22 @@ class RealKaminoClient implements KaminoClient {
           isRateLimit: isRateLimitError(err),
           isInsufficientFunds: isInsufficientFundsError(err),
           isBlockhash,
-          isObligationBorrowsEmpty: isObligationEmpty
+          isObligationBorrowsEmpty: isObligationEmpty,
+          isObligationDepositsEmpty
         }, "kamino sendAction falhou");
         // ObligationBorrowsEmpty: divida ja quitada on-chain; nao fazer retry.
         if (isObligationEmpty) {
           logger.warn({ err: decoded, attempt }, "kamino tx falhou: ObligationBorrowsEmpty — divida ja zerada on-chain; abortando sem retry");
           const cleanErr = new Error("ObligationBorrowsEmpty: obligation has no borrows — divida ja quitada on-chain");
           (cleanErr as any).__obligationBorrowsEmpty = true;
+          (cleanErr as any).__originalErr = err;
+          throw cleanErr;
+        }
+        // ObligationDepositsEmpty: colateral já sacado on-chain; nao fazer retry.
+        if (isObligationDepositsEmpty) {
+          logger.warn({ err: decoded, attempt }, "kamino tx falhou: ObligationDepositsEmpty — colateral ja sacado on-chain; abortando sem retry");
+          const cleanErr = new Error("ObligationDepositsEmpty: obligation has no deposits — colateral ja sacado on-chain");
+          (cleanErr as any).__obligationDepositsEmpty = true;
           (cleanErr as any).__originalErr = err;
           throw cleanErr;
         }

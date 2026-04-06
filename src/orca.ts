@@ -27,7 +27,7 @@ import type { KaminoCollateralEntry, KaminoCycleState } from "./kamino-types.js"
 import { KaminoHealthMonitor } from "./kamino-health.js";
 import { notifyKaminoFundsNeeded } from "./evolution-notify.js";
 import type { KaminoPositionState, KaminoWithdrawResult } from "./kamino-client.js";
-import { isObligationBorrowsEmptyError } from "./kamino-client.js";
+import { isObligationBorrowsEmptyError, isObligationDepositsEmptyError } from "./kamino-client.js";
 import { BalanceCoordinator } from "./balance-coordinator.js";
 
 const whirlpools = whirlpoolsSdk as any;
@@ -591,6 +591,8 @@ export class OrcaBot {
     if (this.isRateLimitError(err)) return true;
     // ObligationBorrowsEmpty nunca é retryable — é um estado semântico (dívida zerada).
     if ((err as any).__obligationBorrowsEmpty || isObligationBorrowsEmptyError(err)) return false;
+    // ObligationDepositsEmpty nunca é retryable — é um estado semântico (colateral já sacado).
+    if ((err as any).__obligationDepositsEmpty || isObligationDepositsEmptyError(err)) return false;
     if (this.isKaminoNetValueTooSmallError(err)) return false;
     const message = String(err?.message ?? err).toLowerCase();
     // Verifica erro original embutido (quando sendAction encapsula 0x1 em retryable)
@@ -801,6 +803,10 @@ export class OrcaBot {
         lastErr = err;
         // ObligationBorrowsEmpty: dívida já zerada on-chain; não fazer retry.
         if ((err as any).__obligationBorrowsEmpty) {
+          throw err;
+        }
+        // ObligationDepositsEmpty: colateral já sacado on-chain; não fazer retry.
+        if ((err as any).__obligationDepositsEmpty) {
           throw err;
         }
         if (this.isRateLimitError(err)) {
@@ -6313,6 +6319,8 @@ export class OrcaBot {
           // ou saque parcial do 0x17cc) já esvaziou os depósitos.
           // Tratar como sucesso silencioso — não há nada a sacar, o fechamento pode continuar.
           if (
+            (err as any).__obligationDepositsEmpty ||
+            isObligationDepositsEmptyError(err) ||
             msgLower.includes("0x1784") ||
             msgLower.includes("obligationdepositsempty") ||
             msgLower.includes("obligation deposits are empty") ||
@@ -6665,6 +6673,8 @@ export class OrcaBot {
         const msgLower = msg.toLowerCase();
         // Obrigação já vazia on-chain (outro retry ou tx anterior confirmada) → ok
         if (
+          (withdrawErr as any).__obligationDepositsEmpty ||
+          isObligationDepositsEmptyError(withdrawErr) ||
           msgLower.includes("0x1784") ||
           msgLower.includes("obligationdepositsempty") ||
           msgLower.includes("has no deposits") ||
