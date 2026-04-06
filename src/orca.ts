@@ -1658,9 +1658,10 @@ export class OrcaBot {
         if (pnl != null && Number.isFinite(pnl) && pnl < 0) return Math.abs(pnl);
         return 0;
       })();
-      const lossAdjPct = (avgPriceUsdc != null && nextUsd > 0 && poolLossUsd > 0)
+      const lossAdjPctRaw = (avgPriceUsdc != null && nextUsd > 0 && poolLossUsd > 0)
         ? (poolLossUsd / nextUsd) * 100
         : 0;
+      const lossAdjPct = this.config.kaminoIncludePoolLossInTarget ? lossAdjPctRaw : 0;
       const targetPriceUsdc = avgPriceUsdc != null
         ? avgPriceUsdc * (1 + ((this.config.kaminoPriceBufferPct ?? 0) + lossAdjPct) / 100)
         : null;
@@ -1948,6 +1949,14 @@ export class OrcaBot {
     this.lastStatus.lastOpenTokenA = requiredA;
     this.lastStatus.lastOpenTokenB = requiredB;
 
+    let prePositionAmounts: { tokenA: number; tokenB: number } | null = null;
+    try {
+      const snapshot = await this.getPositionTokenAmounts(this.currentPosition);
+      prePositionAmounts = { tokenA: snapshot.tokenA, tokenB: snapshot.tokenB };
+    } catch (err) {
+      logger.warn({ err }, "failed to capture position amounts before add-liquidity");
+    }
+
     try {
       await this.increasePositionLiquidity(this.currentPosition, quote);
     } catch (err) {
@@ -1964,10 +1973,28 @@ export class OrcaBot {
       const solUsd = solUsdPrice ?? null;
       let addedUsd: number | null = null;
       if (solUsd != null && this.poolState) {
-        if (this.poolState.isTokenBSol) {
-          addedUsd = (requiredB + requiredA * price) * solUsd;
-        } else if (this.poolState.isTokenASol) {
-          addedUsd = (requiredA + requiredB / price) * solUsd;
+        if (prePositionAmounts) {
+          try {
+            const postSnapshot = await this.getPositionTokenAmounts(this.currentPosition);
+            const deltaA = Math.max(0, postSnapshot.tokenA - prePositionAmounts.tokenA);
+            const deltaB = Math.max(0, postSnapshot.tokenB - prePositionAmounts.tokenB);
+            if (deltaA > 0 || deltaB > 0) {
+              if (this.poolState.isTokenBSol) {
+                addedUsd = (deltaB + deltaA * price) * solUsd;
+              } else if (this.poolState.isTokenASol) {
+                addedUsd = (deltaA + deltaB / price) * solUsd;
+              }
+            }
+          } catch (err) {
+            logger.warn({ err }, "failed to compute position delta for add-liquidity");
+          }
+        }
+        if (addedUsd == null) {
+          if (this.poolState.isTokenBSol) {
+            addedUsd = (requiredB + requiredA * price) * solUsd;
+          } else if (this.poolState.isTokenASol) {
+            addedUsd = (requiredA + requiredB / price) * solUsd;
+          }
         }
       }
       if (addedUsd != null && Number.isFinite(addedUsd) && addedUsd > 0) {
@@ -3040,9 +3067,10 @@ export class OrcaBot {
       return 0;
     })();
     const totalUsdForLoss = collaterals.reduce((sum, item) => sum + (Number(item.usd ?? 0) || 0), 0);
-    const lossAdjPct = totalUsdForLoss > 0 && poolLossUsd > 0
+    const lossAdjPctRaw = totalUsdForLoss > 0 && poolLossUsd > 0
       ? (poolLossUsd / totalUsdForLoss) * 100
       : 0;
+    const lossAdjPct = this.config.kaminoIncludePoolLossInTarget ? lossAdjPctRaw : 0;
     const bufferPct = Number(this.config.kaminoPriceBufferPct ?? 0) || 0;
     collaterals = collaterals.map((item) => {
       const amount = Number(item.amount ?? 0);
@@ -3670,9 +3698,10 @@ export class OrcaBot {
         return 0;
       })();
       const totalUsdForLoss = existingCollaterals.reduce((sum, item) => sum + (Number(item.usd ?? 0) || 0), 0);
-      const lossAdjPct = totalUsdForLoss > 0 && poolLossUsd > 0
+      const lossAdjPctRaw = totalUsdForLoss > 0 && poolLossUsd > 0
         ? (poolLossUsd / totalUsdForLoss) * 100
         : 0;
+      const lossAdjPct = this.config.kaminoIncludePoolLossInTarget ? lossAdjPctRaw : 0;
       const bufferPct = Number(this.config.kaminoPriceBufferPct ?? 0) || 0;
       const priceRecovered = async (mint: string | null | undefined, amount: number | null | undefined, prev?: KaminoCollateralEntry) => {
         const safeMint = mint ?? "";
@@ -4049,9 +4078,10 @@ export class OrcaBot {
       return 0;
     })();
     const totalUsdForLoss = collaterals.reduce((sum, item) => sum + (Number(item.usd ?? 0) || 0), 0);
-    const lossAdjPct = totalUsdForLoss > 0 && poolLossUsd > 0
+    const lossAdjPctRaw = totalUsdForLoss > 0 && poolLossUsd > 0
       ? (poolLossUsd / totalUsdForLoss) * 100
       : 0;
+    const lossAdjPct = this.config.kaminoIncludePoolLossInTarget ? lossAdjPctRaw : 0;
     let changed = false;
     const nextCollaterals = collaterals.map((entry) => {
       const avg = entry.avgPriceUsdc;
@@ -7127,9 +7157,10 @@ export class OrcaBot {
           return "kamino-rebalance-failed";
         }
         const poolLossUsdForEntry = poolLossUsd * share;
-        const lossAdjPct = (avgPriceUsdc != null && nextUsd > 0 && poolLossUsdForEntry > 0)
+        const lossAdjPctRaw = (avgPriceUsdc != null && nextUsd > 0 && poolLossUsdForEntry > 0)
           ? (poolLossUsdForEntry / nextUsd) * 100
           : 0;
+        const lossAdjPct = this.config.kaminoIncludePoolLossInTarget ? lossAdjPctRaw : 0;
         const targetPriceUsdc = avgPriceUsdc != null
           ? avgPriceUsdc * (1 + ((this.config.kaminoPriceBufferPct ?? 0) + lossAdjPct) / 100)
           : null;

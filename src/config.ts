@@ -47,6 +47,7 @@ export type Config = {
   kaminoMaxLtv: number;
   kaminoCloseRule: "avg-price" | "breakeven" | "manual";
   kaminoPriceBufferPct: number;
+  kaminoIncludePoolLossInTarget: boolean;
   kaminoMinCombinedPnlUsd: number;
   kaminoCollateralMode: "exit" | "max-value" | "tokenA" | "tokenB" | "both";
   kaminoAutoCloseOnTokenChange: boolean;
@@ -621,6 +622,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? "avg-price",
     kaminoPriceBufferPct: parseEnvNumber(process.env.KAMINO_PRICE_BUFFER_PCT)
       ?? Number((data as any).kaminoPriceBufferPct ?? 0.5),
+    kaminoIncludePoolLossInTarget: parseEnvBool(process.env.KAMINO_INCLUDE_POOL_LOSS_IN_TARGET)
+      ?? Boolean((data as any).kaminoIncludePoolLossInTarget ?? false),
     kaminoMinCombinedPnlUsd: envKaminoMinCombinedPnlUsd
       ?? Number((data as any).kaminoMinCombinedPnlUsd ?? 0),
     kaminoCollateralMode: envKaminoCollateralMode
@@ -823,6 +826,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.kaminoPriceBufferPct) || config.kaminoPriceBufferPct < 0) {
     throw new Error("kaminoPriceBufferPct must be >= 0");
+  }
+  if (typeof config.kaminoIncludePoolLossInTarget !== "boolean") {
+    throw new Error("kaminoIncludePoolLossInTarget must be boolean");
   }
   if (!Number.isFinite(config.kaminoMinCombinedPnlUsd)) {
     throw new Error("kaminoMinCombinedPnlUsd must be a number");

@@ -68,6 +68,7 @@ export type PoolOverrides = {
   kaminoMaxLtv?: number;
   kaminoCloseRule?: "avg-price" | "breakeven" | "manual";
   kaminoPriceBufferPct?: number;
+  kaminoIncludePoolLossInTarget?: boolean;
   kaminoCollateralMode?: "exit" | "max-value" | "tokenA" | "tokenB" | "both";
   kaminoAutoCloseOnTokenChange?: boolean;
   kaminoConvertToCollateral?: boolean;
@@ -1548,6 +1549,24 @@ export class PoolManager {
       normalized.kaminoPriceBufferPct = value;
     }
 
+    if (overrides.kaminoIncludePoolLossInTarget != null) {
+      const raw = overrides.kaminoIncludePoolLossInTarget as unknown;
+      if (typeof raw === "boolean") {
+        normalized.kaminoIncludePoolLossInTarget = raw;
+      } else if (typeof raw === "string") {
+        const value = raw.trim().toLowerCase();
+        if (["1", "true", "yes", "on"].includes(value)) {
+          normalized.kaminoIncludePoolLossInTarget = true;
+        } else if (["0", "false", "no", "off"].includes(value)) {
+          normalized.kaminoIncludePoolLossInTarget = false;
+        } else {
+          throw new Error("kaminoIncludePoolLossInTarget override must be boolean");
+        }
+      } else {
+        throw new Error("kaminoIncludePoolLossInTarget override must be boolean");
+      }
+    }
+
     if (overrides.kaminoCollateralMode != null) {
       const value = String(overrides.kaminoCollateralMode).trim().toLowerCase();
       if (!["exit", "max-value", "both", "dual", "tokena", "tokenb", "token_a", "token_b"].includes(value)) {
@@ -1957,6 +1976,28 @@ export class PoolManager {
           throw new Error("kaminoPriceBufferPct override must be >= 0");
         }
         next.kaminoPriceBufferPct = value;
+      }
+    }
+
+    if ("kaminoIncludePoolLossInTarget" in updates) {
+      if (updates.kaminoIncludePoolLossInTarget == null) {
+        delete next.kaminoIncludePoolLossInTarget;
+      } else {
+        const raw = updates.kaminoIncludePoolLossInTarget as unknown;
+        if (typeof raw === "boolean") {
+          next.kaminoIncludePoolLossInTarget = raw;
+        } else if (typeof raw === "string") {
+          const value = raw.trim().toLowerCase();
+          if (["1", "true", "yes", "on"].includes(value)) {
+            next.kaminoIncludePoolLossInTarget = true;
+          } else if (["0", "false", "no", "off"].includes(value)) {
+            next.kaminoIncludePoolLossInTarget = false;
+          } else {
+            throw new Error("kaminoIncludePoolLossInTarget override must be boolean");
+          }
+        } else {
+          throw new Error("kaminoIncludePoolLossInTarget override must be boolean");
+        }
       }
     }
 

@@ -497,6 +497,7 @@ export async function startServer(config: Config): Promise<void> {
       kaminoMaxLtv: config.kaminoMaxLtv,
       kaminoCloseRule: config.kaminoCloseRule,
       kaminoPriceBufferPct: config.kaminoPriceBufferPct,
+      kaminoIncludePoolLossInTarget: config.kaminoIncludePoolLossInTarget,
       kaminoMinCombinedPnlUsd: config.kaminoMinCombinedPnlUsd,
       kaminoCollateralMode: config.kaminoCollateralMode,
       kaminoAutoCloseOnTokenChange: config.kaminoAutoCloseOnTokenChange,
