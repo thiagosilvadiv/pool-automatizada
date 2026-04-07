@@ -242,7 +242,13 @@ export class PoolManager {
   }
 
   listPools(): PoolEntry[] {
-    return [...this.entries];
+    if (this.entries.length > 0) {
+      return [...this.entries];
+    }
+    if (this.pools.size > 0) {
+      return Array.from(this.pools.values()).map((record) => record.entry);
+    }
+    return [];
   }
 
   async listSummaries(): Promise<PoolSummary[]> {

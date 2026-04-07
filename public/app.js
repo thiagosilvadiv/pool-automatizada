@@ -1506,7 +1506,10 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
   if (status) cachedStatus = status;
   if (config) cachedConfig = config;
   const normalizedPools = normalizePoolsResponse(pools);
-  if (normalizedPools) cachedPoolsResponse = normalizedPools;
+  if (normalizedPools && Array.isArray(normalizedPools.pools) && normalizedPools.pools.length > 0) {
+    cachedPoolsResponse = normalizedPools;
+    cachedPools = normalizedPools.pools;
+  }
   if (Array.isArray(kaminoLogs)) {
     cachedKaminoLogs = kaminoLogs;
   }
@@ -1712,17 +1715,20 @@ async function updateUI() {
     ?? (Array.isArray(cachedPools) ? { pools: cachedPools } : null);
   const kaminoLogs = kaminoLogsResult.status === "fulfilled" ? kaminoLogsResult.value : cachedKaminoLogs;
 
-  if (pools) {
+  if (pools && Array.isArray(pools.pools) && pools.pools.length > 0) {
     cachedPoolsResponse = pools;
-    if (Array.isArray(pools.pools)) {
-      cachedPools = pools.pools;
-    }
+    cachedPools = pools.pools;
   }
 
-  if (status && config && pools) {
-    renderUiSnapshot(status, config, history, pools, kaminoLogs);
-  } else if (pools) {
-    renderPools(pools, config ?? cachedConfig ?? {});
+  const poolsForRender = pools
+    ?? (config && (config.poolName || config.whirlpoolAddress) ? { pools: [] } : null);
+
+  if (status && config && poolsForRender) {
+    renderUiSnapshot(status, config, history, poolsForRender, kaminoLogs);
+  } else if (poolsForRender) {
+    renderPools(poolsForRender, config ?? cachedConfig ?? {});
+  } else if (config) {
+    renderPools([], config);
   }
 
   if (uiErrorCount >= UI_ERROR_LIMIT) {
