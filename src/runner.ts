@@ -254,6 +254,9 @@ export class BotRunner {
   }
 
   async closePositionNow(): Promise<RunnerStatus> {
+    // Ao solicitar fechamento manual da posição, bloquear auto-close do Kamino
+    // para evitar que o empréstimo seja fechado junto.
+    this.bot.suppressKaminoAutoClose();
     if (this.inFlight) {
       this.pendingClose = true;
       this.pendingCloseMode = "manual";

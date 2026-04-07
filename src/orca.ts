@@ -1483,7 +1483,7 @@ export class OrcaBot {
     this.kaminoAutoCloseHold = false;
   }
 
-  private suppressKaminoAutoClose(): void {
+  public suppressKaminoAutoClose(): void {
     if (!this.kaminoAutoCloseHold) {
       this.kaminoAutoCloseHold = true;
       this.queueKaminoLog(
@@ -6556,6 +6556,8 @@ export class OrcaBot {
     this.releaseKaminoLockIfOwned();
     this.queueKaminoLog("close", "Ciclo Kamino fechado (repay + withdraw).", "info");
     logger.info({ mode }, "kamino cycle closed");
+    // Fechamento completo libera o bloqueio de auto-close para ciclos futuros.
+    this.clearKaminoAutoCloseHold();
     return true;
   }
 
