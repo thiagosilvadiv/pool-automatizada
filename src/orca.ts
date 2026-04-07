@@ -8622,6 +8622,14 @@ export class OrcaBot {
       }
     ];
 
+    const swapPlans: Array<{
+      token: { mint: string; decimals: number; uiAmount: number };
+      amountRaw: string;
+      quote: any;
+      outUsd: number;
+    }> = [];
+    let totalOutUsd = 0;
+
     for (const token of candidates) {
       if (!Number.isFinite(token.uiAmount) || token.uiAmount <= 0) {
         continue;
@@ -8657,40 +8665,47 @@ export class OrcaBot {
       if (!quote) {
         continue;
       }
-      // Guard: verifica se o retorno bruto do swap cobre o mínimo configurado.
-      // outAmount do Jupiter para USDC/USDT já é em decimais do token (6 casas).
-      // Para outros tokens, usa o preço SOL/USD como referência se disponível.
-      const minUsd = Number(this.config.autoSwapFeesToUsdcMinUsd ?? 0);
-      if (minUsd > 0) {
-        const rawOut = Number(quote.outAmount ?? 0);
-        if (rawOut <= 0) {
-          logger.info(
-            { mint: token.mint, minUsd },
-            "swap-fees-to-usdc skipped: outAmount zero"
-          );
-          continue;
-        }
-        // Tenta estimar o valor em USD do retorno.
-        // Se o outputMint for USDC/USDT (6 decimais), a conversão é direta.
-        // Para outros casos, usa 6 decimais como aproximação conservadora.
-        const outDecimals = targetMint === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-          || targetMint === "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
-          ? 6
-          : 6; // fallback conservador — ajuste se usar outro token alvo
-        const outUsd = rawOut / Math.pow(10, outDecimals);
-        if (outUsd < minUsd) {
-          logger.info(
-            { mint: token.mint, outUsd: outUsd.toFixed(4), minUsd },
-            "swap-fees-to-usdc skipped: retorno abaixo do minimo configurado"
-          );
-          continue;
-        }
+      const rawOut = Number(quote.outAmount ?? 0);
+      if (rawOut <= 0) {
+        logger.info(
+          { mint: token.mint, outMint: targetMint },
+          "swap-fees-to-usdc skipped: outAmount zero"
+        );
+        continue;
       }
+      // Tenta estimar o valor em USD do retorno.
+      // Se o outputMint for USDC/USDT (6 decimais), a conversão é direta.
+      // Para outros casos, usa 6 decimais como aproximação conservadora.
+      const outDecimals = targetMint === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        || targetMint === "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
+        ? 6
+        : 6; // fallback conservador — ajuste se usar outro token alvo
+      const outUsd = rawOut / Math.pow(10, outDecimals);
+      if (!Number.isFinite(outUsd) || outUsd <= 0) {
+        continue;
+      }
+      swapPlans.push({ token, amountRaw, quote, outUsd });
+      totalOutUsd += outUsd;
+    }
 
-      const sig = await this.executeJupiterSwap(quote);
+    if (swapPlans.length === 0) {
+      return;
+    }
+
+    const minUsd = Number(this.config.autoSwapFeesToUsdcMinUsd ?? 0);
+    if (minUsd > 0 && totalOutUsd < minUsd) {
+      logger.info(
+        { totalOutUsd: totalOutUsd.toFixed(4), minUsd },
+        "swap-fees-to-usdc skipped: retorno total abaixo do minimo configurado"
+      );
+      return;
+    }
+
+    for (const plan of swapPlans) {
+      const sig = await this.executeJupiterSwap(plan.quote);
       if (sig) {
         logger.info(
-          { mint: token.mint, outMint: targetMint, amountRaw },
+          { mint: plan.token.mint, outMint: targetMint, amountRaw: plan.amountRaw },
           "swap-fees-to-usdc executed"
         );
       }
@@ -8721,6 +8736,13 @@ export class OrcaBot {
 
     const targetMint = (this.config.autoSwapFeesToUsdcTargetMint || "").trim();
     if (!targetMint) {
+      return;
+    }
+    if (targetMint === NATIVE_MINT.toBase58()) {
+      logger.info(
+        { targetMint },
+        "transfer-fees-to-dest-wallet skipped: target mint is native SOL"
+      );
       return;
     }
 

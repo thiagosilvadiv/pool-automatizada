@@ -1508,12 +1508,22 @@ export class BotRunner {
 
   private pushEvent(event: HistoryEvent): void {
     if (event.action === "close-position" && this.history.length > 0) {
-      const last = this.history[this.history.length - 1];
-      if (last?.action === "close-position" && last?.positionMint === event.positionMint) {
-        const lastTime = Date.parse(last.timestamp);
-        const nowTime = Date.parse(event.timestamp);
-        if (!Number.isNaN(lastTime) && !Number.isNaN(nowTime) && nowTime - lastTime < 120_000) {
-          return;
+      const closeMint = event.positionMint ?? null;
+      if (closeMint) {
+        for (let i = this.history.length - 1; i >= 0; i -= 1) {
+          const candidate = this.history[i];
+          if (candidate?.action === "close-position" && candidate?.positionMint === closeMint) {
+            return;
+          }
+        }
+      } else {
+        const last = this.history[this.history.length - 1];
+        if (last?.action === "close-position" && last?.positionMint === event.positionMint) {
+          const lastTime = Date.parse(last.timestamp);
+          const nowTime = Date.parse(event.timestamp);
+          if (!Number.isNaN(lastTime) && !Number.isNaN(nowTime) && nowTime - lastTime < 120_000) {
+            return;
+          }
         }
       }
     }
