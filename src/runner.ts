@@ -1102,7 +1102,15 @@ export class BotRunner {
     let mergedPositionPnlUsd = status.positionPnlUsd ?? null;
     let mergedPositionExitUsd: number | null = null;
 
-    if (action === "open-position") {
+    if (action === "kamino-reopen") {
+      // Reabertura Kamino não representa nova entrada de capital,
+      // então não deve registrar valor de entrada/pnl para não distorcer o histórico.
+      mergedPositionEntryUsd = null;
+      mergedPositionEntrySource = null;
+      mergedPositionFeesUsd = null;
+      mergedPositionPnlUsd = null;
+      mergedPositionExitUsd = null;
+    } else if (action === "open-position") {
       // Na abertura não há PnL real ainda. Zera para evitar que valores
       // residuais do fechamento anterior (ex: kaminoNetUsd) vaze para
       // os registros de Abertura e Monitorando seguintes.

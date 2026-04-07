@@ -6509,6 +6509,9 @@ export class OrcaBot {
     const closingCollateralUsd = (kaminoNetUsd != null && closingDebtUsd != null)
       ? kaminoNetUsd + closingDebtUsd
       : (Number.isFinite(Number(state.collateralUsd)) ? Number(state.collateralUsd) : null);
+    const closingEntryUsd = Number.isFinite(Number(state.collateralUsd))
+      ? Number(state.collateralUsd)
+      : (closingCollateralUsd ?? null);
     const closingAvgPriceUsdc = Number.isFinite(Number(state.avgPriceUsdc))
       ? Number(state.avgPriceUsdc)
       : (this.lastStatus.kaminoAvgPriceUsdc ?? null);
@@ -6538,7 +6541,7 @@ export class OrcaBot {
     if (!shouldSkipHistoryClose) {
       this.queueHistoryAction("kamino-close", {
         lastAction: "kamino-close",
-        positionEntryUsd: closingDebtUsd ?? null,
+        positionEntryUsd: closingEntryUsd,
         positionExitUsd: closingCollateralUsd ?? null,
         positionPnlUsd: combinedPnlUsd,
         positionFeesUsd: 0,
