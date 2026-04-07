@@ -453,6 +453,7 @@ export class OrcaBot {
   private stableMintCache = new Map<string, { mint: string; decimals: number }>();
   private lastSolBalanceFallback = false;
   private rateLimitUntil: number | null = null;
+  private rateLimitSource: string | null = null;
   private lastStatus: BotStatus = {
     running: false,
     lastAction: null,
@@ -562,6 +563,7 @@ export class OrcaBot {
       return true;
     }
     this.rateLimitUntil = null;
+    this.rateLimitSource = null;
     return false;
   }
 
@@ -573,10 +575,18 @@ export class OrcaBot {
     if (!this.rateLimitUntil || nextUntil > this.rateLimitUntil) {
       this.rateLimitUntil = nextUntil;
     }
+    if (source) {
+      this.rateLimitSource = source;
+    }
     const remaining = this.getRateLimitRemainingSec();
     const origin = source ? ` (${source})` : "";
     this.lastStatus.lastAction = "rate-limit-wait";
     this.lastStatus.lastError = `Rate limit detectado${origin}; aguardando ${remaining}s.`;
+  }
+
+  private isKaminoRateLimitActive(): boolean {
+    if (!this.rateLimitSource) return false;
+    return this.rateLimitSource.startsWith("kamino-");
   }
 
   private normalizeError(reason: string | null | undefined): string {
@@ -945,23 +955,31 @@ export class OrcaBot {
     this.lastStatus.eventPositionFeesUsd = null;
     this.lastStatus.eventPositionExitUsd = null;
     this.resetActionFee();
-    if (this.isRateLimited()) {
+    const rateLimited = this.isRateLimited();
+    const isKaminoRateLimit = rateLimited && this.isKaminoRateLimitActive();
+    if (rateLimited && !isKaminoRateLimit) {
       const remaining = this.getRateLimitRemainingSec();
       this.lastStatus.lastAction = "rate-limit-wait";
       this.lastStatus.lastError = `Rate limit ativo; aguardando ${remaining}s.`;
       return this.getStatus();
     }
-    await this.reconcileKaminoState();
-    this.syncKaminoStatus();
-    const health = this.lastStatus.kaminoHealth ?? this.getKaminoHealth();
-    this.lastStatus.kaminoHealth = health;
-    if (health.issues.length > 0) {
-      logger.warn(
-        { issues: health.issues, consecutiveErrors: health.consecutiveErrors },
-        "Problemas detectados no Kamino health monitor"
-      );
+    if (!isKaminoRateLimit) {
+      await this.reconcileKaminoState();
+      this.syncKaminoStatus();
+      const health = this.lastStatus.kaminoHealth ?? this.getKaminoHealth();
+      this.lastStatus.kaminoHealth = health;
+      if (health.issues.length > 0) {
+        logger.warn(
+          { issues: health.issues, consecutiveErrors: health.consecutiveErrors },
+          "Problemas detectados no Kamino health monitor"
+        );
+      }
+      await this.refreshKaminoCollateralMetrics();
+    } else {
+      const remaining = this.getRateLimitRemainingSec();
+      this.lastStatus.lastAction = "rate-limit-wait";
+      this.lastStatus.lastError = `Rate limit ativo (${this.rateLimitSource}); aguardando ${remaining}s.`;
     }
-    await this.refreshKaminoCollateralMetrics();
     await this.refreshPoolState();
     if (this.kaminoState?.repayRetryUntil) {
       const retryAt = Date.parse(this.kaminoState.repayRetryUntil);
@@ -1084,7 +1102,7 @@ export class OrcaBot {
       : null;
     await this.updatePortfolioSnapshot(price, solUsdPrice);
 
-    if (this.kaminoState?.active && this.config.kaminoCloseRule !== "manual") {
+    if (!isKaminoRateLimit && this.kaminoState?.active && this.config.kaminoCloseRule !== "manual") {
       const closed = await this.maybeCloseKaminoCycle(price);
       if (closed) {
         this.lastStatus.positionRange = null;
