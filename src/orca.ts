@@ -364,6 +364,7 @@ export type BotStatus = {
   kaminoAvgPriceUsdc: number | null;
   kaminoTargetPriceUsdc: number | null;
   kaminoCycleCount: number;
+  kaminoCycleOpenedAt: string | null;
   kaminoLastError: string | null;
   kaminoCollaterals: KaminoCollateralEntry[];
   kaminoSimulated: boolean;
@@ -512,8 +513,9 @@ export class OrcaBot {
   kaminoLtv: null,
     kaminoAvgPriceUsdc: null,
     kaminoTargetPriceUsdc: null,
-  kaminoCycleCount: 0,
-  kaminoLastError: null,
+    kaminoCycleCount: 0,
+    kaminoCycleOpenedAt: null,
+    kaminoLastError: null,
   kaminoCollaterals: [],
   kaminoSimulated: false,
   kaminoOwnerPoolId: null,
@@ -1168,7 +1170,7 @@ export class OrcaBot {
           );
           if (!this.isKaminoAutoCloseSuppressed()) {
             try {
-              const closed = await this.closeKaminoCycle("target");
+              const closed = await this.closeKaminoCycle("target", { closePool: false });
               if (closed) {
                 this.lastStatus.lastAction = "kamino-close";
                 this.lastStatus.positionRange = null;
@@ -1205,7 +1207,7 @@ export class OrcaBot {
           );
           if (!this.isKaminoAutoCloseSuppressed()) {
             try {
-              const closed = await this.closeKaminoCycle("target");
+              const closed = await this.closeKaminoCycle("target", { closePool: false });
               if (closed) {
                 this.lastStatus.lastAction = "kamino-close";
                 this.lastStatus.positionRange = null;
@@ -3017,7 +3019,15 @@ export class OrcaBot {
       };
     }
     if (state?.active) {
-      state = { ...state, lastSeenAt: new Date().toISOString() };
+      const previousOpenedAt = this.kaminoState?.openedAt ?? null;
+      const previousCycle = this.kaminoState?.cycleCount ?? null;
+      const nextCycle = state.cycleCount ?? null;
+      const sameCycle = Boolean(previousOpenedAt)
+        && previousCycle != null
+        && nextCycle != null
+        && previousCycle === nextCycle;
+      const openedAt = state.openedAt ?? (sameCycle ? previousOpenedAt : new Date().toISOString());
+      state = { ...state, openedAt, lastSeenAt: new Date().toISOString() };
     }
     const normalized = this.normalizeKaminoState(state);
     if (normalized?.active && this.poolId) {
@@ -3181,6 +3191,7 @@ export class OrcaBot {
       ownerPoolId: state.ownerPoolId ?? null,
       ownerPoolName: state.ownerPoolName ?? null,
       marketAddress: state.marketAddress ?? null,
+      openedAt: state.openedAt ?? null,
       lastSeenAt: state.lastSeenAt ?? null,
       repayRetryUntil: state.repayRetryUntil ?? null,
       repayRetryAttempts: Number.isFinite(Number(state.repayRetryAttempts ?? NaN))
@@ -3375,6 +3386,7 @@ export class OrcaBot {
       this.lastStatus.kaminoTargetPriceUsdc = null;
     }
     this.lastStatus.kaminoCycleCount = state?.cycleCount ?? 0;
+    this.lastStatus.kaminoCycleOpenedAt = state?.openedAt ?? null;
     const stateError = state?.lastError ?? null;
     const fallbackError = (!stateError && this.lastStatus.lastError && /kamino/i.test(this.lastStatus.lastError))
       ? this.lastStatus.lastError
@@ -3876,7 +3888,7 @@ export class OrcaBot {
               return;
             }
             try {
-              await this.closeKaminoCycle("target");
+              await this.closeKaminoCycle("target", { closePool: false });
             } catch (closeErr) {
               this.kaminoHealth.recordError(closeErr, "kamino-close");
               const msg = `Falha ao sacar colateral residual: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}.`;
@@ -4003,7 +4015,7 @@ export class OrcaBot {
       lastError: "Ciclo Kamino recuperado do market (sem historico).",
       entrySource: "reconstructed"
     };
-    this.kaminoState = this.normalizeKaminoState(nextState);
+    this.setKaminoState(nextState);
     this.queueKaminoLog(
       "recover",
       "Emprestimo Kamino recuperado do market; ciclo reconstruido automaticamente.",
@@ -4028,7 +4040,7 @@ export class OrcaBot {
         return;
       }
       try {
-        await this.closeKaminoCycle("target");
+        await this.closeKaminoCycle("target", { closePool: false });
       } catch (err) {
         this.kaminoHealth.recordError(err, "kamino-recover-withdraw");
         this.queueKaminoLog(
@@ -4744,7 +4756,7 @@ export class OrcaBot {
         "Divida zerada com colateral residual; sacando colateral automaticamente (independe do kaminoCloseRule).",
         "warn"
       );
-      const closed = await this.closeKaminoCycle("target");
+      const closed = await this.closeKaminoCycle("target", { closePool: false });
       if (closed) {
         this.lastStatus.lastAction = "kamino-close";
       }
@@ -4893,7 +4905,7 @@ export class OrcaBot {
           { rule, collaterals: collaterals.map((item) => item.mint) },
           "kamino target atingido (todos); fechando ciclo completo"
         );
-        const closed = await this.closeKaminoCycle("target");
+        const closed = await this.closeKaminoCycle("target", { closePool: false });
         if (closed) {
           this.lastStatus.lastAction = "kamino-close";
           return true;
@@ -5386,7 +5398,10 @@ export class OrcaBot {
     return { performed, debtAmount: debtRemaining, onChainDeposits };
   }
 
-  private async closeKaminoCycle(mode: "manual" | "target" | "token-change"): Promise<boolean> {
+  private async closeKaminoCycle(
+    mode: "manual" | "target" | "token-change",
+    options?: { closePool?: boolean }
+  ): Promise<boolean> {
     let state = this.kaminoState;
     if (!state || !state.active) {
       this.setError("Nenhum ciclo Kamino ativo");
@@ -5586,18 +5601,23 @@ export class OrcaBot {
       }
     }
 
-    await this.refreshPoolState();
-    if (this.currentPosition) {
-      this.captureCloseSnapshot();
-      await this.closePosition(this.currentPosition);
-      this.queueHistoryAction("close-position", { lastAction: "close-position" });
-      this.currentPosition = null;
-      this.currentPositionMint = null;
-      this.missingPositionSince = null;
-    }
-    await this.loadExistingPosition();
-    if (this.currentPosition) {
-      throw new Error("Fechamento falhou: posicao ainda aberta");
+    const shouldClosePool = options?.closePool ?? true;
+    let closedPool = false;
+    if (shouldClosePool) {
+      await this.refreshPoolState();
+      if (this.currentPosition) {
+        this.captureCloseSnapshot();
+        await this.closePosition(this.currentPosition);
+        this.queueHistoryAction("close-position", { lastAction: "close-position" });
+        this.currentPosition = null;
+        this.currentPositionMint = null;
+        this.missingPositionSince = null;
+        closedPool = true;
+      }
+      await this.loadExistingPosition();
+      if (this.currentPosition) {
+        throw new Error("Fechamento falhou: posicao ainda aberta");
+      }
     }
 
     const stable = debtMint
@@ -6475,11 +6495,16 @@ export class OrcaBot {
         kaminoNetUsd = fallbackCollateralUsd - fallbackDebtUsd;
       }
     }
+    const closingOpenedAt = state.openedAt
+      ?? (this.kaminoPoolOpenedAt != null
+        ? new Date(this.kaminoPoolOpenedAt).toISOString()
+        : null);
     const nextState: KaminoCycleState = {
       active: false,
       ownerPoolId: state.ownerPoolId ?? this.poolId ?? null,
       ownerPoolName: state.ownerPoolName ?? this.poolName ?? null,
       marketAddress: state.marketAddress ?? this.getKaminoMarketAddress(),
+      openedAt: closingOpenedAt,
       repayRetryUntil: null,
       repayRetryAttempts: 0,
       repayErrorStreak: 0,
@@ -6530,14 +6555,14 @@ export class OrcaBot {
     this.kaminoPoolOpenedAt = null;
     // Soma o PnL da pool encerrada ao kaminoNetUsd para refletir o
     // resultado real do ciclo (perda da pool + recuperação via Kamino).
-    const poolExitUsd = this.lastStatus.eventPositionExitUsd ?? null;
-    const poolEntryUsd = this.lastStatus.eventPositionEntryUsd ?? null;
+    const poolExitUsd = closedPool ? (this.lastStatus.eventPositionExitUsd ?? null) : null;
+    const poolEntryUsd = closedPool ? (this.lastStatus.eventPositionEntryUsd ?? null) : null;
     const poolPnlUsd = (poolExitUsd != null && poolEntryUsd != null)
       ? poolExitUsd - poolEntryUsd
       : null;
-    const combinedPnlUsd = (kaminoNetUsd != null && poolPnlUsd != null)
-      ? kaminoNetUsd + poolPnlUsd
-      : (kaminoNetUsd ?? poolPnlUsd);
+    const combinedPnlUsd = closedPool
+      ? ((kaminoNetUsd != null && poolPnlUsd != null) ? kaminoNetUsd + poolPnlUsd : (kaminoNetUsd ?? poolPnlUsd))
+      : kaminoNetUsd;
     if (!shouldSkipHistoryClose) {
       this.queueHistoryAction("kamino-close", {
         lastAction: "kamino-close",
@@ -6546,6 +6571,7 @@ export class OrcaBot {
         positionPnlUsd: combinedPnlUsd,
         positionFeesUsd: 0,
         lastActionFeeLamports: null,
+        kaminoCycleOpenedAt: closingOpenedAt,
         kaminoCollateralUsd: closingCollateralUsd,
         kaminoDebtUsd: closingDebtUsd,
         kaminoAvgPriceUsdc: closingAvgPriceUsdc,

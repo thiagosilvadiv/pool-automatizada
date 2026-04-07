@@ -1130,6 +1130,14 @@ export class BotRunner {
       if (mergedPositionExitUsd != null && mergedPositionEntryUsd != null) {
         mergedPositionPnlUsd = mergedPositionExitUsd - mergedPositionEntryUsd;
       }
+    } else if (action === "kamino-close") {
+      mergedPositionEntryUsd = status.positionEntryUsd ?? mergedPositionEntryUsd;
+      mergedPositionEntrySource = status.positionEntrySource ?? mergedPositionEntrySource;
+      mergedPositionFeesUsd = status.positionFeesUsd ?? mergedPositionFeesUsd;
+      mergedPositionExitUsd = status.positionExitUsd ?? null;
+      if (mergedPositionExitUsd != null && mergedPositionEntryUsd != null) {
+        mergedPositionPnlUsd = mergedPositionExitUsd - mergedPositionEntryUsd;
+      }
     } else if (action === "rebalanced" || action === "kamino-rebalanced") {
       mergedPositionExitUsd = eventPositionExitUsd ?? null;
     }
@@ -1392,6 +1400,13 @@ export class BotRunner {
     if (action === "close-position" && mergedPositionMint) {
       positionOpenedAt = this.openedAtByMint.get(mergedPositionMint) ?? positionOpenedAt;
     }
+    const cycleOpenedAt = status.kaminoCycleOpenedAt ?? null;
+    if (action === "kamino-borrow" && cycleOpenedAt) {
+      positionOpenedAt = cycleOpenedAt;
+    }
+    if (action === "kamino-close" && cycleOpenedAt) {
+      positionOpenedAt = cycleOpenedAt;
+    }
     if (action === "open-position" && mergedPositionMint && trendNow) {
       this.trendByMint.set(mergedPositionMint, trendNow);
     }
@@ -1399,20 +1414,26 @@ export class BotRunner {
     const eventTrend = this.resolveTrendForMint(mergedPositionMint, trendNow);
     const eventHedgeDecision = decisionForMint(mergedPositionMint);
     const isKaminoClose = action === "kamino-close";
-    const kaminoLoanPnlUsd = isKaminoClose
-      ? (status.kaminoCollateralUsd != null && status.kaminoDebtUsd != null
-        ? status.kaminoCollateralUsd - status.kaminoDebtUsd
-        : status.positionPnlUsd ?? null)
-      : null;
+    let kaminoLoanPnlUsd: number | null = null;
+    if (isKaminoClose) {
+      if (mergedPositionExitUsd != null && mergedPositionEntryUsd != null) {
+        kaminoLoanPnlUsd = mergedPositionExitUsd - mergedPositionEntryUsd;
+      } else if (status.kaminoCollateralUsd != null && status.kaminoDebtUsd != null) {
+        kaminoLoanPnlUsd = status.kaminoCollateralUsd - status.kaminoDebtUsd;
+      } else {
+        kaminoLoanPnlUsd = status.positionPnlUsd ?? null;
+      }
+      if (kaminoLoanPnlUsd != null && txFeeUsd != null) {
+        kaminoLoanPnlUsd -= txFeeUsd;
+      }
+    }
     const kaminoCollateralAvgPriceUsdc = isKaminoClose
       ? (status.kaminoAvgPriceUsdc ?? null)
       : null;
     const kaminoCollateralTargetPriceUsdc = isKaminoClose
       ? (status.kaminoTargetPriceUsdc ?? null)
       : null;
-    const kaminoCycleOpenedAt = isKaminoClose
-      ? (mergedPositionMint ? this.openedAtByMint.get(mergedPositionMint) ?? null : null)
-      : null;
+    const kaminoCycleOpenedAt = isKaminoClose ? (cycleOpenedAt ?? null) : null;
     if (action === "skip-low-sol-position") {
       const entryFallback = resolveEntryFallback(
         mergedPositionEntryUsd,
@@ -1427,7 +1448,7 @@ export class BotRunner {
       id: this.createEventId(timestamp),
       timestamp,
       positionOpenedAt,
-      positionClosedAt: action === "close-position" ? timestamp : null,
+      positionClosedAt: (action === "close-position" || isKaminoClose) ? timestamp : null,
       actionType,
       action,
       trendDirection: eventTrend,
