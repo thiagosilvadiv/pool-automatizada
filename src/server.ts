@@ -33,6 +33,8 @@ type PoolSummaryRouteService = Pick<
 >;
 
 export function registerPoolsSummaryRoute(app: Express, poolManager: PoolSummaryRouteService): void {
+  let lastPoolsSnapshot: PoolSummary[] | null = null;
+  let lastSelectedSnapshot: string | null = null;
   app.get("/api/pools", async (_req: Request, res: Response) => {
     const timeoutPromise = new Promise<PoolSummary[]>((_, reject) =>
       setTimeout(() => reject(new Error("listSummaries timeout")), 5000)
@@ -75,8 +77,15 @@ export function registerPoolsSummaryRoute(app: Express, poolManager: PoolSummary
         }));
       }
     }
+    if (pools.length === 0 && lastPoolsSnapshot && lastPoolsSnapshot.length > 0) {
+      pools = lastPoolsSnapshot;
+      error = error ?? "pools cached on server";
+    } else if (pools.length > 0) {
+      lastPoolsSnapshot = pools;
+      lastSelectedSnapshot = selectedPoolId;
+    }
     res.json({
-      selectedPoolId,
+      selectedPoolId: selectedPoolId ?? lastSelectedSnapshot ?? null,
       autoResume: poolManager.getAutoResumeStatus(),
       pools,
       error: error ?? undefined

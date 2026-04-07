@@ -127,6 +127,53 @@ class FilePoolsStore<T> implements PoolsStore<T> {
   }
 }
 
+class DualPoolsStore<T> implements PoolsStore<T> {
+  private key: string;
+  private fileStore: FilePoolsStore<T>;
+
+  constructor(key: string, filePath: string) {
+    this.key = key;
+    this.fileStore = new FilePoolsStore<T>(filePath);
+  }
+
+  async load(): Promise<PoolsState<T> | null> {
+    const client = await getRedisClient();
+    if (!client) {
+      return this.fileStore.load();
+    }
+    try {
+      const raw = await client.get(this.key);
+      if (raw) {
+        return JSON.parse(raw) as PoolsState<T>;
+      }
+    } catch (err) {
+      logger.warn({ err }, "failed to load pools from redis; falling back to file");
+    }
+    const fileState = await this.fileStore.load();
+    if (fileState) {
+      try {
+        await client.set(this.key, JSON.stringify(fileState));
+      } catch (err) {
+        logger.warn({ err }, "failed to restore pools into redis from file");
+      }
+    }
+    return fileState;
+  }
+
+  async save(state: PoolsState<T>): Promise<void> {
+    await this.fileStore.save(state);
+    const client = await getRedisClient();
+    if (!client) {
+      return;
+    }
+    try {
+      await client.set(this.key, JSON.stringify(state));
+    } catch (err) {
+      logger.warn({ err }, "failed to save pools to redis; file backup kept");
+    }
+  }
+}
+
 class RedisPoolsStore<T> implements PoolsStore<T> {
   private key: string;
   constructor(key: string) {
@@ -157,7 +204,8 @@ class RedisPoolsStore<T> implements PoolsStore<T> {
 export async function createPoolsStore<T>(): Promise<PoolsStore<T>> {
   const client = await getRedisClient();
   if (client) {
-    return new RedisPoolsStore<T>(getRedisKey("pools"));
+    const filePath = defaultHistoryFile("pools.json");
+    return new DualPoolsStore<T>(getRedisKey("pools"), filePath);
   }
   const filePath = defaultHistoryFile("pools.json");
   return new FilePoolsStore<T>(filePath);

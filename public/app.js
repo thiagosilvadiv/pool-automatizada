@@ -120,6 +120,7 @@ let uiErrorCount = 0;
 const UI_ERROR_LIMIT = 3;
 const POOLS_CACHE_KEY = "orcaPoolsCacheV1";
 let didAutoRestoreFromConfig = false;
+let didAutoRestoreFromCache = false;
 
 function loadPoolsCache() {
   try {
@@ -1411,6 +1412,10 @@ function renderPools(data, config) {
   if (pools.length === 0 && cachedFallback.length > 0) {
     pools = cachedFallback;
     fromCache = true;
+    if (!didAutoRestoreFromCache) {
+      didAutoRestoreFromCache = true;
+      restorePoolsFromCache();
+    }
   }
 
   // Fallback final: usar a pool selecionada do /api/config para nao zerar a tabela.
