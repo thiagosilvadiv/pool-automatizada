@@ -434,6 +434,8 @@ export class OrcaBot {
   private kaminoMissingCount = 0;
   private kaminoMissingSince: number | null = null;
   private kaminoPoolOpenedAt: number | null = null;
+  private lastKaminoCloseCycleCount: number | null = null;
+  private lastKaminoCloseAt: number | null = null;
   private onLowSol?: () => Promise<void>;
   private kaminoTooLargeSeen = false;
   private lastTrendPreferredExitToken: "tokenA" | "tokenB" | null = null;
@@ -1014,6 +1016,27 @@ export class OrcaBot {
         }
       }
       if (finalSol < this.config.minSolBalance) {
+        // Mesmo com SOL baixo, se o alvo do Kamino foi atingido,
+        // devemos tentar fechar o empréstimo (ignorar o mínimo).
+        if (this.kaminoState?.active && this.config.kaminoCloseRule !== "manual") {
+          try {
+            const priceForClose = await this.getCurrentPrice();
+            const closed = await this.maybeCloseKaminoCycle(priceForClose);
+            if (closed) {
+              this.lastStatus.lastAction = "kamino-close";
+              this.lastStatus.positionRange = null;
+              this.lastStatus.positionMint = this.currentPositionMint;
+              return this.getStatus();
+            }
+          } catch (err) {
+            this.kaminoHealth.recordError(err, "kamino-close");
+            this.queueKaminoLog(
+              "kamino-close-low-sol-failed",
+              `Falha ao tentar fechar Kamino com SOL baixo: ${err instanceof Error ? err.message : String(err)}`,
+              "error"
+            );
+          }
+        }
         logger.warn({ solBalance: finalSol, reason: topupResult.reason }, "SOL balance below minSolBalance; skipping");
         await this.loadExistingPosition();
         if (this.currentPosition) {
@@ -6475,6 +6498,13 @@ export class OrcaBot {
       ? Number(state.targetPriceUsdc)
       : (this.lastStatus.kaminoTargetPriceUsdc ?? null);
 
+    // Evita duplicar histórico de fechamento do mesmo ciclo.
+    const closeKey = Number(state.cycleCount ?? 0);
+    const now = Date.now();
+    const shouldSkipHistoryClose = this.lastKaminoCloseCycleCount === closeKey
+      && this.lastKaminoCloseAt != null
+      && (now - this.lastKaminoCloseAt) < 5 * 60 * 1000;
+
     this.setKaminoState(nextState);
     this.kaminoPoolOpenedAt = null;
     // Soma o PnL da pool encerrada ao kaminoNetUsd para refletir o
@@ -6487,16 +6517,24 @@ export class OrcaBot {
     const combinedPnlUsd = (kaminoNetUsd != null && poolPnlUsd != null)
       ? kaminoNetUsd + poolPnlUsd
       : (kaminoNetUsd ?? poolPnlUsd);
-    this.queueHistoryAction("kamino-close", {
-      lastAction: "kamino-close",
-      positionPnlUsd: combinedPnlUsd,
-      positionFeesUsd: 0,
-      lastActionFeeLamports: null,
-      kaminoCollateralUsd: closingCollateralUsd,
-      kaminoDebtUsd: closingDebtUsd,
-      kaminoAvgPriceUsdc: closingAvgPriceUsdc,
-      kaminoTargetPriceUsdc: closingTargetPriceUsdc
-    });
+    if (!shouldSkipHistoryClose) {
+      this.queueHistoryAction("kamino-close", {
+        lastAction: "kamino-close",
+        positionEntryUsd: closingDebtUsd ?? null,
+        positionExitUsd: closingCollateralUsd ?? null,
+        positionPnlUsd: combinedPnlUsd,
+        positionFeesUsd: 0,
+        lastActionFeeLamports: null,
+        kaminoCollateralUsd: closingCollateralUsd,
+        kaminoDebtUsd: closingDebtUsd,
+        kaminoAvgPriceUsdc: closingAvgPriceUsdc,
+        kaminoTargetPriceUsdc: closingTargetPriceUsdc
+      });
+      this.lastKaminoCloseCycleCount = closeKey;
+      this.lastKaminoCloseAt = now;
+    } else {
+      logger.warn({ closeKey }, "kamino-close duplicado ignorado no historico");
+    }
     this.releaseKaminoLockIfOwned();
     this.queueKaminoLog("close", "Ciclo Kamino fechado (repay + withdraw).", "info");
     logger.info({ mode }, "kamino cycle closed");

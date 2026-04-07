@@ -583,9 +583,13 @@ function buildHistoryCsv(items) {
     const hasPnl = Number.isFinite(pnlRaw);
     const feesRaw = Number(item.positionFeesUsd);
     const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
+    const entryUsd = Number(item.positionEntryUsd);
+    const exitUsd = Number(item.positionExitUsd);
+    const hasEntryExit = Number.isFinite(entryUsd) && Number.isFinite(exitUsd);
     const poolPnl = hasPnl ? pnlRaw : 0;
-    const pnlTotal = hasPnl ? poolPnl : null;
-    const pnlTotalNet = hasPnl ? poolPnl - fees : null;
+    const pnlFromEntry = hasEntryExit ? (exitUsd - entryUsd) : null;
+    const pnlTotal = isLoanClose ? (pnlFromEntry ?? (hasPnl ? poolPnl : null)) : (hasPnl ? poolPnl : null);
+    const pnlTotalNet = isLoanClose ? (pnlFromEntry ?? (hasPnl ? poolPnl : null)) : (hasPnl ? poolPnl - fees : null);
     return [
       formatTimestamp(item.timestamp),
       formatTimestamp(item.positionOpenedAt),
@@ -1254,9 +1258,13 @@ function renderHistory(items) {
     const hasPnl = Number.isFinite(pnlRaw);
     const feesRaw = Number(item.positionFeesUsd);
     const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
+    const entryUsd = Number(item.positionEntryUsd);
+    const exitUsd = Number(item.positionExitUsd);
+    const hasEntryExit = Number.isFinite(entryUsd) && Number.isFinite(exitUsd);
     const poolPnl = hasPnl ? pnlRaw : 0;
-    const pnlTotal = hasPnl ? poolPnl : null;
-    const pnlTotalNet = hasPnl ? poolPnl - fees : null;
+    const pnlFromEntry = hasEntryExit ? (exitUsd - entryUsd) : null;
+    const pnlTotal = isLoanClose ? (pnlFromEntry ?? (hasPnl ? poolPnl : null)) : (hasPnl ? poolPnl : null);
+    const pnlTotalNet = isLoanClose ? (pnlFromEntry ?? (hasPnl ? poolPnl : null)) : (hasPnl ? poolPnl - fees : null);
     const priceCell = renderEditableNumberCell(
       item.price,
       "price",
