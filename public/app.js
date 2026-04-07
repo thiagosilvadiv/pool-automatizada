@@ -119,6 +119,7 @@ let cachedPoolsResponse = null;
 let uiErrorCount = 0;
 const UI_ERROR_LIMIT = 3;
 const POOLS_CACHE_KEY = "orcaPoolsCacheV1";
+let didAutoRestoreFromConfig = false;
 
 function loadPoolsCache() {
   try {
@@ -173,6 +174,24 @@ async function restorePoolsFromCache() {
     }
   }
   updateUI();
+}
+
+async function restorePoolFromConfig(config) {
+  if (!config || !config.whirlpoolAddress) return;
+  const name = config.poolName ?? "Pool selecionada";
+  try {
+    await fetch("/api/pools", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        whirlpoolAddress: config.whirlpoolAddress,
+        overrides: null
+      })
+    });
+  } catch (err) {
+    // ignore
+  }
 }
 
 const cachedPoolsLocal = loadPoolsCache();
@@ -1378,6 +1397,7 @@ function renderPools(data, config) {
   const cachedFallback = normalizePoolsResponse(cachedPoolsResponse)?.pools
     ?? (Array.isArray(cachedPools) ? cachedPools : []);
   let fromCache = false;
+  const canUseConfigFallback = Boolean(config && (config.poolName || config.whirlpoolAddress));
 
   if (hasError && poolError) {
     poolError.textContent = errorMsg || "Falha ao carregar pools.";
@@ -1394,7 +1414,7 @@ function renderPools(data, config) {
   }
 
   // Fallback final: usar a pool selecionada do /api/config para nao zerar a tabela.
-  if (!pools.length && config && (config.poolName || config.whirlpoolAddress)) {
+  if (!pools.length && canUseConfigFallback) {
     pools = [
       {
         id: config.selectedPoolId ?? "selected",
@@ -1410,6 +1430,10 @@ function renderPools(data, config) {
       }
     ];
     fromCache = true;
+    if (!didAutoRestoreFromConfig) {
+      didAutoRestoreFromConfig = true;
+      restorePoolFromConfig(config);
+    }
   }
 
   if (pools.length > 0) {
