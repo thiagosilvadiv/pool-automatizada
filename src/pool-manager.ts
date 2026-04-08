@@ -41,6 +41,20 @@ function isRateLimitError(err: unknown): boolean {
     || message.includes("too many requests")
     || message.includes("429");
 }
+
+function isFatalStartupErrorMessage(message: string): boolean {
+  const text = String(message ?? "").toLowerCase();
+  return text.includes("tokeninvalidaccountownererror")
+    || text.includes("accountownererror")
+    || text.includes("invalid account owner");
+}
+
+function normalizeStartupErrorMessage(raw: string): string {
+  if (isFatalStartupErrorMessage(raw)) {
+    return "Whirlpool/token incompatível: o endereço informado não parece uma Orca Whirlpool válida para este bot (mint owner inválido).";
+  }
+  return raw;
+}
 export type PoolEntry = {
   id: string;
   name: string;
@@ -1073,6 +1087,14 @@ export class PoolManager {
       return;
     }
     await record.runner.start();
+    const startedStatus = record.runner.getStatus();
+    const startupError = (startedStatus.lastError ?? "").trim();
+    if (!startedStatus.lastTickAt && startupError && isFatalStartupErrorMessage(startupError)) {
+      record.runner.stop();
+      this.balanceCoordinator.clearPool(id);
+      this.clearResumeTracking(id);
+      throw new Error(normalizeStartupErrorMessage(startupError));
+    }
     const shouldPersist = options.persistState && !this.activePoolIds.has(id);
     this.activePoolIds.add(id);
     this.clearResumeTracking(id);
