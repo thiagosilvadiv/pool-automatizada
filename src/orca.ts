@@ -2166,18 +2166,35 @@ export class OrcaBot {
       ? new PublicKey(poolData.tokenProgramB)
       : TOKEN_PROGRAM_ID;
 
-    const [mintA, mintB] = await Promise.all([
+    const [mintAResult, mintBResult] = await Promise.all([
       this.getMintWithProgramFallback(tokenMintA, tokenProgramA),
       this.getMintWithProgramFallback(tokenMintB, tokenProgramB)
     ]);
+    const resolvedProgramA = mintAResult.programId;
+    const resolvedProgramB = mintBResult.programId;
+    const mintA = mintAResult.mintInfo;
+    const mintB = mintBResult.mintInfo;
+    if (!resolvedProgramA.equals(tokenProgramA) || !resolvedProgramB.equals(tokenProgramB)) {
+      logger.warn(
+        {
+          tokenAMint: tokenMintA.toBase58(),
+          tokenBMint: tokenMintB.toBase58(),
+          tokenAProgramPool: tokenProgramA.toBase58(),
+          tokenBProgramPool: tokenProgramB.toBase58(),
+          tokenAProgramResolved: resolvedProgramA.toBase58(),
+          tokenBProgramResolved: resolvedProgramB.toBase58()
+        },
+        "pool token program differs from mint owner; using resolved mint program"
+      );
+    }
 
     this.poolState = {
       pool,
       poolAddress,
       tokenMintA,
       tokenMintB,
-      tokenProgramA,
-      tokenProgramB,
+      tokenProgramA: resolvedProgramA,
+      tokenProgramB: resolvedProgramB,
       decimalsA: mintA.decimals,
       decimalsB: mintB.decimals,
       tickSpacing: poolData.tickSpacing,
@@ -2192,9 +2209,13 @@ export class OrcaBot {
     this.updateBalanceReservations();
   }
 
-  private async getMintWithProgramFallback(mint: PublicKey, preferredProgram: PublicKey): Promise<any> {
+  private async getMintWithProgramFallback(
+    mint: PublicKey,
+    preferredProgram: PublicKey
+  ): Promise<{ mintInfo: any; programId: PublicKey }> {
     try {
-      return await getMint(this.connection, mint, undefined, preferredProgram);
+      const mintInfo = await getMint(this.connection, mint, undefined, preferredProgram);
+      return { mintInfo, programId: preferredProgram };
     } catch (err) {
       const message = stringifyError(err).toLowerCase();
       const isOwnerError = message.includes("tokeninvalidaccountownererror")
@@ -2215,7 +2236,7 @@ export class OrcaBot {
         },
         "mint read succeeded with token program fallback"
       );
-      return mintInfo;
+      return { mintInfo, programId: fallbackProgram };
     }
   }
 
@@ -2403,6 +2424,8 @@ export class OrcaBot {
     );
 
     if (targetA <= 0 && targetB <= 0) {
+      const msg = `Saldo insuficiente para abrir posição (A=${balances.tokenA.toFixed(6)}, B=${balances.tokenB.toFixed(6)})`;
+      this.setError(msg);
       logger.warn(
         {
           walletA: balances.tokenA,
