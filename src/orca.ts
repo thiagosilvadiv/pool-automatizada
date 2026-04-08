@@ -281,6 +281,7 @@ export type BotContext = {
   connection: Connection;
   wallet: WalletLike;
   config: Config;
+  skipWarmup?: boolean;
   onLowSol?: () => Promise<void>;
   poolId?: string | null;
   balanceCoordinator?: BalanceCoordinator | null;
@@ -944,8 +945,10 @@ export class OrcaBot {
     const ctx = whirlpools.WhirlpoolContext.from(botCtx.connection, botCtx.wallet);
     const client = whirlpools.buildWhirlpoolClient(ctx);
     const bot = new OrcaBot(ctx, client, botCtx);
-    await bot.refreshPoolState();
-    await bot.loadExistingPosition();
+    if (!botCtx.skipWarmup) {
+      await bot.refreshPoolState();
+      await bot.loadExistingPosition();
+    }
     return bot;
   }
 

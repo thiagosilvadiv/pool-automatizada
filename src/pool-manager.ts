@@ -1279,6 +1279,7 @@ export class PoolManager {
       connection: this.connection,
       wallet: this.wallet,
       config: poolConfig,
+      skipWarmup: true,
       poolId: entry.id,
       balanceCoordinator: this.balanceCoordinator,
       getKaminoMarketCandidates: () => this.collectKaminoMarketAddresses(),
