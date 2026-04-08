@@ -536,7 +536,9 @@ export async function startServer(config: Config): Promise<void> {
       );
       res.json({ ok: true, entry });
     } catch (err) {
-      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      const messageRaw = err instanceof Error ? err.message : String(err);
+      const message = typeof messageRaw === "string" ? messageRaw.trim() : "";
+      res.status(400).json({ ok: false, error: message || "Erro ao adicionar pool" });
     }
   });
 

@@ -2088,9 +2088,27 @@ addPoolBtn.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, whirlpoolAddress: address, overrides })
     });
-    const data = await res.json();
-    if (!data.ok) {
-      throw new Error(data.error ?? "Erro ao adicionar pool");
+    let data = null;
+    let rawText = "";
+    try {
+      data = await res.json();
+    } catch {
+      try {
+        rawText = await res.text();
+      } catch {
+        rawText = "";
+      }
+    }
+    if (!res.ok || !data?.ok) {
+      const serverMsg = [
+        data?.error,
+        data?.reason,
+        data?.message,
+        rawText
+      ]
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .find((value) => value.length > 0);
+      throw new Error(serverMsg ?? `Erro ao adicionar pool (HTTP ${res.status})`);
     }
     poolNameInput.value = "";
     poolAddressInput.value = "";
@@ -2113,7 +2131,11 @@ addPoolBtn.addEventListener("click", async () => {
     if (poolKaminoAutoCloseInput) poolKaminoAutoCloseInput.value = "";
     updateUI();
   } catch (err) {
-    poolError.textContent = err instanceof Error ? err.message : String(err);
+    const fallback = "Erro ao adicionar pool. Verifique os campos e tente novamente.";
+    const message = err instanceof Error
+      ? (err.message?.trim() || fallback)
+      : (String(err).trim() || fallback);
+    poolError.textContent = message;
     poolError.classList.remove("hidden");
   }
 });
