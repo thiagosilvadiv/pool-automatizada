@@ -3,6 +3,7 @@ import {
   getAssociatedTokenAddressSync,
   getMint,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   NATIVE_MINT,
   createAssociatedTokenAccountInstruction,
   createTransferInstruction,
@@ -2156,10 +2157,16 @@ export class OrcaBot {
 
     const tokenMintA = new PublicKey(poolData.tokenMintA);
     const tokenMintB = new PublicKey(poolData.tokenMintB);
+    const tokenProgramA = poolData.tokenProgramA
+      ? new PublicKey(poolData.tokenProgramA)
+      : TOKEN_PROGRAM_ID;
+    const tokenProgramB = poolData.tokenProgramB
+      ? new PublicKey(poolData.tokenProgramB)
+      : TOKEN_PROGRAM_ID;
 
     const [mintA, mintB] = await Promise.all([
-      getMint(this.connection, tokenMintA),
-      getMint(this.connection, tokenMintB)
+      this.getMintWithProgramFallback(tokenMintA, tokenProgramA),
+      this.getMintWithProgramFallback(tokenMintB, tokenProgramB)
     ]);
 
     this.poolState = {
@@ -2179,6 +2186,33 @@ export class OrcaBot {
     this.lastStatus.isTokenASol = this.poolState.isTokenASol;
     this.lastStatus.isTokenBSol = this.poolState.isTokenBSol;
     this.updateBalanceReservations();
+  }
+
+  private async getMintWithProgramFallback(mint: PublicKey, preferredProgram: PublicKey): Promise<any> {
+    try {
+      return await getMint(this.connection, mint, undefined, preferredProgram);
+    } catch (err) {
+      const message = stringifyError(err).toLowerCase();
+      const isOwnerError = message.includes("tokeninvalidaccountownererror")
+        || message.includes("accountownererror")
+        || message.includes("invalid account owner");
+      if (!isOwnerError) {
+        throw err;
+      }
+      const fallbackProgram = preferredProgram.equals(TOKEN_PROGRAM_ID)
+        ? TOKEN_2022_PROGRAM_ID
+        : TOKEN_PROGRAM_ID;
+      const mintInfo = await getMint(this.connection, mint, undefined, fallbackProgram);
+      logger.warn(
+        {
+          mint: mint.toBase58(),
+          preferredProgram: preferredProgram.toBase58(),
+          fallbackProgram: fallbackProgram.toBase58()
+        },
+        "mint read succeeded with token program fallback"
+      );
+      return mintInfo;
+    }
   }
 
   private async getCurrentPrice(): Promise<number> {
