@@ -3591,6 +3591,28 @@ export class OrcaBot {
     return this.getStableLikeMints().includes(normalized);
   }
 
+  private resolveStablePoolLeg(): { side: "tokenA" | "tokenB"; mint: string; decimals: number } | null {
+    if (!this.poolState) {
+      return null;
+    }
+    const tokenAMint = this.poolState.tokenMintA.toBase58();
+    const tokenBMint = this.poolState.tokenMintB.toBase58();
+    const stableSet = new Set<string>([
+      DEFAULT_USDC_MINT,
+      DEFAULT_USDT_MINT,
+      (this.config.autoSwapFeesToUsdcTargetMint || "").trim(),
+      String(process.env.KAMINO_USDT_MINT ?? "").trim()
+    ].filter((value) => value.length > 0));
+
+    if (stableSet.has(tokenBMint) || this.isStableLikeMint(tokenBMint)) {
+      return { side: "tokenB", mint: tokenBMint, decimals: this.poolState.decimalsB };
+    }
+    if (stableSet.has(tokenAMint) || this.isStableLikeMint(tokenAMint)) {
+      return { side: "tokenA", mint: tokenAMint, decimals: this.poolState.decimalsA };
+    }
+    return null;
+  }
+
   private async convertBudgetUsdToTokenBValue(price: number, solUsdPrice: number | null): Promise<number | null> {
     if (!this.poolState || this.config.budgetUsd == null) {
       return null;
@@ -3605,10 +3627,11 @@ export class OrcaBot {
       const budgetSol = this.config.budgetUsd / solUsd;
       return this.poolState.isTokenBSol ? budgetSol : budgetSol * price;
     }
-    if (this.isStableLikeMint(tokenBMint)) {
+    const stableLeg = this.resolveStablePoolLeg();
+    if (stableLeg?.side === "tokenB") {
       return this.config.budgetUsd;
     }
-    if (this.isStableLikeMint(tokenAMint)) {
+    if (stableLeg?.side === "tokenA") {
       return this.config.budgetUsd * price;
     }
     throw new Error("budgetUsd requires a SOL or stable leg in the pool");
@@ -7916,29 +7939,28 @@ export class OrcaBot {
     }
     const tokenAMint = this.poolState.tokenMintA.toBase58();
     const tokenBMint = this.poolState.tokenMintB.toBase58();
-    const targetMint = this.isStableLikeMint(tokenBMint)
-      ? tokenBMint
-      : this.isStableLikeMint(tokenAMint)
-      ? tokenAMint
-      : null;
-    const targetDecimals = targetMint === tokenAMint
-      ? this.poolState.decimalsA
-      : targetMint === tokenBMint
-      ? this.poolState.decimalsB
-      : 0;
-    if (!targetMint || targetDecimals < 0) {
+    const stableLeg = this.resolveStablePoolLeg();
+    const targetMint = stableLeg?.mint ?? null;
+    const targetDecimals = stableLeg?.decimals ?? 0;
+    if (!stableLeg || targetDecimals < 0) {
       logger.info(
-        { tokenAMint, tokenBMint },
+        {
+          tokenAMint,
+          tokenBMint,
+          stableMints: this.getStableLikeMints(),
+          autoSwapFeesToUsdcTargetMint: (this.config.autoSwapFeesToUsdcTargetMint || "").trim() || null
+        },
         "bootstrap open-position skipped: pool sem perna estavel"
       );
       return false;
     }
+    const resolvedTargetMint = stableLeg.mint;
 
     let desiredTargetUi = 0;
     try {
       const budgetTokenB = await this.convertBudgetUsdToTokenBValue(price, solUsdPrice);
       if (budgetTokenB != null && Number.isFinite(budgetTokenB) && budgetTokenB > 0) {
-        desiredTargetUi = targetMint === tokenBMint
+        desiredTargetUi = stableLeg.side === "tokenB"
           ? budgetTokenB
           : (price > 0 ? budgetTokenB / price : 0);
       }
@@ -8068,13 +8090,13 @@ export class OrcaBot {
       }
       let quote = await this.fetchJupiterQuoteExactInDetailed(
         candidate.mint,
-        targetMint,
+        resolvedTargetMint,
         amountRaw.toString(),
         this.config.slippageBps ?? 50
       );
       if (!quote.quote) {
         logger.warn(
-          { inputMint: candidate.mint, outputMint: targetMint, error: quote.error ?? null },
+          { inputMint: candidate.mint, outputMint: resolvedTargetMint, error: quote.error ?? null },
           "bootstrap open-position quote unavailable"
         );
         continue;
@@ -8082,7 +8104,7 @@ export class OrcaBot {
       let quoteOutAmount = parseU64(quote.quote.outAmount ?? "0");
       if (!quoteOutAmount || quoteOutAmount <= 0n) {
         logger.warn(
-          { inputMint: candidate.mint, outputMint: targetMint, quoteOutAmount: quote.quote.outAmount ?? null },
+          { inputMint: candidate.mint, outputMint: resolvedTargetMint, quoteOutAmount: quote.quote.outAmount ?? null },
           "bootstrap open-position quote returned zero outAmount"
         );
         continue;
@@ -8094,13 +8116,13 @@ export class OrcaBot {
           amountRaw = scaledInput;
           quote = await this.fetchJupiterQuoteExactInDetailed(
             candidate.mint,
-            targetMint,
+            resolvedTargetMint,
             amountRaw.toString(),
             this.config.slippageBps ?? 50
           );
           if (!quote.quote) {
             logger.warn(
-              { inputMint: candidate.mint, outputMint: targetMint, error: quote.error ?? null },
+              { inputMint: candidate.mint, outputMint: resolvedTargetMint, error: quote.error ?? null },
               "bootstrap open-position quote unavailable after scale-down"
             );
             continue;
@@ -8108,7 +8130,7 @@ export class OrcaBot {
           quoteOutAmount = parseU64(quote.quote.outAmount ?? "0");
           if (!quoteOutAmount || quoteOutAmount <= 0n) {
             logger.warn(
-              { inputMint: candidate.mint, outputMint: targetMint, quoteOutAmount: quote.quote.outAmount ?? null },
+              { inputMint: candidate.mint, outputMint: resolvedTargetMint, quoteOutAmount: quote.quote.outAmount ?? null },
               "bootstrap open-position scaled quote returned zero outAmount"
             );
             continue;
@@ -8121,7 +8143,7 @@ export class OrcaBot {
       logger.info(
         {
           inputMint: candidate.mint,
-          outputMint: targetMint,
+          outputMint: resolvedTargetMint,
           inputUi,
           desiredTargetUi,
           expectedOutUi,
@@ -8136,7 +8158,7 @@ export class OrcaBot {
         return true;
       }
       logger.warn(
-        { inputMint: candidate.mint, outputMint: targetMint, error: result.error ?? null },
+        { inputMint: candidate.mint, outputMint: resolvedTargetMint, error: result.error ?? null },
         "bootstrap open-position swap failed"
       );
     }
