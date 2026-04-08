@@ -469,6 +469,15 @@ function describeToken(side, info) {
   return base;
 }
 
+function formatKaminoCollateralModeLabel(mode, info) {
+  if (mode === "exit") return "Token da saida";
+  if (mode === "max-value") return "Maior valor USD";
+  if (mode === "both") return "Ambos (dual)";
+  if (mode === "tokenA") return describeToken("tokenA", info);
+  if (mode === "tokenB") return describeToken("tokenB", info);
+  return mode ?? "-";
+}
+
 function updateKaminoTestTokenHints(info) {
   if (!(kaminoTestTokenSelect instanceof HTMLSelectElement)) return;
   const optionA = kaminoTestTokenSelect.querySelector("option[value=\"tokenA\"]");
@@ -1051,7 +1060,7 @@ function openEditPoolModal(pool) {
   const defaultKaminoConvert = cachedConfig?.kaminoConvertToCollateral ?? false;
   const defaultKaminoAvgBasis = cachedConfig?.kaminoAvgPriceBasis ?? "deposit";
   const defaultKaminoAvgMode = cachedConfig?.kaminoAvgMode ?? "cumulative";
-  const tokenInfo = getTokenInfo(pool);
+  const tokenInfo = getTokenInfo(pool) ?? getTokenInfo(cachedConfig);
 
   if (editPoolIdInput) editPoolIdInput.value = pool.id ?? "";
   if (editPoolRangeInput) {
@@ -1095,8 +1104,10 @@ function openEditPoolModal(pool) {
     editPoolKaminoPriceBufferInput.placeholder = `Padrao (${formatNumber(defaultKaminoPriceBuffer, 2)})`;
   }
   if (editPoolKaminoCollateralModeInput) {
+    updateExitTokenSelectHints(editPoolKaminoCollateralModeInput, tokenInfo);
     editPoolKaminoCollateralModeInput.value = overrides.kaminoCollateralMode ?? "";
-    setSelectPlaceholder(editPoolKaminoCollateralModeInput, `Padrao (${defaultKaminoCollateralMode})`);
+    const defaultLabel = formatKaminoCollateralModeLabel(defaultKaminoCollateralMode, tokenInfo);
+    setSelectPlaceholder(editPoolKaminoCollateralModeInput, `Padrao (${defaultLabel})`);
   }
   if (editPoolKaminoConvertInput) {
     editPoolKaminoConvertInput.value = overrides.kaminoConvertToCollateral === undefined
@@ -1347,7 +1358,7 @@ function renderKaminoLogs(items) {
     const level = kaminoLogLevelLabels[entry.level] ?? entry.level ?? "-";
     const market = entry.marketAddress ? shortMint(entry.marketAddress) : "-";
     const message = truncateText(entry.message ?? "-", 80);
-    const rowClass = isLoanClose ? "history-loan-close" : "";
+    const rowClass = "";
     return `
       <tr class="${rowClass}">
         <td>${formatTimestamp(entry.timestamp)}</td>
@@ -1550,6 +1561,8 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
   applyStatusTone(runningEl, runningEl.textContent);
   applyStatusTone(lastErrorEl, lastErrorEl.textContent);
   const tokenInfo = getTokenInfo(config);
+  updateExitTokenSelectHints(poolKaminoCollateralModeInput, tokenInfo);
+  updateExitTokenSelectHints(editPoolKaminoCollateralModeInput, tokenInfo);
   const poolsList = normalizedPools?.pools ?? [];
   const selectedPool = poolsList.find((item) => item.id === config.selectedPoolId) ?? null;
   const selectedOverrides = selectedPool?.overrides ?? {};
@@ -1675,7 +1688,9 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
     setSelectPlaceholder(poolKaminoCloseRuleInput, `Padrao (${config.kaminoCloseRule ?? "avg-price"})`);
   }
   if (poolKaminoCollateralModeInput) {
-    setSelectPlaceholder(poolKaminoCollateralModeInput, `Padrao (${config.kaminoCollateralMode ?? "max-value"})`);
+    const defaultMode = config.kaminoCollateralMode ?? "max-value";
+    const defaultLabel = formatKaminoCollateralModeLabel(defaultMode, tokenInfo);
+    setSelectPlaceholder(poolKaminoCollateralModeInput, `Padrao (${defaultLabel})`);
   }
   if (poolKaminoConvertInput) {
     setSelectPlaceholder(
@@ -1711,7 +1726,11 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
   } else {
     renderHistory(cachedHistory);
   }
-  renderKaminoLogs(kaminoLogs);
+  try {
+    renderKaminoLogs(kaminoLogs);
+  } catch (err) {
+    console.error("Falha ao renderizar logs Kamino", err);
+  }
   renderPools(normalizedPools ?? poolsList, config);
 }
 

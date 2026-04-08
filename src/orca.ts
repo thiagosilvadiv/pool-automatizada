@@ -6537,6 +6537,13 @@ export class OrcaBot {
     const closingEntryUsd = Number.isFinite(Number(state.collateralUsd))
       ? Number(state.collateralUsd)
       : (closingCollateralUsd ?? null);
+    // Para o histórico, a saída deve refletir o capital líquido após quitar a dívida,
+    // e não o colateral bruto (que pode inflar o valor de "Saída (USD)").
+    const closingNetUsd = Number.isFinite(Number(kaminoNetUsd))
+      ? Number(kaminoNetUsd)
+      : (closingCollateralUsd != null && closingDebtUsd != null
+        ? closingCollateralUsd - closingDebtUsd
+        : closingCollateralUsd);
     const closingAvgPriceUsdc = Number.isFinite(Number(state.avgPriceUsdc))
       ? Number(state.avgPriceUsdc)
       : (this.lastStatus.kaminoAvgPriceUsdc ?? null);
@@ -6567,7 +6574,7 @@ export class OrcaBot {
       this.queueHistoryAction("kamino-close", {
         lastAction: "kamino-close",
         positionEntryUsd: closingEntryUsd,
-        positionExitUsd: closingCollateralUsd ?? null,
+        positionExitUsd: closingNetUsd ?? null,
         positionPnlUsd: combinedPnlUsd,
         positionFeesUsd: 0,
         lastActionFeeLamports: null,
