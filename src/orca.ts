@@ -1847,6 +1847,12 @@ export class OrcaBot {
     }
 
     let balances = await this.getTokenBalances();
+    if (balances.tokenA <= 0 && balances.tokenB <= 0) {
+      const bootstrappedFromSol = await this.maybeBootstrapAddLiquidityFromNativeSol(price, solUsdPrice);
+      if (bootstrappedFromSol) {
+        balances = await this.getTokenBalances();
+      }
+    }
     let usableA = options.maxTokenA != null ? Number(options.maxTokenA) : balances.tokenA * effectiveShare;
     let usableB = options.maxTokenB != null ? Number(options.maxTokenB) : balances.tokenB * effectiveShare;
     if (!Number.isFinite(usableA) || usableA < 0) {
@@ -2023,31 +2029,22 @@ export class OrcaBot {
     // Isso garante que o PnL no fechamento reflita o custo TOTAL depositado
     // na posição (abertura + todos os add-liquidity), não apenas o inicial.
     try {
-      const solUsd = solUsdPrice ?? null;
       let addedUsd: number | null = null;
-      if (solUsd != null && this.poolState) {
+      if (this.poolState) {
         if (prePositionAmounts) {
           try {
             const postSnapshot = await this.getPositionTokenAmounts(this.currentPosition);
             const deltaA = Math.max(0, postSnapshot.tokenA - prePositionAmounts.tokenA);
             const deltaB = Math.max(0, postSnapshot.tokenB - prePositionAmounts.tokenB);
             if (deltaA > 0 || deltaB > 0) {
-              if (this.poolState.isTokenBSol) {
-                addedUsd = (deltaB + deltaA * price) * solUsd;
-              } else if (this.poolState.isTokenASol) {
-                addedUsd = (deltaA + deltaB / price) * solUsd;
-              }
+              addedUsd = this.getPoolUsdValue(deltaA, deltaB, price, solUsdPrice ?? null);
             }
           } catch (err) {
             logger.warn({ err }, "failed to compute position delta for add-liquidity");
           }
         }
         if (addedUsd == null) {
-          if (this.poolState.isTokenBSol) {
-            addedUsd = (requiredB + requiredA * price) * solUsd;
-          } else if (this.poolState.isTokenASol) {
-            addedUsd = (requiredA + requiredB / price) * solUsd;
-          }
+          addedUsd = this.getPoolUsdValue(requiredA, requiredB, price, solUsdPrice ?? null);
         }
       }
       if (addedUsd != null && Number.isFinite(addedUsd) && addedUsd > 0) {
@@ -3611,6 +3608,45 @@ export class OrcaBot {
       return { side: "tokenA", mint: tokenAMint, decimals: this.poolState.decimalsA };
     }
     return null;
+  }
+
+  private getPoolUsdValue(
+    tokenAAmount: number,
+    tokenBAmount: number,
+    price: number,
+    solUsdPrice: number | null
+  ): number | null {
+    if (!this.poolState) {
+      return null;
+    }
+    const amountA = Number.isFinite(tokenAAmount) ? Number(tokenAAmount) : 0;
+    const amountB = Number.isFinite(tokenBAmount) ? Number(tokenBAmount) : 0;
+    if (amountA <= 0 && amountB <= 0) {
+      return 0;
+    }
+    if (this.poolState.isTokenBSol) {
+      if (!(solUsdPrice && solUsdPrice > 0)) {
+        return null;
+      }
+      return (amountB + amountA * price) * solUsdPrice;
+    }
+    if (this.poolState.isTokenASol) {
+      if (!(solUsdPrice && solUsdPrice > 0) || !(price > 0)) {
+        return null;
+      }
+      return (amountA + amountB / price) * solUsdPrice;
+    }
+    const stableLeg = this.resolveStablePoolLeg();
+    if (!stableLeg) {
+      return null;
+    }
+    if (stableLeg.side === "tokenB") {
+      return amountB + amountA * price;
+    }
+    if (!(price > 0)) {
+      return null;
+    }
+    return amountA + amountB / price;
   }
 
   private async convertBudgetUsdToTokenBValue(price: number, solUsdPrice: number | null): Promise<number | null> {
@@ -8173,6 +8209,175 @@ export class OrcaBot {
     return false;
   }
 
+  private async maybeBootstrapAddLiquidityFromNativeSol(price: number, solUsdPrice: number | null): Promise<boolean> {
+    if (!this.poolState) {
+      return false;
+    }
+    if (!this.config.jupiterApiKey) {
+      logger.info("bootstrap add-liquidity skipped: Jupiter API key ausente");
+      return false;
+    }
+    if (this.poolState.isTokenASol || this.poolState.isTokenBSol) {
+      return false;
+    }
+    const stableLeg = this.resolveStablePoolLeg();
+    if (!stableLeg) {
+      logger.info(
+        {
+          tokenAMint: this.poolState.tokenMintA.toBase58(),
+          tokenBMint: this.poolState.tokenMintB.toBase58()
+        },
+        "bootstrap add-liquidity skipped: pool sem perna estavel"
+      );
+      return false;
+    }
+
+    let nativeSol = 0;
+    try {
+      nativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
+    } catch (err) {
+      logger.warn({ err }, "bootstrap add-liquidity: falha ao ler saldo SOL");
+      return false;
+    }
+    const availableNativeSol = Math.max(0, nativeSol - this.config.minSolBalance);
+    if (!(Number.isFinite(availableNativeSol) && availableNativeSol > 0)) {
+      logger.info(
+        { nativeSol, minSolBalance: this.config.minSolBalance },
+        "bootstrap add-liquidity skipped: sem SOL livre"
+      );
+      return false;
+    }
+
+    let desiredStableUi: number | null = null;
+    if (this.config.budgetUsd != null) {
+      desiredStableUi = this.config.budgetUsd;
+      if (this.currentPosition) {
+        try {
+          const snapshot = await this.getPositionTokenAmounts(this.currentPosition);
+          const currentStableValue = stableLeg.side === "tokenB"
+            ? snapshot.tokenB + snapshot.tokenA * price
+            : snapshot.tokenA + (price > 0 ? snapshot.tokenB / price : 0);
+          if (Number.isFinite(currentStableValue) && currentStableValue > 0) {
+            desiredStableUi = Math.max(0, this.config.budgetUsd - currentStableValue);
+          }
+        } catch (err) {
+          logger.warn({ err }, "bootstrap add-liquidity: falha ao estimar valor atual da posicao");
+        }
+      }
+      if (!(Number.isFinite(desiredStableUi) && desiredStableUi > 0)) {
+        logger.info(
+          { budgetUsd: this.config.budgetUsd, desiredStableUi },
+          "bootstrap add-liquidity skipped: budget ja preenchido"
+        );
+        return false;
+      }
+    }
+
+    let spendSolUi = availableNativeSol;
+    const solPrice = solUsdPrice ?? this.lastStatus.solUsdPrice ?? await this.tryGetSolUsdPrice();
+    if (desiredStableUi != null) {
+      if (!(solPrice && solPrice > 0)) {
+        logger.info(
+          { desiredStableUi },
+          "bootstrap add-liquidity skipped: SOL/USD indisponivel para respeitar budget"
+        );
+        return false;
+      }
+      spendSolUi = Math.min(availableNativeSol, (desiredStableUi / solPrice) * 1.03);
+    }
+    if (!(Number.isFinite(spendSolUi) && spendSolUi > 0)) {
+      return false;
+    }
+
+    let amountRaw = toRawAmount(spendSolUi, 9);
+    if (!isValidU64(amountRaw) || amountRaw <= 0n) {
+      logger.warn({ spendSolUi, amountRaw: amountRaw.toString() }, "bootstrap add-liquidity: amount de SOL fora do range");
+      return false;
+    }
+
+    let desiredStableRaw: bigint | null = null;
+    if (desiredStableUi != null) {
+      desiredStableRaw = toRawAmount(desiredStableUi, stableLeg.decimals);
+      if (!isValidU64(desiredStableRaw) || desiredStableRaw <= 0n) {
+        desiredStableRaw = null;
+      }
+    }
+
+    let quote = await this.fetchJupiterQuoteExactInDetailed(
+      NATIVE_MINT.toBase58(),
+      stableLeg.mint,
+      amountRaw.toString(),
+      this.config.slippageBps ?? 50
+    );
+    if (!quote.quote) {
+      logger.warn(
+        { inputMint: NATIVE_MINT.toBase58(), outputMint: stableLeg.mint, error: quote.error ?? null },
+        "bootstrap add-liquidity quote unavailable"
+      );
+      return false;
+    }
+    let quoteOutAmount = parseU64(quote.quote.outAmount ?? "0");
+    if (!quoteOutAmount || quoteOutAmount <= 0n) {
+      logger.warn(
+        { outputMint: stableLeg.mint, quoteOutAmount: quote.quote.outAmount ?? null },
+        "bootstrap add-liquidity quote returned zero outAmount"
+      );
+      return false;
+    }
+
+    if (desiredStableRaw && quoteOutAmount > desiredStableRaw) {
+      const scaledInput = scaleInputAmount(amountRaw, quoteOutAmount, desiredStableRaw);
+      if (scaledInput > 0n && scaledInput < amountRaw && isValidU64(scaledInput)) {
+        amountRaw = scaledInput;
+        quote = await this.fetchJupiterQuoteExactInDetailed(
+          NATIVE_MINT.toBase58(),
+          stableLeg.mint,
+          amountRaw.toString(),
+          this.config.slippageBps ?? 50
+        );
+        if (!quote.quote) {
+          logger.warn(
+            { inputMint: NATIVE_MINT.toBase58(), outputMint: stableLeg.mint, error: quote.error ?? null },
+            "bootstrap add-liquidity quote unavailable after scale-down"
+          );
+          return false;
+        }
+        quoteOutAmount = parseU64(quote.quote.outAmount ?? "0");
+        if (!quoteOutAmount || quoteOutAmount <= 0n) {
+          logger.warn(
+            { outputMint: stableLeg.mint, quoteOutAmount: quote.quote.outAmount ?? null },
+            "bootstrap add-liquidity scaled quote returned zero outAmount"
+          );
+          return false;
+        }
+      }
+    }
+
+    const expectedOutUi = toUiAmount(quoteOutAmount, stableLeg.decimals);
+    logger.info(
+      {
+        inputMint: NATIVE_MINT.toBase58(),
+        outputMint: stableLeg.mint,
+        spendSolUi: toUiAmount(amountRaw, 9),
+        expectedOutUi,
+        desiredStableUi,
+        minSolBalance: this.config.minSolBalance
+      },
+      "bootstrapping add-liquidity balances from native SOL"
+    );
+    const result = await this.executeJupiterSwapDetailed(quote.quote);
+    if (!result.sig) {
+      logger.warn(
+        { inputMint: NATIVE_MINT.toBase58(), outputMint: stableLeg.mint, error: result.error ?? null },
+        "bootstrap add-liquidity swap failed"
+      );
+      return false;
+    }
+    this.lastStatus.lastError = null;
+    await this.refreshPoolState();
+    return true;
+  }
+
   private async maybeTopUpSol(reason: "auto" | "manual", solBalance: number): Promise<{ performed: boolean; reason?: string }> {
     if (reason === "auto" && !this.config.autoSolTopupEnabled) {
       return { performed: false, reason: "disabled" };
@@ -8676,6 +8881,30 @@ export class OrcaBot {
     const totalB = walletBalances.tokenB + positionBalances.tokenB;
     const positionValueTokenB = positionBalances.tokenB + positionBalances.tokenA * price;
     const positionFeesTokenB = positionBalances.feeB + positionBalances.feeA * price;
+    const portfolioValueUsdDirect = this.getPoolUsdValue(
+      totalA + positionBalances.feeA,
+      totalB + positionBalances.feeB,
+      price,
+      solUsdPrice
+    );
+    const positionValueUsdDirect = this.getPoolUsdValue(
+      positionBalances.tokenA,
+      positionBalances.tokenB,
+      price,
+      solUsdPrice
+    );
+    const positionFeesUsdDirect = this.getPoolUsdValue(
+      positionBalances.feeA,
+      positionBalances.feeB,
+      price,
+      solUsdPrice
+    );
+    const positionValueUsdWithFeesDirect = this.getPoolUsdValue(
+      positionBalances.tokenA + positionBalances.feeA,
+      positionBalances.tokenB + positionBalances.feeB,
+      price,
+      solUsdPrice
+    );
 
     let feesValueSol: number | null = null;
     if (this.poolState.isTokenBSol) {
@@ -8727,12 +8956,18 @@ export class OrcaBot {
         this.lastStatus.pnlUsd = null;
       }
     } else {
+      const portfolioBaseValue = portfolioValueUsdDirect ?? portfolioValueTokenB;
       if (this.initialPortfolioValue === null) {
-        this.initialPortfolioValue = portfolioValueTokenB;
+        this.initialPortfolioValue = portfolioBaseValue;
       }
-      this.lastStatus.pnl = portfolioValueTokenB - this.initialPortfolioValue;
-      this.lastStatus.portfolioUsd = null;
-      this.lastStatus.pnlUsd = null;
+      this.lastStatus.pnl = portfolioBaseValue - this.initialPortfolioValue;
+      if (portfolioValueUsdDirect != null) {
+        this.lastStatus.portfolioUsd = portfolioValueUsdDirect;
+        this.lastStatus.pnlUsd = this.lastStatus.pnl;
+      } else {
+        this.lastStatus.portfolioUsd = null;
+        this.lastStatus.pnlUsd = null;
+      }
     }
 
     if (!this.currentPosition) {
@@ -8764,7 +8999,7 @@ export class OrcaBot {
     this.lastStatus.positionValue = positionValueSol ?? positionValueTokenB;
     this.lastStatus.positionValueUsd = positionValueSol != null && solUsdPrice
       ? positionValueSol * solUsdPrice
-      : null;
+      : positionValueUsdDirect;
 
     const positionValueTokenBWithFees = positionValueTokenB + positionFeesTokenB;
     if (positionValueSolWithFees != null) {
@@ -8781,14 +9016,15 @@ export class OrcaBot {
         this.lastStatus.positionPnl = null;
       }
     } else {
+      const positionBaseValueWithFees = positionValueUsdWithFeesDirect ?? positionValueTokenBWithFees;
       if (this.initialPositionValue === null) {
         // Correção Bug 2: validar magnitude antes de usar como anchor.
-        if (positionValueTokenBWithFees > 0 && positionValueTokenBWithFees < 1_000_000_000) {
-          this.initialPositionValue = positionValueTokenBWithFees;
+        if (positionBaseValueWithFees > 0 && positionBaseValueWithFees < 1_000_000_000) {
+          this.initialPositionValue = positionBaseValueWithFees;
         }
       }
       if (this.initialPositionValue !== null) {
-        this.lastStatus.positionPnl = positionValueTokenBWithFees - this.initialPositionValue;
+        this.lastStatus.positionPnl = positionBaseValueWithFees - this.initialPositionValue;
       } else {
         this.lastStatus.positionPnl = null;
       }
@@ -8801,7 +9037,7 @@ export class OrcaBot {
 
     this.lastStatus.positionFeesUsd = (feesValueSol != null && solUsdPrice)
       ? feesValueSol * solUsdPrice
-      : null;
+      : positionFeesUsdDirect;
     const budgetUsd = this.config.budgetUsd ?? null;
     const portfolioUsd = this.lastStatus.portfolioUsd ?? null;
     if (this.lastStatus.positionFeesUsd != null
@@ -8811,7 +9047,7 @@ export class OrcaBot {
 
     const positionValueUsdWithFees = positionValueSolWithFees != null && solUsdPrice
       ? positionValueSolWithFees * solUsdPrice
-      : null;
+      : positionValueUsdWithFeesDirect;
 
     this.lastPositionValueUsdWithFees = positionValueUsdWithFees;
 
