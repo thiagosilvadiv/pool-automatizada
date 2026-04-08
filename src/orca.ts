@@ -1871,16 +1871,13 @@ export class OrcaBot {
     const valueCap = usableB + usableA * price;
     let valueCapUsd = Number.isFinite(valueCap) && valueCap > 0 ? valueCap : null;
     if (this.config.budgetUsd != null) {
-      if (!this.poolState?.isTokenASol && !this.poolState?.isTokenBSol) {
-        throw new Error("budgetUsd requires a SOL (wSOL) leg in the pool");
+      const budgetTokenB = await this.convertBudgetUsdToTokenBValue(
+        price,
+        this.lastStatus.solUsdPrice ?? null
+      );
+      if (budgetTokenB != null) {
+        valueCapUsd = valueCapUsd != null ? Math.min(valueCapUsd, budgetTokenB) : budgetTokenB;
       }
-      const solUsd = await this.tryGetSolUsdPrice();
-      if (!solUsd) {
-        throw new Error("SOL/USD price unavailable");
-      }
-      const budgetSol = this.config.budgetUsd / solUsd;
-      const budgetTokenB = this.poolState.isTokenBSol ? budgetSol : budgetSol * price;
-      valueCapUsd = valueCapUsd != null ? Math.min(valueCapUsd, budgetTokenB) : budgetTokenB;
     }
     const applyValueCap = (nextBalances: { tokenA: number; tokenB: number }) => {
       let capA = Number.isFinite(nextBalances.tokenA) && nextBalances.tokenA > 0 ? nextBalances.tokenA : 0;
@@ -2407,6 +2404,12 @@ export class OrcaBot {
       return { tokenA, tokenB };
     };
     let balances = applyLimits(await this.getTokenBalances());
+    if (balances.tokenA <= 0 && balances.tokenB <= 0) {
+      const bootstrapped = await this.maybeBootstrapOpenPositionBalances(price, solUsdPrice);
+      if (bootstrapped) {
+        balances = applyLimits(await this.getTokenBalances());
+      }
+    }
     let tokenExtensionCtx = await whirlpools.TokenExtensionUtil.buildTokenExtensionContext(
       this.ctx.fetcher,
       this.poolState.pool.getData(),
@@ -2730,16 +2733,10 @@ export class OrcaBot {
 
     let effectiveBudget = walletValue;
     if (this.config.budgetUsd != null) {
-      if (!this.poolState.isTokenASol && !this.poolState.isTokenBSol) {
-        throw new Error("budgetUsd requires a SOL (wSOL) leg in the pool");
+      const budgetTokenB = await this.convertBudgetUsdToTokenBValue(price, solUsdPrice);
+      if (budgetTokenB != null) {
+        effectiveBudget = Math.min(walletValue, budgetTokenB);
       }
-      const solUsd = solUsdPrice ?? await this.tryGetSolUsdPrice();
-      if (!solUsd) {
-        throw new Error("SOL/USD price unavailable");
-      }
-      const budgetSol = this.config.budgetUsd / solUsd;
-      const budgetTokenB = this.poolState.isTokenBSol ? budgetSol : budgetSol * price;
-      effectiveBudget = Math.min(walletValue, budgetTokenB);
     }
 
     const ratio = await this.getRangeRatio(lowerTick, upperTick, price, tokenExtensionCtx);
@@ -3568,6 +3565,50 @@ export class OrcaBot {
     add(this.poolState?.tokenMintA);
     add(this.poolState?.tokenMintB);
     return mints;
+  }
+
+  private getStableLikeMints(): string[] {
+    const values = new Set<string>();
+    const add = (value: string | null | undefined) => {
+      const trimmed = String(value ?? "").trim();
+      if (trimmed) {
+        values.add(trimmed);
+      }
+    };
+    add((this.config.autoSwapFeesToUsdcTargetMint || DEFAULT_USDC_MINT).trim() || DEFAULT_USDC_MINT);
+    add(process.env.KAMINO_USDT_MINT ?? "");
+    return Array.from(values.values());
+  }
+
+  private isStableLikeMint(mint: string | PublicKey | null | undefined): boolean {
+    const normalized = typeof mint === "string" ? mint.trim() : mint?.toBase58?.() ?? "";
+    if (!normalized) {
+      return false;
+    }
+    return this.getStableLikeMints().includes(normalized);
+  }
+
+  private async convertBudgetUsdToTokenBValue(price: number, solUsdPrice: number | null): Promise<number | null> {
+    if (!this.poolState || this.config.budgetUsd == null) {
+      return null;
+    }
+    const tokenAMint = this.poolState.tokenMintA.toBase58();
+    const tokenBMint = this.poolState.tokenMintB.toBase58();
+    if (this.poolState.isTokenASol || this.poolState.isTokenBSol) {
+      const solUsd = solUsdPrice ?? await this.tryGetSolUsdPrice();
+      if (!solUsd) {
+        throw new Error("SOL/USD price unavailable");
+      }
+      const budgetSol = this.config.budgetUsd / solUsd;
+      return this.poolState.isTokenBSol ? budgetSol : budgetSol * price;
+    }
+    if (this.isStableLikeMint(tokenBMint)) {
+      return this.config.budgetUsd;
+    }
+    if (this.isStableLikeMint(tokenAMint)) {
+      return this.config.budgetUsd * price;
+    }
+    throw new Error("budgetUsd requires a SOL or stable leg in the pool");
   }
 
   private getDebtMintForCompatibility(): string | null {
@@ -7675,7 +7716,20 @@ export class OrcaBot {
     if (!this.swapAllowlist || this.swapAllowlist.size === 0) {
       return true;
     }
-    return this.swapAllowlist.has(mint);
+    const normalized = String(mint ?? "").trim();
+    if (!normalized) {
+      return false;
+    }
+    if (normalized === NATIVE_MINT.toBase58()) {
+      return true;
+    }
+    if (this.getPoolTokenMints().includes(normalized)) {
+      return true;
+    }
+    if (this.isStableLikeMint(normalized)) {
+      return true;
+    }
+    return this.swapAllowlist.has(normalized);
   }
 
   private isSwapAllowlistActive(): boolean {
@@ -7823,6 +7877,132 @@ export class OrcaBot {
       this.listWalletTokensByProgram(TOKEN_2022_PROGRAM_ID).catch(() => [])
     ]);
     return [...tokensV1, ...tokensV2022];
+  }
+
+  private async maybeBootstrapOpenPositionBalances(price: number, solUsdPrice: number | null): Promise<boolean> {
+    if (!this.poolState || !this.config.jupiterApiKey) {
+      return false;
+    }
+    const tokenAMint = this.poolState.tokenMintA.toBase58();
+    const tokenBMint = this.poolState.tokenMintB.toBase58();
+    const targetMint = this.isStableLikeMint(tokenBMint)
+      ? tokenBMint
+      : this.isStableLikeMint(tokenAMint)
+      ? tokenAMint
+      : null;
+    const targetDecimals = targetMint === tokenAMint
+      ? this.poolState.decimalsA
+      : targetMint === tokenBMint
+      ? this.poolState.decimalsB
+      : 0;
+    if (!targetMint || targetDecimals < 0) {
+      return false;
+    }
+
+    let desiredTargetUi = 0;
+    try {
+      const budgetTokenB = await this.convertBudgetUsdToTokenBValue(price, solUsdPrice);
+      if (budgetTokenB != null && Number.isFinite(budgetTokenB) && budgetTokenB > 0) {
+        desiredTargetUi = targetMint === tokenBMint
+          ? budgetTokenB
+          : (price > 0 ? budgetTokenB / price : 0);
+      }
+    } catch {
+      desiredTargetUi = 0;
+    }
+    if (!(Number.isFinite(desiredTargetUi) && desiredTargetUi > 0)) {
+      return false;
+    }
+
+    const candidates: Array<{ mint: string; decimals: number; uiAmount: number; label: string }> = [];
+    try {
+      const nativeSol = Math.max(
+        0,
+        ((await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL) - this.config.minSolBalance
+      );
+      if (nativeSol > 0 && targetMint !== NATIVE_MINT.toBase58()) {
+        candidates.push({ mint: NATIVE_MINT.toBase58(), decimals: 9, uiAmount: nativeSol, label: "SOL" });
+      }
+    } catch {
+      // ignore native SOL candidate failures
+    }
+
+    const walletTokens = await this.getWalletTokens().catch(() => []);
+    for (const token of walletTokens) {
+      if (token.uiAmount <= 0 || token.decimals <= 0) {
+        continue;
+      }
+      if (token.mint === targetMint) {
+        continue;
+      }
+      if (!this.isStableLikeMint(token.mint)) {
+        continue;
+      }
+      candidates.push({
+        mint: token.mint,
+        decimals: token.decimals,
+        uiAmount: token.uiAmount,
+        label: this.getStableLabelForMint(token.mint)
+      });
+    }
+
+    if (!candidates.length) {
+      return false;
+    }
+
+    for (const candidate of candidates) {
+      let inputUi = 0;
+      if (candidate.mint === NATIVE_MINT.toBase58()) {
+        const solPrice = solUsdPrice ?? this.lastStatus.solUsdPrice ?? await this.tryGetSolUsdPrice();
+        if (!solPrice || solPrice <= 0) {
+          continue;
+        }
+        inputUi = Math.min(candidate.uiAmount, desiredTargetUi / solPrice * 1.03);
+      } else {
+        inputUi = Math.min(candidate.uiAmount, desiredTargetUi * 1.01);
+      }
+      if (!(Number.isFinite(inputUi) && inputUi > 0)) {
+        continue;
+      }
+      const amountRaw = toRawAmount(inputUi, candidate.decimals);
+      if (!isValidU64(amountRaw)) {
+        continue;
+      }
+      const quote = await this.fetchJupiterQuoteExactInDetailed(
+        candidate.mint,
+        targetMint,
+        amountRaw.toString(),
+        this.config.slippageBps ?? 50
+      );
+      if (!quote.quote) {
+        logger.warn(
+          { inputMint: candidate.mint, outputMint: targetMint, error: quote.error ?? null },
+          "bootstrap open-position quote unavailable"
+        );
+        continue;
+      }
+      logger.info(
+        {
+          inputMint: candidate.mint,
+          outputMint: targetMint,
+          inputUi,
+          desiredTargetUi,
+          label: candidate.label
+        },
+        "bootstrapping pool balances before open"
+      );
+      const result = await this.executeJupiterSwapDetailed(quote.quote);
+      if (result.sig) {
+        this.lastStatus.lastError = null;
+        await this.refreshPoolState();
+        return true;
+      }
+      logger.warn(
+        { inputMint: candidate.mint, outputMint: targetMint, error: result.error ?? null },
+        "bootstrap open-position swap failed"
+      );
+    }
+    return false;
   }
 
   private async maybeTopUpSol(reason: "auto" | "manual", solBalance: number): Promise<{ performed: boolean; reason?: string }> {
