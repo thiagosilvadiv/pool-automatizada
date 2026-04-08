@@ -294,6 +294,8 @@ type PoolState = {
   poolAddress: PublicKey;
   tokenMintA: PublicKey;
   tokenMintB: PublicKey;
+  tokenProgramA: PublicKey;
+  tokenProgramB: PublicKey;
   decimalsA: number;
   decimalsB: number;
   tickSpacing: number;
@@ -2174,6 +2176,8 @@ export class OrcaBot {
       poolAddress,
       tokenMintA,
       tokenMintB,
+      tokenProgramA,
+      tokenProgramB,
       decimalsA: mintA.decimals,
       decimalsB: mintB.decimals,
       tickSpacing: poolData.tickSpacing,
@@ -2399,7 +2403,18 @@ export class OrcaBot {
     );
 
     if (targetA <= 0 && targetB <= 0) {
-      logger.warn("insufficient token balances to open position");
+      logger.warn(
+        {
+          walletA: balances.tokenA,
+          walletB: balances.tokenB,
+          price,
+          tokenAMint: this.poolState.tokenMintA.toBase58(),
+          tokenBMint: this.poolState.tokenMintB.toBase58(),
+          tokenAProgram: this.poolState.tokenProgramA.toBase58(),
+          tokenBProgram: this.poolState.tokenProgramB.toBase58()
+        },
+        "insufficient token balances to open position"
+      );
       return "insufficient-balance";
     }
 
@@ -7672,8 +7687,18 @@ export class OrcaBot {
 
     this.lastSolBalanceFallback = false;
 
-    const ataA = getAssociatedTokenAddressSync(this.poolState.tokenMintA, this.wallet.publicKey);
-    const ataB = getAssociatedTokenAddressSync(this.poolState.tokenMintB, this.wallet.publicKey);
+    const ataA = getAssociatedTokenAddressSync(
+      this.poolState.tokenMintA,
+      this.wallet.publicKey,
+      false,
+      this.poolState.tokenProgramA
+    );
+    const ataB = getAssociatedTokenAddressSync(
+      this.poolState.tokenMintB,
+      this.wallet.publicKey,
+      false,
+      this.poolState.tokenProgramB
+    );
 
     const [balA, balB] = await Promise.all([
       this.connection.getTokenAccountBalance(ataA).catch(() => null),
@@ -7682,6 +7707,18 @@ export class OrcaBot {
 
     let tokenA = balA?.value?.uiAmount ?? 0;
     let tokenB = balB?.value?.uiAmount ?? 0;
+    if (!balA) {
+      tokenA = await this.findWalletTokenUiAmount(
+        this.poolState.tokenMintA,
+        this.poolState.tokenProgramA
+      );
+    }
+    if (!balB) {
+      tokenB = await this.findWalletTokenUiAmount(
+        this.poolState.tokenMintB,
+        this.poolState.tokenProgramB
+      );
+    }
 
     if (this.poolState.isTokenASol || this.poolState.isTokenBSol) {
       let nativeSol = 0;
@@ -7721,24 +7758,48 @@ export class OrcaBot {
     return this.applyBalanceCoordinator(raw);
   }
 
-  private async getWalletTokens(): Promise<Array<{ mint: string; rawAmount: string; rawAmountBigint: bigint; uiAmount: number; decimals: number }>> {
+  private async listWalletTokensByProgram(
+    programId: PublicKey
+  ): Promise<Array<{ mint: string; rawAmount: string; rawAmountBigint: bigint; uiAmount: number; decimals: number }>> {
     const tokenAccounts = await this.connection.getParsedTokenAccountsByOwner(
       this.wallet.publicKey,
-      { programId: TOKEN_PROGRAM_ID }
+      { programId }
     );
     return tokenAccounts.value.map((acct) => {
-      const info = acct.account.data.parsed.info;
-      const amountStr = String(info.tokenAmount?.amount ?? "0");
+      const parsed = (acct.account?.data as any)?.parsed;
+      const info = parsed?.info ?? {};
+      const amountStr = String(info?.tokenAmount?.amount ?? "0");
       let amount = 0n;
       try {
         amount = BigInt(amountStr);
       } catch {
         amount = 0n;
       }
-      const decimals = Number(info.tokenAmount?.decimals ?? 0);
-      const uiAmount = Number(info.tokenAmount?.uiAmount ?? 0);
-      return { mint: String(info.mint), rawAmount: amountStr, rawAmountBigint: amount, uiAmount, decimals };
-    }).filter((item) => item.rawAmountBigint > 0n);
+      const decimals = Number(info?.tokenAmount?.decimals ?? 0);
+      const uiAmount = Number(info?.tokenAmount?.uiAmount ?? 0);
+      return { mint: String(info?.mint ?? ""), rawAmount: amountStr, rawAmountBigint: amount, uiAmount, decimals };
+    }).filter((item) => item.mint && item.rawAmountBigint > 0n);
+  }
+
+  private async findWalletTokenUiAmount(mint: PublicKey, programId: PublicKey): Promise<number> {
+    try {
+      const tokens = await this.listWalletTokensByProgram(programId);
+      const mintStr = mint.toBase58();
+      const amount = tokens
+        .filter((token) => token.mint === mintStr)
+        .reduce((sum, token) => sum + (Number.isFinite(token.uiAmount) ? token.uiAmount : 0), 0);
+      return Number.isFinite(amount) ? amount : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  private async getWalletTokens(): Promise<Array<{ mint: string; rawAmount: string; rawAmountBigint: bigint; uiAmount: number; decimals: number }>> {
+    const [tokensV1, tokensV2022] = await Promise.all([
+      this.listWalletTokensByProgram(TOKEN_PROGRAM_ID).catch(() => []),
+      this.listWalletTokensByProgram(TOKEN_2022_PROGRAM_ID).catch(() => [])
+    ]);
+    return [...tokensV1, ...tokensV2022];
   }
 
   private async maybeTopUpSol(reason: "auto" | "manual", solBalance: number): Promise<{ performed: boolean; reason?: string }> {
