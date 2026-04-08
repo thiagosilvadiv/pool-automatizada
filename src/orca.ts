@@ -37,6 +37,7 @@ const Decimal: any = DecimalJs;
 const MIN_ENTRY_BUDGET_FACTOR = 0;
 const MAX_USD_SANITY = 1_000_000_000;
 const DEFAULT_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const DEFAULT_USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 const KAMINO_REPAY_CHUNK_FACTOR = 0.5;
 const KAMINO_REPAY_MIN_STABLE = 0.01; // reduzido para evitar loop em dívidas residuais pequenas
 const KAMINO_WITHDRAW_MIN = 0.000001;
@@ -3575,6 +3576,8 @@ export class OrcaBot {
         values.add(trimmed);
       }
     };
+    add(DEFAULT_USDC_MINT);
+    add(DEFAULT_USDT_MINT);
     add((this.config.autoSwapFeesToUsdcTargetMint || DEFAULT_USDC_MINT).trim() || DEFAULT_USDC_MINT);
     add(process.env.KAMINO_USDT_MINT ?? "");
     return Array.from(values.values());
@@ -4385,8 +4388,8 @@ export class OrcaBot {
   private getStableLabelForMint(mint: string): string {
     const usdcMint = (this.config.autoSwapFeesToUsdcTargetMint || DEFAULT_USDC_MINT).trim() || DEFAULT_USDC_MINT;
     const usdtMint = String(process.env.KAMINO_USDT_MINT ?? "").trim();
-    if (mint === usdcMint) return "USDC";
-    if (mint === usdtMint) return "USDT";
+    if (mint === usdcMint || mint === DEFAULT_USDC_MINT) return "USDC";
+    if (mint === usdtMint || mint === DEFAULT_USDT_MINT) return "USDT";
     return "Stable";
   }
 
