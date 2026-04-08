@@ -7876,11 +7876,39 @@ export class OrcaBot {
       this.listWalletTokensByProgram(TOKEN_PROGRAM_ID).catch(() => []),
       this.listWalletTokensByProgram(TOKEN_2022_PROGRAM_ID).catch(() => [])
     ]);
-    return [...tokensV1, ...tokensV2022];
+    const aggregated = new Map<string, {
+      mint: string;
+      rawAmount: string;
+      rawAmountBigint: bigint;
+      uiAmount: number;
+      decimals: number;
+    }>();
+    for (const token of [...tokensV1, ...tokensV2022]) {
+      if (!token.mint || token.rawAmountBigint <= 0n) {
+        continue;
+      }
+      const existing = aggregated.get(token.mint);
+      if (!existing) {
+        aggregated.set(token.mint, { ...token });
+        continue;
+      }
+      existing.rawAmountBigint += token.rawAmountBigint;
+      existing.rawAmount = existing.rawAmountBigint.toString();
+      existing.uiAmount += Number.isFinite(token.uiAmount) ? token.uiAmount : 0;
+      if ((!Number.isFinite(existing.decimals) || existing.decimals <= 0) && token.decimals > 0) {
+        existing.decimals = token.decimals;
+      }
+    }
+    return Array.from(aggregated.values());
   }
 
   private async maybeBootstrapOpenPositionBalances(price: number, solUsdPrice: number | null): Promise<boolean> {
-    if (!this.poolState || !this.config.jupiterApiKey) {
+    if (!this.poolState) {
+      logger.info("bootstrap open-position skipped: poolState unavailable");
+      return false;
+    }
+    if (!this.config.jupiterApiKey) {
+      logger.info("bootstrap open-position skipped: Jupiter API key ausente");
       return false;
     }
     const tokenAMint = this.poolState.tokenMintA.toBase58();
@@ -7896,6 +7924,10 @@ export class OrcaBot {
       ? this.poolState.decimalsB
       : 0;
     if (!targetMint || targetDecimals < 0) {
+      logger.info(
+        { tokenAMint, tokenBMint },
+        "bootstrap open-position skipped: pool sem perna estavel"
+      );
       return false;
     }
 
@@ -7907,21 +7939,51 @@ export class OrcaBot {
           ? budgetTokenB
           : (price > 0 ? budgetTokenB / price : 0);
       }
-    } catch {
+    } catch (err) {
+      logger.warn({ err }, "bootstrap open-position: falha ao converter budget para token alvo");
       desiredTargetUi = 0;
     }
     if (!(Number.isFinite(desiredTargetUi) && desiredTargetUi > 0)) {
+      logger.info(
+        { budgetUsd: this.config.budgetUsd ?? null, targetMint, desiredTargetUi },
+        "bootstrap open-position skipped: budget invalido ou indisponivel"
+      );
+      return false;
+    }
+    const desiredTargetRaw = toRawAmount(desiredTargetUi, targetDecimals);
+    if (!isValidU64(desiredTargetRaw) || desiredTargetRaw <= 0n) {
+      logger.info(
+        { targetMint, desiredTargetUi, targetDecimals, desiredTargetRaw: desiredTargetRaw.toString() },
+        "bootstrap open-position skipped: amount alvo fora do range"
+      );
       return false;
     }
 
-    const candidates: Array<{ mint: string; decimals: number; uiAmount: number; label: string }> = [];
+    const candidates: Array<{
+      mint: string;
+      decimals: number;
+      uiAmount: number;
+      actualUiAmount: number;
+      label: string;
+      priority: number;
+    }> = [];
+    let totalNativeSol = 0;
+    let availableNativeSol = 0;
     try {
-      const nativeSol = Math.max(
+      totalNativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
+      availableNativeSol = Math.max(
         0,
-        ((await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL) - this.config.minSolBalance
+        totalNativeSol - this.config.minSolBalance
       );
-      if (nativeSol > 0 && targetMint !== NATIVE_MINT.toBase58()) {
-        candidates.push({ mint: NATIVE_MINT.toBase58(), decimals: 9, uiAmount: nativeSol, label: "SOL" });
+      if (availableNativeSol > 0 && targetMint !== NATIVE_MINT.toBase58()) {
+        candidates.push({
+          mint: NATIVE_MINT.toBase58(),
+          decimals: 9,
+          uiAmount: availableNativeSol,
+          actualUiAmount: totalNativeSol,
+          label: "SOL",
+          priority: 1
+        });
       }
     } catch {
       // ignore native SOL candidate failures
@@ -7935,40 +7997,73 @@ export class OrcaBot {
       if (token.mint === targetMint) {
         continue;
       }
-      if (!this.isStableLikeMint(token.mint)) {
+      const availableUi = this.balanceCoordinator && this.poolId
+        ? this.balanceCoordinator.getAvailableBalance(this.poolId, token.mint, token.uiAmount)
+        : token.uiAmount;
+      if (!(Number.isFinite(availableUi) && availableUi > 0)) {
         continue;
       }
       candidates.push({
         mint: token.mint,
         decimals: token.decimals,
-        uiAmount: token.uiAmount,
-        label: this.getStableLabelForMint(token.mint)
+        uiAmount: availableUi,
+        actualUiAmount: token.uiAmount,
+        label: this.isStableLikeMint(token.mint) ? this.getStableLabelForMint(token.mint) : token.mint,
+        priority: this.isStableLikeMint(token.mint) ? 0 : 2
       });
     }
 
     if (!candidates.length) {
+      logger.warn(
+        {
+          targetMint,
+          desiredTargetUi,
+          totalNativeSol,
+          availableNativeSol,
+          minSolBalance: this.config.minSolBalance,
+          walletTokenCount: walletTokens.length,
+          allowlistActive: this.isSwapAllowlistActive()
+        },
+        "bootstrap open-position skipped: no spendable wallet candidates"
+      );
       return false;
     }
 
-    for (const candidate of candidates) {
-      let inputUi = 0;
-      if (candidate.mint === NATIVE_MINT.toBase58()) {
-        const solPrice = solUsdPrice ?? this.lastStatus.solUsdPrice ?? await this.tryGetSolUsdPrice();
-        if (!solPrice || solPrice <= 0) {
-          continue;
-        }
-        inputUi = Math.min(candidate.uiAmount, desiredTargetUi / solPrice * 1.03);
-      } else {
-        inputUi = Math.min(candidate.uiAmount, desiredTargetUi * 1.01);
+    candidates.sort((a, b) => {
+      if (a.priority !== b.priority) {
+        return a.priority - b.priority;
       }
-      if (!(Number.isFinite(inputUi) && inputUi > 0)) {
+      if (a.uiAmount === b.uiAmount) {
+        return 0;
+      }
+      return a.uiAmount > b.uiAmount ? -1 : 1;
+    });
+
+    const eligibleCandidates = candidates.filter((candidate) => (
+      !this.isSwapAllowlistActive() || this.isSwapAllowed(candidate.mint)
+    ));
+    if (!eligibleCandidates.length) {
+      logger.warn(
+        {
+          targetMint,
+          desiredTargetUi,
+          candidates: candidates.slice(0, 5).map((candidate) => ({
+            mint: candidate.mint,
+            uiAmount: candidate.uiAmount,
+            actualUiAmount: candidate.actualUiAmount
+          }))
+        },
+        "bootstrap open-position skipped: all candidates blocked by allowlist"
+      );
+      return false;
+    }
+
+    for (const candidate of eligibleCandidates.slice(0, 12)) {
+      let amountRaw = toRawAmount(candidate.uiAmount, candidate.decimals);
+      if (!isValidU64(amountRaw) || amountRaw <= 0n) {
         continue;
       }
-      const amountRaw = toRawAmount(inputUi, candidate.decimals);
-      if (!isValidU64(amountRaw)) {
-        continue;
-      }
-      const quote = await this.fetchJupiterQuoteExactInDetailed(
+      let quote = await this.fetchJupiterQuoteExactInDetailed(
         candidate.mint,
         targetMint,
         amountRaw.toString(),
@@ -7981,12 +8076,52 @@ export class OrcaBot {
         );
         continue;
       }
+      let quoteOutAmount = parseU64(quote.quote.outAmount ?? "0");
+      if (!quoteOutAmount || quoteOutAmount <= 0n) {
+        logger.warn(
+          { inputMint: candidate.mint, outputMint: targetMint, quoteOutAmount: quote.quote.outAmount ?? null },
+          "bootstrap open-position quote returned zero outAmount"
+        );
+        continue;
+      }
+
+      if (quoteOutAmount > desiredTargetRaw) {
+        const scaledInput = scaleInputAmount(amountRaw, quoteOutAmount, desiredTargetRaw);
+        if (scaledInput > 0n && scaledInput < amountRaw && isValidU64(scaledInput)) {
+          amountRaw = scaledInput;
+          quote = await this.fetchJupiterQuoteExactInDetailed(
+            candidate.mint,
+            targetMint,
+            amountRaw.toString(),
+            this.config.slippageBps ?? 50
+          );
+          if (!quote.quote) {
+            logger.warn(
+              { inputMint: candidate.mint, outputMint: targetMint, error: quote.error ?? null },
+              "bootstrap open-position quote unavailable after scale-down"
+            );
+            continue;
+          }
+          quoteOutAmount = parseU64(quote.quote.outAmount ?? "0");
+          if (!quoteOutAmount || quoteOutAmount <= 0n) {
+            logger.warn(
+              { inputMint: candidate.mint, outputMint: targetMint, quoteOutAmount: quote.quote.outAmount ?? null },
+              "bootstrap open-position scaled quote returned zero outAmount"
+            );
+            continue;
+          }
+        }
+      }
+
+      const inputUi = toUiAmount(amountRaw, candidate.decimals);
+      const expectedOutUi = toUiAmount(quoteOutAmount, targetDecimals);
       logger.info(
         {
           inputMint: candidate.mint,
           outputMint: targetMint,
           inputUi,
           desiredTargetUi,
+          expectedOutUi,
           label: candidate.label
         },
         "bootstrapping pool balances before open"
@@ -8002,6 +8137,14 @@ export class OrcaBot {
         "bootstrap open-position swap failed"
       );
     }
+    logger.warn(
+      {
+        targetMint,
+        desiredTargetUi,
+        attemptedCandidates: eligibleCandidates.slice(0, 12).map((candidate) => candidate.mint)
+      },
+      "bootstrap open-position failed: no candidate produced usable funds"
+    );
     return false;
   }
 
