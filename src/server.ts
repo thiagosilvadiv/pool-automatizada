@@ -6,7 +6,7 @@ import fs from "fs/promises";
 
 import { Config } from "./config.js";
 import { buildConnection, buildWallet, loadKeypair } from "./solana.js";
-import { logger } from "./logger.js";
+import { logger, stringifyError } from "./logger.js";
 import { PoolManager, type PoolSummary } from "./pool-manager.js";
 import type { HistoryEvent } from "./runner.js";
 import { createKaminoMarketsStore, type KaminoMarketEntry, type KaminoMarketsState } from "./storage.js";
@@ -536,8 +536,11 @@ export async function startServer(config: Config): Promise<void> {
       );
       res.json({ ok: true, entry });
     } catch (err) {
-      const messageRaw = err instanceof Error ? err.message : String(err);
-      const message = typeof messageRaw === "string" ? messageRaw.trim() : "";
+      const message = stringifyError(err).trim();
+      logger.error(
+        { err, poolName: req.body?.name ?? null, whirlpoolAddress: req.body?.whirlpoolAddress ?? null },
+        "failed to add pool"
+      );
       res.status(400).json({ ok: false, error: message || "Erro ao adicionar pool" });
     }
   });

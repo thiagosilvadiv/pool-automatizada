@@ -1275,7 +1275,7 @@ export class PoolManager {
       whirlpoolAddress: entry.whirlpoolAddress,
       ...(entry.overrides ?? {})
     };
-    const bot = await OrcaBot.create({
+    const createBot = async () => OrcaBot.create({
       connection: this.connection,
       wallet: this.wallet,
       config: poolConfig,
@@ -1286,6 +1286,29 @@ export class PoolManager {
         await this.maybeCloseEmptyAccountsOnLowSol();
       }
     });
+    let bot: OrcaBot | null = null;
+    let lastCreateError: unknown = null;
+    const maxCreateAttempts = 3;
+    for (let attempt = 1; attempt <= maxCreateAttempts; attempt += 1) {
+      try {
+        bot = await createBot();
+        break;
+      } catch (err) {
+        lastCreateError = err;
+        if (attempt < maxCreateAttempts && isRateLimitError(err)) {
+          logger.warn(
+            { err, poolId: entry.id, whirlpool: entry.whirlpoolAddress, attempt },
+            "rate limit while creating pool; retrying"
+          );
+          await new Promise((resolve) => setTimeout(resolve, 750 * attempt));
+          continue;
+        }
+      }
+    }
+    if (!bot) {
+      const reason = stringifyError(lastCreateError).trim() || "erro sem detalhes";
+      throw new Error(`Falha ao inicializar pool (${entry.name}): ${reason}`);
+    }
     bot.setSwapAllowlist(this.swapAllowlist);
     const historyStore = await createHistoryStore(entry.id);
     const runner = new BotRunner(bot, poolConfig, {
@@ -1296,7 +1319,12 @@ export class PoolManager {
         this.queueAutoAdd(poolId);
       }
     });
-    await runner.init();
+    try {
+      await runner.init();
+    } catch (err) {
+      const reason = stringifyError(err).trim() || "erro sem detalhes";
+      throw new Error(`Falha ao iniciar runner da pool (${entry.name}): ${reason}`);
+    }
     runner.updateSwapAllowlist(this.swapAllowlist);
     this.pools.set(entry.id, { entry, runner });
   }
