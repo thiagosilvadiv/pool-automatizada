@@ -151,6 +151,30 @@ describe("pool-manager auto-resume", () => {
     expect(saves.at(-1)?.activePoolIds ?? []).toEqual([]);
   });
 
+  it("rehydrates pools from store when in-memory state disappears", async () => {
+    const { manager, saves } = createManager();
+    const entry = createEntry("pool-restore", "Restore", "So11111111111111111111111111111111111111112");
+    const runner = createRunner();
+    (manager as any).selectedPoolId = entry.id;
+    (manager as any).activePoolIds = new Set([entry.id]);
+    (manager as any).poolsStore.load = vi.fn(async () => ({
+      selectedPoolId: entry.id,
+      activePoolIds: [entry.id],
+      pools: [entry]
+    }));
+    (manager as any).createPool = vi.fn(async (loadedEntry: any) => {
+      (manager as any).pools.set(loadedEntry.id, { entry: loadedEntry, runner });
+    });
+
+    const recovered = await manager.ensurePoolsHydrated();
+
+    expect(recovered).toBe(true);
+    expect(manager.listPools()).toEqual([entry]);
+    expect((manager as any).pools.has(entry.id)).toBe(true);
+    expect((manager as any).selectedPoolId).toBe(entry.id);
+    expect(saves.at(-1)?.pools ?? []).toEqual([entry]);
+  });
+
   it("resumes all previously active pools", async () => {
     const { manager } = createManager({ autoResumeEnabled: true, autoResumeMaxAttempts: 3, autoResumeBaseDelayMs: 100 });
     const e1 = createEntry("pool-a", "A", "So11111111111111111111111111111111111111112");

@@ -29,13 +29,14 @@ function isEditableHistoryField(field: string): field is keyof HistoryEvent {
 
 type PoolSummaryRouteService = Pick<
   PoolManager,
-  "listSummaries" | "listPools" | "getSelectedPoolId" | "getAutoResumeStatus"
+  "ensurePoolsHydrated" | "listSummaries" | "listPools" | "getSelectedPoolId" | "getAutoResumeStatus"
 >;
 
 export function registerPoolsSummaryRoute(app: Express, poolManager: PoolSummaryRouteService): void {
   let lastPoolsSnapshot: PoolSummary[] | null = null;
   let lastSelectedSnapshot: string | null = null;
   app.get("/api/pools", async (_req: Request, res: Response) => {
+    await poolManager.ensurePoolsHydrated();
     const timeoutPromise = new Promise<PoolSummary[]>((_, reject) =>
       setTimeout(() => reject(new Error("listSummaries timeout")), 5000)
     );
@@ -176,7 +177,8 @@ export async function startServer(config: Config): Promise<void> {
     poolManager.setKaminoMarkets(kaminoMarketsState.markets);
   };
 
-  app.get("/api/status", (_req: Request, res: Response) => {
+  app.get("/api/status", async (_req: Request, res: Response) => {
+    await poolManager.ensurePoolsHydrated();
     const status = poolManager.getSelectedStatus();
     if (!status) {
       res.json({
@@ -474,7 +476,8 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
-  app.get("/api/config", (_req: Request, res: Response) => {
+  app.get("/api/config", async (_req: Request, res: Response) => {
+    await poolManager.ensurePoolsHydrated();
     const selectedId = poolManager.getSelectedPoolId();
     const selected = poolManager.listPools().find((entry) => entry.id === selectedId) ?? null;
     const selectedStatus = poolManager.getSelectedStatus();

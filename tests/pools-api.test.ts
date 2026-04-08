@@ -10,6 +10,10 @@ type ServerHandle = {
 const activeServers: ServerHandle[] = [];
 
 class PoolRouteStub {
+  async ensurePoolsHydrated() {
+    return false;
+  }
+
   getSelectedPoolId() {
     return "pool-1";
   }

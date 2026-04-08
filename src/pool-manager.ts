@@ -154,6 +154,7 @@ export class PoolManager {
   private resumeAttempts = new Map<string, number>();
   private resumeInFlight = new Set<string>();
   private resumeLastError = new Map<string, string>();
+  private rehydratePoolsInFlight: Promise<boolean> | null = null;
   private kaminoLoansStore!: KaminoLoansStore;
   private kaminoLoansState: KaminoLoansState = { loans: [], updatedAt: null };
   private kaminoMarkets: KaminoMarketEntry[] = [];
@@ -249,6 +250,23 @@ export class PoolManager {
       return Array.from(this.pools.values()).map((record) => record.entry);
     }
     return [];
+  }
+
+  async ensurePoolsHydrated(): Promise<boolean> {
+    const hasEntries = this.entries.length > 0;
+    const hasRecords = this.pools.size > 0;
+    if (hasEntries && hasRecords) {
+      return false;
+    }
+    if (this.rehydratePoolsInFlight) {
+      return this.rehydratePoolsInFlight;
+    }
+    this.rehydratePoolsInFlight = this.rehydratePoolsFromStore();
+    try {
+      return await this.rehydratePoolsInFlight;
+    } finally {
+      this.rehydratePoolsInFlight = null;
+    }
   }
 
   async listSummaries(): Promise<PoolSummary[]> {
@@ -1147,20 +1165,9 @@ export class PoolManager {
       data = null;
     }
 
-    let pools = data?.pools ?? [];
+    let pools = this.normalizeLoadedPools(data?.pools ?? []);
     let selectedPoolId = data?.selectedPoolId ?? null;
     const persistedActivePoolIds = this.normalizePoolIdList((data as any)?.activePoolIds);
-
-    const deduped = this.deduplicatePools(pools);
-    if (deduped.length !== pools.length) {
-      logger.warn({ before: pools.length, after: deduped.length }, "duplicate pools detected; keeping most recent");
-    }
-    pools = deduped.map((entry) => {
-      if (typeof entry.createdAt === "string" && entry.createdAt.trim()) {
-        return entry;
-      }
-      return { ...entry, createdAt: new Date().toISOString() };
-    });
 
     if (pools.length === 0 && this.baseConfig.whirlpoolAddress) {
       const entry: PoolEntry = {
@@ -1188,6 +1195,78 @@ export class PoolManager {
     }
 
     await this.savePools();
+  }
+
+  private async rehydratePoolsFromStore(): Promise<boolean> {
+    const hadEntries = this.entries.length > 0;
+    const hadRecords = this.pools.size > 0;
+    if (hadEntries && hadRecords) {
+      return false;
+    }
+
+    let data: PoolsState<PoolEntry> | null = null;
+    try {
+      data = await this.poolsStore.load();
+    } catch (err) {
+      logger.warn({ err }, "failed to rehydrate pools from store");
+      return false;
+    }
+
+    const storedPools = this.normalizeLoadedPools(data?.pools ?? []);
+    if (!storedPools.length) {
+      return false;
+    }
+
+    const currentEntries = this.entries.length > 0
+      ? [...this.entries]
+      : Array.from(this.pools.values()).map((record) => record.entry);
+    const mergedPools = this.normalizeLoadedPools([...currentEntries, ...storedPools]);
+    const missingEntries = this.entries.length === 0 || mergedPools.length !== this.entries.length;
+    if (missingEntries) {
+      this.entries = mergedPools;
+    }
+
+    const desiredSelectedPoolId = data?.selectedPoolId ?? this.selectedPoolId ?? mergedPools[0]?.id ?? null;
+    this.selectedPoolId = mergedPools.find((entry) => entry.id === desiredSelectedPoolId)?.id
+      ?? (mergedPools[0]?.id ?? null);
+
+    const persistedActivePoolIds = this.normalizePoolIdList((data as any)?.activePoolIds);
+    if (persistedActivePoolIds.length > 0 || this.activePoolIds.size === 0) {
+      this.activePoolIds = new Set(
+        persistedActivePoolIds.filter((id) => mergedPools.some((entry) => entry.id === id))
+      );
+    }
+
+    let createdCount = 0;
+    for (const entry of mergedPools) {
+      if (this.pools.has(entry.id)) {
+        continue;
+      }
+      try {
+        await this.createPool(entry);
+        createdCount += 1;
+      } catch (err) {
+        logger.warn({ err, entry }, "failed to rehydrate missing pool record");
+      }
+    }
+
+    const recovered = missingEntries || createdCount > 0;
+    if (recovered) {
+      logger.warn(
+        {
+          restoredEntries: mergedPools.length,
+          recreatedRecords: createdCount,
+          hadEntries,
+          hadRecords
+        },
+        "pool state disappeared from memory; rehydrated from store"
+      );
+      await this.savePools();
+      if (createdCount > 0 && this.baseConfig.autoResumeEnabled && this.activePoolIds.size > 0) {
+        await this.resumeActivePools();
+      }
+    }
+    return recovered;
   }
 
   private async createPool(entry: PoolEntry): Promise<void> {
@@ -1368,6 +1447,19 @@ export class PoolManager {
       .map((id) => String(id ?? "").trim())
       .filter((id) => id.length > 0);
     return Array.from(new Set(normalized));
+  }
+
+  private normalizeLoadedPools(pools: PoolEntry[]): PoolEntry[] {
+    const deduped = this.deduplicatePools(Array.isArray(pools) ? pools : []);
+    if (deduped.length !== pools.length) {
+      logger.warn({ before: pools.length, after: deduped.length }, "duplicate pools detected; keeping most recent");
+    }
+    return deduped.map((entry) => {
+      if (typeof entry.createdAt === "string" && entry.createdAt.trim()) {
+        return entry;
+      }
+      return { ...entry, createdAt: new Date().toISOString() };
+    });
   }
 
   private normalizeOverrides(overrides?: PoolOverrides): PoolOverrides | undefined {
