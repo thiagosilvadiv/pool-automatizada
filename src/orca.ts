@@ -8643,7 +8643,7 @@ export class OrcaBot {
     }
 
     const nativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
-    const availableSol = Math.max(0, nativeSol - this.config.minSolBalance);
+    const minSolReserveForFeeSwap = 0.005;
 
     const candidates = [
       {
@@ -8679,12 +8679,23 @@ export class OrcaBot {
       }
       let amountUi = token.uiAmount;
       if (token.mint === NATIVE_MINT.toBase58()) {
-        if (availableSol <= 0) {
+        const availableNativeSol = Math.max(0, nativeSol - minSolReserveForFeeSwap);
+        if (availableNativeSol <= 0) {
+          logger.info(
+            { nativeSol, reserve: minSolReserveForFeeSwap },
+            "swap-fees-to-usdc skipped: native SOL reservado para taxas de rede"
+          );
           continue;
         }
-        amountUi = Math.min(amountUi, availableSol);
+        amountUi = Math.min(amountUi, availableNativeSol);
         if (amountUi <= 0) {
           continue;
+        }
+        if (amountUi < token.uiAmount) {
+          logger.info(
+            { feeSol: token.uiAmount, swappableSol: amountUi, nativeSol, reserve: minSolReserveForFeeSwap },
+            "swap-fees-to-usdc: swap parcial de SOL para preservar reserva minima de rede"
+          );
         }
       }
       const amountRaw = this.toRawAmountString(amountUi, token.decimals);
@@ -8827,10 +8838,18 @@ export class OrcaBot {
         // fallback permanece 6
       }
 
+      const deltaUsd = normalizeTokenAmount(delta, Math.max(0, decimals));
+      if (!(Number.isFinite(deltaUsd) && deltaUsd > 0)) {
+        logger.info(
+          { preBalance: preBalance?.toString(), postBalance: postBalance.toString(), delta: delta.toString(), targetMint },
+          "transfer-fees-to-dest-wallet: transfer skipped (deltaUsd invalido)"
+        );
+        return;
+      }
+
       const minUsd = Number(this.config.autoSwapFeesToUsdcMinUsd ?? 0);
       if (minUsd > 0) {
-        const deltaUsd = Number(delta) / Math.pow(10, Math.max(0, decimals));
-        if (!(Number.isFinite(deltaUsd) && deltaUsd >= minUsd)) {
+        if (deltaUsd < minUsd) {
           logger.info(
             { preBalance: preBalance?.toString(), postBalance: postBalance.toString(), delta: delta.toString(), minUsd, targetMint },
             "transfer-fees-to-dest-wallet: transfer skipped (delta below minUsd)"
@@ -8883,6 +8902,7 @@ export class OrcaBot {
           preBalance: preBalance?.toString(),
           postBalance: postBalance.toString(),
           delta: delta.toString(),
+          deltaUsd,
           sig
         },
         "transfer-fees-to-dest-wallet: transferência concluída"
