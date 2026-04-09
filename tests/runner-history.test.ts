@@ -52,38 +52,82 @@ function createStatus(overrides: Partial<BotStatus> = {}): BotStatus {
     effectiveExitSide: null,
     effectiveValueToken: null,
     trendStale: null,
+    kaminoActive: false,
+    kaminoEnabled: false,
+    kaminoCollateralUsd: null,
+    kaminoDebtUsd: null,
+    kaminoLtv: null,
+    kaminoAvgPriceUsdc: null,
+    kaminoTargetPriceUsdc: null,
+    kaminoCycleCount: 0,
+    kaminoCycleOpenedAt: null,
+    kaminoLastError: null,
+    kaminoCollaterals: [],
+    kaminoSimulated: false,
+    kaminoSimulatedAt: null,
+    kaminoLastAction: null,
+    kaminoLastActionAt: null,
+    kaminoOwnerPoolId: null,
+    kaminoOwnerPoolName: null,
+    kaminoMarketAddress: null,
+    kaminoHealth: null,
+    positionEntrySource: null,
+    eventPositionEntrySource: null,
     ...overrides
   };
 }
 
+function createBot(status: BotStatus = createStatus()) {
+  let currentStatus = status;
+  return {
+    getStatus: vi.fn(() => currentStatus),
+    setStatus(next: Partial<BotStatus>) {
+      currentStatus = { ...currentStatus, ...next };
+    },
+    setPositionEntryUsd: vi.fn(),
+    setKaminoState: vi.fn(),
+    getKaminoState: vi.fn(() => null),
+    resetPositionAnchorsOnResume: vi.fn(),
+    setError: vi.fn(),
+    setPoolMeta: vi.fn(),
+    clearKaminoAutoCloseHold: vi.fn()
+  } as any;
+}
+
+function createHistoryStore(payload: unknown = null) {
+  return {
+    load: vi.fn(async () => payload),
+    save: vi.fn(async () => undefined),
+    clear: vi.fn(async () => undefined)
+  };
+}
+
+function createRunner(payload: unknown = null) {
+  const bot = createBot();
+  const historyStore = createHistoryStore(payload);
+  const runner = new BotRunner(bot, {
+    hedgeEnabled: true,
+    bybitApiKey: null,
+    bybitApiSecret: null,
+    bybitBaseUrl: "https://api.bybit.com",
+    bybitRecvWindow: 5000,
+    hedgePct: 50,
+    hedgeSymbol: "BTCUSDT",
+    hedgeLeverage: 3,
+    historyMaxEvents: 200,
+    pollIntervalMs: 1000,
+    autoAddLiquidityEnabled: false
+  } as any, {
+    historyStore,
+    poolId: "pool-1",
+    poolName: "Pool 1"
+  });
+  return { bot, historyStore, runner };
+}
+
 describe("runner history hedge close", () => {
   it("prefers the explicit hedgeClose passed to recordEvent for close-position history", () => {
-    const bot = {
-      getStatus: vi.fn(),
-      setPositionEntryUsd: vi.fn(),
-      setError: vi.fn()
-    } as any;
-    const historyStore = {
-      load: vi.fn(async () => null),
-      save: vi.fn(async () => undefined),
-      clear: vi.fn(async () => undefined)
-    };
-    const runner = new BotRunner(bot, {
-      hedgeEnabled: true,
-      bybitApiKey: null,
-      bybitApiSecret: null,
-      bybitBaseUrl: "https://api.bybit.com",
-      bybitRecvWindow: 5000,
-      hedgePct: 50,
-      hedgeSymbol: "BTCUSDT",
-      hedgeLeverage: 3,
-      historyMaxEvents: 200,
-      pollIntervalMs: 1000,
-      autoAddLiquidityEnabled: false
-    } as any, {
-      historyStore,
-      poolId: "pool-1"
-    });
+    const { runner } = createRunner();
 
     const explicitHedgeClose = {
       symbol: "BTCUSDT",
@@ -117,5 +161,258 @@ describe("runner history hedge close", () => {
     expect(event.hedgeLeverage).toBe(3);
     expect(event.hedgeFeesUsd).toBe(0.8);
     expect(event.hedgePnlUsd).toBe(4.2);
+  });
+
+  it("reuses the last trusted entry on close even when the current snapshot is reconstructed", () => {
+    const { runner } = createRunner();
+
+    (runner as any).recordEvent(createStatus({
+      lastAction: "open-position",
+      positionMint: "mint-1",
+      positionEntryUsd: 100,
+      positionEntrySource: "deposit"
+    }));
+
+    (runner as any).recordEvent(createStatus({
+      lastAction: "close-position",
+      eventPositionMint: "mint-1",
+      eventPositionEntryUsd: 105,
+      eventPositionEntrySource: "reconstructed",
+      eventPositionExitUsd: 110
+    }));
+
+    const [closeEvent] = runner.getHistory();
+    expect(closeEvent.action).toBe("close-position");
+    expect(closeEvent.positionEntryUsd).toBe(100);
+    expect(closeEvent.positionEntrySource).toBe("deposit");
+    expect(closeEvent.positionPnlUsd).toBe(10);
+  });
+
+  it("backfills legacy close events from a trusted earlier entry in history", async () => {
+    const { historyStore, runner } = createRunner({
+      history: [
+        {
+          id: "open-1",
+          timestamp: "2026-04-08T21:48:00.000Z",
+          positionOpenedAt: "2026-04-08T21:48:00.000Z",
+          positionClosedAt: null,
+          actionType: "abertura",
+          action: "open-position",
+          trendDirection: null,
+          price: 48.44,
+          solUsdPrice: 100,
+          budgetUsd: 50,
+          budgetSol: 0.5,
+          targetRange: null,
+          positionRange: null,
+          positionMint: "mint-legacy",
+          tokenABalance: null,
+          tokenBBalance: null,
+          positionTokenA: null,
+          positionTokenB: null,
+          openTokenA: null,
+          openTokenB: null,
+          closeTokenA: null,
+          closeTokenB: null,
+          positionEntrySource: "deposit",
+          positionEntryUsd: 79.53,
+          positionFeesUsd: null,
+          positionPnlUsd: null,
+          positionExitUsd: null,
+          txFeeLamports: null,
+          txFeeUsd: null,
+          portfolioValue: null,
+          pnl: null,
+          portfolioUsd: 80,
+          pnlUsd: null,
+          pnlDelta: null,
+          pnlDeltaUsd: null,
+          hedgeSymbol: null,
+          hedgeNotionalUsd: null,
+          hedgeLeverage: null,
+          hedgeFeesUsd: null,
+          hedgePnlUsd: null,
+          hedgeDecision: null,
+          hedgeDecisionReason: null,
+          kaminoLoanPnlUsd: null,
+          kaminoCollateralAvgPriceUsdc: null,
+          kaminoCollateralTargetPriceUsdc: null,
+          kaminoDebtUsd: null,
+          kaminoCollateralUsd: null,
+          kaminoCycleOpenedAt: null
+        },
+        {
+          id: "close-1",
+          timestamp: "2026-04-09T07:51:00.000Z",
+          positionOpenedAt: "2026-04-08T21:48:00.000Z",
+          positionClosedAt: "2026-04-09T07:51:00.000Z",
+          actionType: "fechamento",
+          action: "close-position",
+          trendDirection: null,
+          price: 48.52,
+          solUsdPrice: 100,
+          budgetUsd: 50,
+          budgetSol: 0.5,
+          targetRange: null,
+          positionRange: null,
+          positionMint: "mint-legacy",
+          tokenABalance: null,
+          tokenBBalance: null,
+          positionTokenA: null,
+          positionTokenB: null,
+          openTokenA: null,
+          openTokenB: null,
+          closeTokenA: null,
+          closeTokenB: null,
+          positionEntrySource: "reconstructed",
+          positionEntryUsd: null,
+          positionFeesUsd: null,
+          positionPnlUsd: null,
+          positionExitUsd: 79.01,
+          txFeeLamports: null,
+          txFeeUsd: 0.02,
+          portfolioValue: null,
+          pnl: null,
+          portfolioUsd: 79.01,
+          pnlUsd: null,
+          pnlDelta: null,
+          pnlDeltaUsd: null,
+          hedgeSymbol: null,
+          hedgeNotionalUsd: null,
+          hedgeLeverage: null,
+          hedgeFeesUsd: null,
+          hedgePnlUsd: null,
+          hedgeDecision: null,
+          hedgeDecisionReason: null,
+          kaminoLoanPnlUsd: null,
+          kaminoCollateralAvgPriceUsdc: null,
+          kaminoCollateralTargetPriceUsdc: null,
+          kaminoDebtUsd: null,
+          kaminoCollateralUsd: null,
+          kaminoCycleOpenedAt: null
+        }
+      ]
+    });
+
+    await (runner as any).loadHistoryIfNeeded();
+
+    const [closeEvent] = runner.getHistory();
+    expect(closeEvent.positionEntryUsd).toBe(79.53);
+    expect(closeEvent.positionEntrySource).toBe("deposit");
+    expect(closeEvent.positionPnlUsd).toBeCloseTo(-0.54, 6);
+    expect(historyStore.save).toHaveBeenCalled();
+  });
+
+  it("keeps close entry empty when the only known value was reconstructed", async () => {
+    const { runner } = createRunner({
+      history: [
+        {
+          id: "resume-1",
+          timestamp: "2026-04-08T21:48:00.000Z",
+          positionOpenedAt: "2026-04-08T21:48:00.000Z",
+          positionClosedAt: null,
+          actionType: "monitorando",
+          action: "resume-position",
+          trendDirection: null,
+          price: 48.44,
+          solUsdPrice: 100,
+          budgetUsd: 50,
+          budgetSol: 0.5,
+          targetRange: null,
+          positionRange: null,
+          positionMint: "mint-reconstructed",
+          tokenABalance: null,
+          tokenBBalance: null,
+          positionTokenA: null,
+          positionTokenB: null,
+          openTokenA: null,
+          openTokenB: null,
+          closeTokenA: null,
+          closeTokenB: null,
+          positionEntrySource: "reconstructed",
+          positionEntryUsd: 78.54,
+          positionFeesUsd: null,
+          positionPnlUsd: null,
+          positionExitUsd: null,
+          txFeeLamports: null,
+          txFeeUsd: null,
+          portfolioValue: null,
+          pnl: null,
+          portfolioUsd: 78.54,
+          pnlUsd: null,
+          pnlDelta: null,
+          pnlDeltaUsd: null,
+          hedgeSymbol: null,
+          hedgeNotionalUsd: null,
+          hedgeLeverage: null,
+          hedgeFeesUsd: null,
+          hedgePnlUsd: null,
+          hedgeDecision: null,
+          hedgeDecisionReason: null,
+          kaminoLoanPnlUsd: null,
+          kaminoCollateralAvgPriceUsdc: null,
+          kaminoCollateralTargetPriceUsdc: null,
+          kaminoDebtUsd: null,
+          kaminoCollateralUsd: null,
+          kaminoCycleOpenedAt: null
+        },
+        {
+          id: "close-2",
+          timestamp: "2026-04-09T07:51:00.000Z",
+          positionOpenedAt: "2026-04-08T21:48:00.000Z",
+          positionClosedAt: "2026-04-09T07:51:00.000Z",
+          actionType: "fechamento",
+          action: "close-position",
+          trendDirection: null,
+          price: 48.52,
+          solUsdPrice: 100,
+          budgetUsd: 50,
+          budgetSol: 0.5,
+          targetRange: null,
+          positionRange: null,
+          positionMint: "mint-reconstructed",
+          tokenABalance: null,
+          tokenBBalance: null,
+          positionTokenA: null,
+          positionTokenB: null,
+          openTokenA: null,
+          openTokenB: null,
+          closeTokenA: null,
+          closeTokenB: null,
+          positionEntrySource: "reconstructed",
+          positionEntryUsd: null,
+          positionFeesUsd: null,
+          positionPnlUsd: null,
+          positionExitUsd: 79.01,
+          txFeeLamports: null,
+          txFeeUsd: 0.02,
+          portfolioValue: null,
+          pnl: null,
+          portfolioUsd: 79.01,
+          pnlUsd: null,
+          pnlDelta: null,
+          pnlDeltaUsd: null,
+          hedgeSymbol: null,
+          hedgeNotionalUsd: null,
+          hedgeLeverage: null,
+          hedgeFeesUsd: null,
+          hedgePnlUsd: null,
+          hedgeDecision: null,
+          hedgeDecisionReason: null,
+          kaminoLoanPnlUsd: null,
+          kaminoCollateralAvgPriceUsdc: null,
+          kaminoCollateralTargetPriceUsdc: null,
+          kaminoDebtUsd: null,
+          kaminoCollateralUsd: null,
+          kaminoCycleOpenedAt: null
+        }
+      ]
+    });
+
+    await (runner as any).loadHistoryIfNeeded();
+
+    const [closeEvent] = runner.getHistory();
+    expect(closeEvent.positionEntryUsd).toBeNull();
+    expect(closeEvent.positionPnlUsd).toBeNull();
   });
 });

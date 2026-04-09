@@ -661,6 +661,113 @@ export class BotRunner {
     return this.trendByMint.get(mint) ?? fallback ?? null;
   }
 
+  private findTrustedHistoryEntry(
+    mint: string | null,
+    options?: { items?: HistoryEvent[]; beforeIndex?: number }
+  ): { value: number; source: "deposit" | "reconstructed" | null } | null {
+    if (!mint) {
+      return null;
+    }
+    const items = options?.items ?? this.history;
+    const beforeIndex = Number.isFinite(options?.beforeIndex ?? NaN)
+      ? Math.max(0, Math.min(Number(options?.beforeIndex), items.length))
+      : items.length;
+    for (let i = beforeIndex - 1; i >= 0; i -= 1) {
+      const item = items[i];
+      if (!item || item.positionMint !== mint) {
+        continue;
+      }
+      const entryUsd = finiteOrNull(item.positionEntryUsd);
+      if (entryUsd == null) {
+        continue;
+      }
+      if (!isEntryUsdSane(entryUsd, item.budgetUsd ?? null, item.portfolioUsd ?? null, {
+        minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
+      })) {
+        continue;
+      }
+      if (item.positionEntrySource === "reconstructed") {
+        continue;
+      }
+      return {
+        value: entryUsd,
+        source: item.positionEntrySource ?? null
+      };
+    }
+    return null;
+  }
+
+  private resolveCloseEntry(
+    entryUsd: number | null,
+    mint: string | null,
+    entrySource: "deposit" | "reconstructed" | null,
+    options?: { items?: HistoryEvent[]; beforeIndex?: number }
+  ): { value: number | null; source: "deposit" | "reconstructed" | null } {
+    if (entrySource !== "reconstructed" && entryUsd != null) {
+      return { value: entryUsd, source: entrySource ?? null };
+    }
+    const trusted = this.findTrustedHistoryEntry(mint, options);
+    if (trusted) {
+      return trusted;
+    }
+    if (entrySource === "reconstructed") {
+      return { value: null, source: null };
+    }
+    return { value: null, source: entrySource ?? null };
+  }
+
+  private backfillCloseEntries(items: HistoryEvent[]): { items: HistoryEvent[]; mutated: boolean } {
+    let mutated = false;
+    const nextItems = [...items];
+    for (let i = 0; i < nextItems.length; i += 1) {
+      const item = nextItems[i];
+      if (!item || item.action !== "close-position") {
+        continue;
+      }
+      const currentEntryUsd = finiteOrNull(item.positionEntryUsd);
+      const shouldResolve = currentEntryUsd == null || item.positionEntrySource === "reconstructed";
+      if (!shouldResolve) {
+        continue;
+      }
+      const resolved = this.resolveCloseEntry(
+        currentEntryUsd,
+        item.positionMint ?? null,
+        item.positionEntrySource ?? null,
+        { items: nextItems, beforeIndex: i }
+      );
+      if (resolved.value == null) {
+        continue;
+      }
+      let nextItem = item;
+      if (currentEntryUsd !== resolved.value || (item.positionEntrySource ?? null) !== resolved.source) {
+        nextItem = {
+          ...nextItem,
+          positionEntryUsd: resolved.value,
+          positionEntrySource: resolved.source
+        };
+      }
+      const exitUsd = finiteOrNull(nextItem.positionExitUsd);
+      if (exitUsd != null && (finiteOrNull(nextItem.positionPnlUsd) == null || item.positionEntrySource === "reconstructed")) {
+        let pnlUsd = exitUsd - resolved.value;
+        const txFeeUsd = finiteOrNull(nextItem.txFeeUsd);
+        if (txFeeUsd != null) {
+          pnlUsd -= txFeeUsd;
+        }
+        if (finiteOrNull(nextItem.positionPnlUsd) !== pnlUsd) {
+          nextItem = {
+            ...nextItem,
+            positionPnlUsd: pnlUsd
+          };
+        }
+      }
+      if (nextItem !== item) {
+        nextItems[i] = nextItem;
+        mutated = true;
+      }
+    }
+    return { items: nextItems, mutated };
+  }
+
   private normalizeHedgeDecision(
     result: { status: "opened" | "skipped" | "failed"; error?: string; reason?: string }
   ): { status: "opened" | "skipped" | "failed"; reason: string | null } | null {
@@ -1139,12 +1246,13 @@ export class BotRunner {
       mergedPositionFeesUsd = null;
     } else if (action === "close-position") {
       mergedPositionMint = eventPositionMint ?? mergedPositionMint;
-      mergedPositionEntryUsd = resolveEntryFallback(
+      const resolvedCloseEntry = this.resolveCloseEntry(
         eventPositionEntryUsd ?? mergedPositionEntryUsd,
         mergedPositionMint,
         eventPositionEntrySource ?? mergedPositionEntrySource
       );
-      mergedPositionEntrySource = eventPositionEntrySource ?? mergedPositionEntrySource;
+      mergedPositionEntryUsd = resolvedCloseEntry.value;
+      mergedPositionEntrySource = resolvedCloseEntry.source;
       mergedPositionFeesUsd = eventPositionFeesUsd ?? mergedPositionFeesUsd;
       mergedPositionExitUsd = eventPositionExitUsd ?? null;
       if (mergedPositionExitUsd != null && mergedPositionEntryUsd != null) {
@@ -1266,8 +1374,10 @@ export class BotRunner {
       const timestamp = new Date().toISOString();
       const closeMint = eventPositionMint ?? null;
       const closeOpenedAt = closeMint ? this.openedAtByMint.get(closeMint) ?? null : null;
-      const closeEntrySource = eventPositionEntrySource ?? mergedPositionEntrySource ?? null;
-      const closeEntryUsd = resolveEntryFallback(eventPositionEntryUsd ?? null, closeMint, closeEntrySource);
+      const rawCloseEntrySource = eventPositionEntrySource ?? mergedPositionEntrySource ?? null;
+      const resolvedCloseEntry = this.resolveCloseEntry(eventPositionEntryUsd ?? null, closeMint, rawCloseEntrySource);
+      const closeEntrySource = resolvedCloseEntry.source;
+      const closeEntryUsd = resolvedCloseEntry.value;
       const closeFeesUsd = eventPositionFeesUsd ?? null;
       const closeExitUsd = eventPositionExitUsd ?? null;
       let closePnlUsd = closeExitUsd != null && closeEntryUsd != null
@@ -1827,7 +1937,11 @@ export class BotRunner {
           if (mergedKaminoHistory.mutated) {
             mutated = true;
           }
-          const normalizedHistory = mergedKaminoHistory.items;
+          const backfilledCloseHistory = this.backfillCloseEntries(mergedKaminoHistory.items);
+          if (backfilledCloseHistory.mutated) {
+            mutated = true;
+          }
+          const normalizedHistory = backfilledCloseHistory.items;
           const openedByMint = new Map<string, string>();
           const trendByMint = new Map<string, "up" | "down">();
           let previousMint: string | null = null;
