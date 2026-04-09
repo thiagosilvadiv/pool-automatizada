@@ -178,6 +178,20 @@ export type KaminoLogEntry = {
 
 const MAX_KAMINO_LOGS = 80;
 
+function finiteOrNull(value: unknown): number | null {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function sumNullableNumbers(a: unknown, b: unknown): number | null {
+  const left = finiteOrNull(a);
+  const right = finiteOrNull(b);
+  if (left == null && right == null) {
+    return null;
+  }
+  return (left ?? 0) + (right ?? 0);
+}
+
 export class BotRunner {
   private bot: OrcaBot;
   private config: Config;
@@ -277,8 +291,10 @@ export class BotRunner {
     try {
       const result = await this.bot.closeKaminoCycleNow();
       this.lastTickAt = new Date().toISOString();
-      this.recordEvent(this.bot.getStatus());
-      this.flushQueuedHistory();
+      const queuedHistory = this.flushQueuedHistory();
+      if (queuedHistory === 0) {
+        this.recordEvent(this.bot.getStatus());
+      }
       this.flushKaminoLogs();
       return { ok: result.ok, reason: result.reason, status: this.getStatus() };
     } catch (err) {
@@ -710,6 +726,10 @@ export class BotRunner {
       try {
         const result = await this.bot.closeKaminoCycleNow();
         this.lastTickAt = new Date().toISOString();
+        const queuedHistory = this.flushQueuedHistory();
+        if (queuedHistory === 0 && result.ok) {
+          this.recordEvent(this.bot.getStatus());
+        }
         this.flushKaminoLogs();
         if (!result.ok) {
           logger.warn({ reason: result.reason }, "pendingKaminoClose falhou");
@@ -1505,14 +1525,15 @@ export class BotRunner {
     }
   }
 
-  private flushQueuedHistory(): void {
+  private flushQueuedHistory(): number {
     const queued = this.bot.drainHistoryActions();
     if (!queued.length) {
-      return;
+      return 0;
     }
     queued.forEach((snapshot) => {
       this.recordEvent(snapshot);
     });
+    return queued.length;
   }
 
   private maybeRequestAutoAdd(status: BotStatus): void {
@@ -1535,7 +1556,104 @@ export class BotRunner {
     }
   }
 
+  private kaminoCloseDetailScore(event: HistoryEvent): number {
+    if (event.action !== "kamino-close") {
+      return -1;
+    }
+    const fields = [
+      event.positionEntryUsd,
+      event.positionExitUsd,
+      event.positionPnlUsd,
+      event.kaminoLoanPnlUsd,
+      event.kaminoDebtUsd,
+      event.kaminoCollateralUsd
+    ];
+    return fields.reduce<number>((score, value) => score + (finiteOrNull(value) != null ? 1 : 0), 0);
+  }
+
+  private canMergeKaminoCloseEvents(existing: HistoryEvent, incoming: HistoryEvent): boolean {
+    if (existing.action !== "kamino-close" || incoming.action !== "kamino-close") {
+      return false;
+    }
+    const existingOpenedAt = existing.positionOpenedAt ?? existing.kaminoCycleOpenedAt ?? null;
+    const incomingOpenedAt = incoming.positionOpenedAt ?? incoming.kaminoCycleOpenedAt ?? null;
+    const existingClosedAt = existing.positionClosedAt ?? null;
+    const incomingClosedAt = incoming.positionClosedAt ?? null;
+    const sameOpenedAt = existingOpenedAt != null && incomingOpenedAt != null && existingOpenedAt === incomingOpenedAt;
+    const sameClosedAt = existingClosedAt != null && incomingClosedAt != null && existingClosedAt === incomingClosedAt;
+    if (!sameOpenedAt && !sameClosedAt) {
+      return false;
+    }
+    const existingScore = this.kaminoCloseDetailScore(existing);
+    const incomingScore = this.kaminoCloseDetailScore(incoming);
+    if (existingScore > 0 && incomingScore > 0) {
+      return false;
+    }
+    const existingTime = Date.parse(existing.timestamp);
+    const incomingTime = Date.parse(incoming.timestamp);
+    if (Number.isNaN(existingTime) || Number.isNaN(incomingTime)) {
+      return true;
+    }
+    return Math.abs(incomingTime - existingTime) <= 2 * 60 * 1000;
+  }
+
+  private mergeKaminoCloseEvents(existing: HistoryEvent, incoming: HistoryEvent): HistoryEvent {
+    const existingScore = this.kaminoCloseDetailScore(existing);
+    const incomingScore = this.kaminoCloseDetailScore(incoming);
+    const base = incomingScore > existingScore ? incoming : existing;
+    const extra = base === existing ? incoming : existing;
+    return {
+      ...base,
+      id: existing.id,
+      timestamp: existing.timestamp,
+      positionOpenedAt: base.positionOpenedAt ?? extra.positionOpenedAt ?? null,
+      positionClosedAt: base.positionClosedAt ?? extra.positionClosedAt ?? null,
+      positionEntrySource: base.positionEntrySource ?? extra.positionEntrySource ?? null,
+      positionEntryUsd: finiteOrNull(base.positionEntryUsd) ?? finiteOrNull(extra.positionEntryUsd),
+      positionFeesUsd: finiteOrNull(base.positionFeesUsd) ?? finiteOrNull(extra.positionFeesUsd),
+      positionPnlUsd: finiteOrNull(base.positionPnlUsd) ?? finiteOrNull(extra.positionPnlUsd),
+      positionExitUsd: finiteOrNull(base.positionExitUsd) ?? finiteOrNull(extra.positionExitUsd),
+      txFeeLamports: sumNullableNumbers(existing.txFeeLamports, incoming.txFeeLamports),
+      txFeeUsd: sumNullableNumbers(existing.txFeeUsd, incoming.txFeeUsd),
+      kaminoLoanPnlUsd: finiteOrNull(base.kaminoLoanPnlUsd) ?? finiteOrNull(extra.kaminoLoanPnlUsd),
+      kaminoCollateralAvgPriceUsdc: finiteOrNull(base.kaminoCollateralAvgPriceUsdc) ?? finiteOrNull(extra.kaminoCollateralAvgPriceUsdc),
+      kaminoCollateralTargetPriceUsdc: finiteOrNull(base.kaminoCollateralTargetPriceUsdc) ?? finiteOrNull(extra.kaminoCollateralTargetPriceUsdc),
+      kaminoDebtUsd: finiteOrNull(base.kaminoDebtUsd) ?? finiteOrNull(extra.kaminoDebtUsd),
+      kaminoCollateralUsd: finiteOrNull(base.kaminoCollateralUsd) ?? finiteOrNull(extra.kaminoCollateralUsd),
+      kaminoCycleOpenedAt: base.kaminoCycleOpenedAt ?? extra.kaminoCycleOpenedAt ?? null
+    };
+  }
+
+  private mergeSparseKaminoCloseHistory(items: HistoryEvent[]): { items: HistoryEvent[]; mutated: boolean } {
+    const merged: HistoryEvent[] = [];
+    let mutated = false;
+    for (const item of items) {
+      const previous = merged.length > 0 ? merged[merged.length - 1] : null;
+      if (previous && this.canMergeKaminoCloseEvents(previous, item)) {
+        merged[merged.length - 1] = this.mergeKaminoCloseEvents(previous, item);
+        mutated = true;
+        continue;
+      }
+      merged.push(item);
+    }
+    return { items: merged, mutated };
+  }
+
   private pushEvent(event: HistoryEvent): void {
+    if (event.action === "kamino-close" && this.history.length > 0) {
+      const previous = this.history[this.history.length - 1];
+      if (previous && this.canMergeKaminoCloseEvents(previous, event)) {
+        this.history[this.history.length - 1] = this.mergeKaminoCloseEvents(previous, event);
+        if (event.portfolioValue != null) {
+          this.lastEventPortfolioValue = event.portfolioValue;
+        }
+        if (event.portfolioUsd != null) {
+          this.lastEventPortfolioUsd = event.portfolioUsd;
+        }
+        void this.saveHistory();
+        return;
+      }
+    }
     if (event.action === "close-position" && this.history.length > 0) {
       const closeMint = event.positionMint ?? null;
       if (closeMint) {
@@ -1705,19 +1823,24 @@ export class BotRunner {
             }
             normalized.push(next);
           });
+          const mergedKaminoHistory = this.mergeSparseKaminoCloseHistory(normalized);
+          if (mergedKaminoHistory.mutated) {
+            mutated = true;
+          }
+          const normalizedHistory = mergedKaminoHistory.items;
           const openedByMint = new Map<string, string>();
           const trendByMint = new Map<string, "up" | "down">();
           let previousMint: string | null = null;
-          for (let i = 0; i < normalized.length; i += 1) {
-            let next = normalized[i];
+          for (let i = 0; i < normalizedHistory.length; i += 1) {
+            let next = normalizedHistory[i];
             let rebalanceTrusted = true;
             if (next.action === "rebalanced" || next.action === "kamino-rebalanced") {
               const currentMint = next.positionMint ?? null;
               const suspicious = !currentMint || (previousMint && currentMint === previousMint);
               if (suspicious) {
                 let futureMint: string | null = null;
-                for (let j = i + 1; j < normalized.length; j += 1) {
-                  const candidate = normalized[j]?.positionMint ?? null;
+                for (let j = i + 1; j < normalizedHistory.length; j += 1) {
+                  const candidate = normalizedHistory[j]?.positionMint ?? null;
                   if (!candidate) {
                     continue;
                   }
@@ -1767,13 +1890,13 @@ export class BotRunner {
               trendByMint.delete(next.positionMint);
             }
 
-            normalized[i] = next;
+            normalizedHistory[i] = next;
             if (next.positionMint) {
               previousMint = next.positionMint;
             }
           }
           const entryByMint = new Map<string, number>();
-          for (const item of normalized) {
+          for (const item of normalizedHistory) {
             if (item.positionMint && typeof item.positionEntryUsd === "number") {
               if (isEntryUsdSane(item.positionEntryUsd, item.budgetUsd ?? null, item.portfolioUsd ?? null, {
                 minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
@@ -1783,7 +1906,7 @@ export class BotRunner {
             }
           }
           const autoAddByMint = new Set<string>();
-          for (const item of normalized) {
+          for (const item of normalizedHistory) {
             if (!item.positionMint) {
               continue;
             }
@@ -1795,7 +1918,7 @@ export class BotRunner {
             }
           }
           const hedgeDecisionByMint = new Map<string, { status: "opened" | "skipped" | "failed"; reason: string | null }>();
-          for (const item of normalized) {
+          for (const item of normalizedHistory) {
             const mint = item.positionMint ?? null;
             if (!mint) {
               continue;
@@ -1813,11 +1936,11 @@ export class BotRunner {
           const maxHistory = Number.isFinite(this.config.historyMaxEvents)
             ? Math.floor(this.config.historyMaxEvents)
             : 0;
-          if (maxHistory > 0 && normalized.length > maxHistory) {
-            normalized.splice(0, normalized.length - maxHistory);
+          if (maxHistory > 0 && normalizedHistory.length > maxHistory) {
+            normalizedHistory.splice(0, normalizedHistory.length - maxHistory);
             mutated = true;
           }
-          this.history = normalized;
+          this.history = normalizedHistory;
           this.openedAtByMint = openedByMint;
           this.entryByMint = entryByMint;
           this.trendByMint = trendByMint;

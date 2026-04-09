@@ -1522,7 +1522,7 @@ export class OrcaBot {
       return { ok: false, reason: "rate-limit", status: this.getStatus() };
     }
     try {
-      const closed = await this.closeKaminoCycle("manual");
+      const closed = await this.closeKaminoCycle("manual", { closePool: false });
       if (closed) {
         this.lastStatus.lastAction = "kamino-close";
         return { ok: true, status: this.getStatus() };
@@ -5779,7 +5779,7 @@ export class OrcaBot {
       }
     }
 
-    const shouldClosePool = options?.closePool ?? true;
+    const shouldClosePool = options?.closePool ?? false;
     let closedPool = false;
     if (shouldClosePool) {
       await this.refreshPoolState();
@@ -6755,7 +6755,6 @@ export class OrcaBot {
         positionExitUsd: closingNetUsd ?? null,
         positionPnlUsd: combinedPnlUsd,
         positionFeesUsd: 0,
-        lastActionFeeLamports: null,
         kaminoCycleOpenedAt: closingOpenedAt,
         kaminoCollateralUsd: closingCollateralUsd,
         kaminoDebtUsd: closingDebtUsd,
@@ -6768,8 +6767,14 @@ export class OrcaBot {
       logger.warn({ closeKey }, "kamino-close duplicado ignorado no historico");
     }
     this.releaseKaminoLockIfOwned();
-    this.queueKaminoLog("close", "Ciclo Kamino fechado (repay + withdraw).", "info");
-    logger.info({ mode }, "kamino cycle closed");
+    this.queueKaminoLog(
+      "close",
+      closedPool
+        ? "Ciclo Kamino fechado (repay + withdraw + pool fechada)."
+        : "Ciclo Kamino fechado (repay + withdraw; pool mantida).",
+      "info"
+    );
+    logger.info({ mode, closedPool }, "kamino cycle closed");
     // Fechamento completo libera o bloqueio de auto-close para ciclos futuros.
     this.clearKaminoAutoCloseHold();
     return true;
@@ -7169,7 +7174,7 @@ export class OrcaBot {
       if (nextMint && existing.length > 0 && !existing.includes(nextMint)) {
         if (this.config.kaminoAutoCloseOnTokenChange) {
           try {
-            const closed = await this.closeKaminoCycle("token-change");
+            const closed = await this.closeKaminoCycle("token-change", { closePool: false });
             if (!closed) {
               this.setError("Fechamento do ciclo Kamino pendente");
               return "kamino-rebalance-failed";
