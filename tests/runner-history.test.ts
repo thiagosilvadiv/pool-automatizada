@@ -80,10 +80,13 @@ function createStatus(overrides: Partial<BotStatus> = {}): BotStatus {
 function createBot(status: BotStatus = createStatus()) {
   let currentStatus = status;
   return {
+    tick: vi.fn(async () => currentStatus),
     getStatus: vi.fn(() => currentStatus),
     setStatus(next: Partial<BotStatus>) {
       currentStatus = { ...currentStatus, ...next };
     },
+    drainHistoryActions: vi.fn(() => []),
+    drainKaminoLogs: vi.fn(() => []),
     setPositionEntryUsd: vi.fn(),
     setKaminoState: vi.fn(),
     getKaminoState: vi.fn(() => null),
@@ -414,5 +417,87 @@ describe("runner history hedge close", () => {
     const [closeEvent] = runner.getHistory();
     expect(closeEvent.positionEntryUsd).toBeNull();
     expect(closeEvent.positionPnlUsd).toBeNull();
+  });
+
+  it("merges legacy kamino-close duplicates when only one row has the real exit", () => {
+    const { runner } = createRunner();
+
+    const genericClose = {
+      id: "kamino-close-generic",
+      timestamp: "2026-04-09T12:35:00.000Z",
+      positionOpenedAt: "2026-04-09T11:22:00.000Z",
+      positionClosedAt: "2026-04-09T12:35:00.000Z",
+      actionType: "fechamento-emprestimo",
+      action: "kamino-close",
+      positionEntryUsd: 71.33,
+      positionExitUsd: null,
+      positionPnlUsd: -71.33,
+      positionFeesUsd: 0.1,
+      txFeeLamports: null,
+      txFeeUsd: 0.015323,
+      kaminoLoanPnlUsd: -71.33,
+      kaminoDebtUsd: 0,
+      kaminoCollateralUsd: 71.33,
+      kaminoCycleOpenedAt: "2026-04-09T11:22:00.000Z"
+    } as any;
+
+    const detailedClose = {
+      ...genericClose,
+      id: "kamino-close-detailed",
+      timestamp: "2026-04-09T12:35:30.000Z",
+      positionEntryUsd: 24.04,
+      positionExitUsd: 24.49,
+      positionPnlUsd: 0.45,
+      kaminoLoanPnlUsd: 0.45,
+      kaminoCollateralUsd: 24.49
+    } as any;
+
+    const merged = (runner as any).mergeSparseKaminoCloseHistory([genericClose, detailedClose]);
+
+    expect(merged.mutated).toBe(true);
+    expect(merged.items).toHaveLength(1);
+    expect(merged.items[0]?.positionEntryUsd).toBe(24.04);
+    expect(merged.items[0]?.positionExitUsd).toBe(24.49);
+    expect(merged.items[0]?.positionPnlUsd).toBe(0.45);
+  });
+
+  it("does not duplicate kamino-close when a detailed queued event already exists", async () => {
+    const status = createStatus({
+      lastAction: "kamino-close",
+      kaminoCycleOpenedAt: "2026-04-09T11:22:00.000Z",
+      kaminoCollateralUsd: 71.33,
+      kaminoDebtUsd: 0,
+      positionEntryUsd: 71.33,
+      positionPnlUsd: -71.33
+    });
+    const { bot, runner } = createRunner();
+    bot.setStatus(status);
+    bot.drainHistoryActions.mockReturnValue([
+      createStatus({
+        lastAction: "kamino-repay",
+        kaminoCycleOpenedAt: "2026-04-09T11:22:00.000Z"
+      }),
+      createStatus({
+        lastAction: "kamino-withdraw",
+        kaminoCycleOpenedAt: "2026-04-09T11:22:00.000Z"
+      }),
+      createStatus({
+        lastAction: "kamino-close",
+        kaminoCycleOpenedAt: "2026-04-09T11:22:00.000Z",
+        kaminoCollateralUsd: 24.49,
+        kaminoDebtUsd: 0,
+        positionEntryUsd: 24.04,
+        positionExitUsd: 24.49,
+        positionPnlUsd: 0.45
+      })
+    ]);
+
+    await (runner as any).tickOnce();
+
+    const history = runner.getHistory();
+    const closeEvents = history.filter((item) => item.action === "kamino-close");
+    expect(closeEvents).toHaveLength(1);
+    expect(closeEvents[0]?.positionEntryUsd).toBe(24.04);
+    expect(closeEvents[0]?.positionExitUsd).toBe(24.49);
   });
 });

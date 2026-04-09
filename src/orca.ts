@@ -5092,9 +5092,10 @@ export class OrcaBot {
       }
 
       // ── PARCIAL: apenas alguns colaterais atingiram o target ──────────────
-      // Não fecha colateral parcial se a pool ainda está aberta com posição ativa,
-      // pois o closeKaminoCycle fecha a posição antes de repagar.
-      // Fechamento parcial só é seguro quando não há posição aberta.
+      // Nao fecha colateral parcial se a pool ainda esta aberta com posicao ativa.
+      // O fechamento total do ciclo usa closePool:false e mantem a pool; esta
+      // trava existe so para evitar um fechamento parcial do Kamino enquanto a
+      // posicao da pool continua aberta.
       if (hasPosition) {
         // Há posição aberta e nem todos atingiram: aguarda todos para fechar junto.
         return false;
@@ -5779,6 +5780,8 @@ export class OrcaBot {
       }
     }
 
+    // Fechar o ciclo Kamino nao deve mexer na pool de liquidez, a menos que
+    // um chamador peca isso explicitamente.
     const shouldClosePool = options?.closePool ?? false;
     let closedPool = false;
     if (shouldClosePool) {
@@ -5796,6 +5799,11 @@ export class OrcaBot {
       if (this.currentPosition) {
         throw new Error("Fechamento falhou: posicao ainda aberta");
       }
+    } else if (this.currentPosition) {
+      logger.info(
+        { mode, positionMint: this.currentPositionMint },
+        "closing Kamino while preserving active liquidity position"
+      );
     }
 
     const stable = debtMint

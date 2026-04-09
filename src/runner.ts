@@ -1005,8 +1005,14 @@ export class BotRunner {
           return;
         }
       }
-      this.recordEvent(status, { hedgeClose: hedgeCloseForClosePosition ?? hedgeCloseForRebalance });
-      this.flushQueuedHistory();
+      const queuedHistory = this.bot.drainHistoryActions();
+      const hasQueuedTerminalAction = queuedHistory.some((snapshot) => snapshot?.lastAction === status.lastAction);
+      if (!hasQueuedTerminalAction) {
+        this.recordEvent(status, { hedgeClose: hedgeCloseForClosePosition ?? hedgeCloseForRebalance });
+      }
+      queuedHistory.forEach((snapshot) => {
+        this.recordEvent(snapshot);
+      });
       this.flushKaminoLogs();
       this.maybeRequestAutoAdd(status);
     } catch (err) {
@@ -1678,7 +1684,36 @@ export class BotRunner {
       event.kaminoDebtUsd,
       event.kaminoCollateralUsd
     ];
-    return fields.reduce<number>((score, value) => score + (finiteOrNull(value) != null ? 1 : 0), 0);
+    return fields.reduce<number>((score, value) => score + (this.kaminoCloseNumberOrNull(value) != null ? 1 : 0), 0);
+  }
+
+  private kaminoCloseHasExit(event: HistoryEvent): boolean {
+    return event.action === "kamino-close" && this.kaminoCloseNumberOrNull(event.positionExitUsd) != null;
+  }
+
+  private kaminoCloseMergePriority(event: HistoryEvent): number {
+    if (event.action !== "kamino-close") {
+      return -1;
+    }
+    let priority = this.kaminoCloseDetailScore(event);
+    if (this.kaminoCloseHasExit(event)) {
+      priority += 10;
+    }
+    if (this.kaminoCloseNumberOrNull(event.kaminoLoanPnlUsd) != null) {
+      priority += 2;
+    }
+    if (this.kaminoCloseNumberOrNull(event.positionFeesUsd) != null) {
+      priority += 1;
+    }
+    return priority;
+  }
+
+  private kaminoCloseNumberOrNull(value: unknown): number | null {
+    if (value == null || value === "") {
+      return null;
+    }
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
   }
 
   private canMergeKaminoCloseEvents(existing: HistoryEvent, incoming: HistoryEvent): boolean {
@@ -1694,23 +1729,29 @@ export class BotRunner {
     if (!sameOpenedAt && !sameClosedAt) {
       return false;
     }
+    const existingTime = Date.parse(existing.timestamp);
+    const incomingTime = Date.parse(incoming.timestamp);
+    if (Number.isNaN(existingTime) || Number.isNaN(incomingTime)) {
+      return this.kaminoCloseHasExit(existing) !== this.kaminoCloseHasExit(incoming);
+    }
+    if (Math.abs(incomingTime - existingTime) > 2 * 60 * 1000) {
+      return false;
+    }
+    if (this.kaminoCloseHasExit(existing) !== this.kaminoCloseHasExit(incoming)) {
+      return true;
+    }
     const existingScore = this.kaminoCloseDetailScore(existing);
     const incomingScore = this.kaminoCloseDetailScore(incoming);
     if (existingScore > 0 && incomingScore > 0) {
       return false;
     }
-    const existingTime = Date.parse(existing.timestamp);
-    const incomingTime = Date.parse(incoming.timestamp);
-    if (Number.isNaN(existingTime) || Number.isNaN(incomingTime)) {
-      return true;
-    }
-    return Math.abs(incomingTime - existingTime) <= 2 * 60 * 1000;
+    return true;
   }
 
   private mergeKaminoCloseEvents(existing: HistoryEvent, incoming: HistoryEvent): HistoryEvent {
-    const existingScore = this.kaminoCloseDetailScore(existing);
-    const incomingScore = this.kaminoCloseDetailScore(incoming);
-    const base = incomingScore > existingScore ? incoming : existing;
+    const existingPriority = this.kaminoCloseMergePriority(existing);
+    const incomingPriority = this.kaminoCloseMergePriority(incoming);
+    const base = incomingPriority > existingPriority ? incoming : existing;
     const extra = base === existing ? incoming : existing;
     return {
       ...base,
@@ -1719,17 +1760,17 @@ export class BotRunner {
       positionOpenedAt: base.positionOpenedAt ?? extra.positionOpenedAt ?? null,
       positionClosedAt: base.positionClosedAt ?? extra.positionClosedAt ?? null,
       positionEntrySource: base.positionEntrySource ?? extra.positionEntrySource ?? null,
-      positionEntryUsd: finiteOrNull(base.positionEntryUsd) ?? finiteOrNull(extra.positionEntryUsd),
-      positionFeesUsd: finiteOrNull(base.positionFeesUsd) ?? finiteOrNull(extra.positionFeesUsd),
-      positionPnlUsd: finiteOrNull(base.positionPnlUsd) ?? finiteOrNull(extra.positionPnlUsd),
-      positionExitUsd: finiteOrNull(base.positionExitUsd) ?? finiteOrNull(extra.positionExitUsd),
+      positionEntryUsd: this.kaminoCloseNumberOrNull(base.positionEntryUsd) ?? this.kaminoCloseNumberOrNull(extra.positionEntryUsd),
+      positionFeesUsd: this.kaminoCloseNumberOrNull(base.positionFeesUsd) ?? this.kaminoCloseNumberOrNull(extra.positionFeesUsd),
+      positionPnlUsd: this.kaminoCloseNumberOrNull(base.positionPnlUsd) ?? this.kaminoCloseNumberOrNull(extra.positionPnlUsd),
+      positionExitUsd: this.kaminoCloseNumberOrNull(base.positionExitUsd) ?? this.kaminoCloseNumberOrNull(extra.positionExitUsd),
       txFeeLamports: sumNullableNumbers(existing.txFeeLamports, incoming.txFeeLamports),
       txFeeUsd: sumNullableNumbers(existing.txFeeUsd, incoming.txFeeUsd),
-      kaminoLoanPnlUsd: finiteOrNull(base.kaminoLoanPnlUsd) ?? finiteOrNull(extra.kaminoLoanPnlUsd),
-      kaminoCollateralAvgPriceUsdc: finiteOrNull(base.kaminoCollateralAvgPriceUsdc) ?? finiteOrNull(extra.kaminoCollateralAvgPriceUsdc),
-      kaminoCollateralTargetPriceUsdc: finiteOrNull(base.kaminoCollateralTargetPriceUsdc) ?? finiteOrNull(extra.kaminoCollateralTargetPriceUsdc),
-      kaminoDebtUsd: finiteOrNull(base.kaminoDebtUsd) ?? finiteOrNull(extra.kaminoDebtUsd),
-      kaminoCollateralUsd: finiteOrNull(base.kaminoCollateralUsd) ?? finiteOrNull(extra.kaminoCollateralUsd),
+      kaminoLoanPnlUsd: this.kaminoCloseNumberOrNull(base.kaminoLoanPnlUsd) ?? this.kaminoCloseNumberOrNull(extra.kaminoLoanPnlUsd),
+      kaminoCollateralAvgPriceUsdc: this.kaminoCloseNumberOrNull(base.kaminoCollateralAvgPriceUsdc) ?? this.kaminoCloseNumberOrNull(extra.kaminoCollateralAvgPriceUsdc),
+      kaminoCollateralTargetPriceUsdc: this.kaminoCloseNumberOrNull(base.kaminoCollateralTargetPriceUsdc) ?? this.kaminoCloseNumberOrNull(extra.kaminoCollateralTargetPriceUsdc),
+      kaminoDebtUsd: this.kaminoCloseNumberOrNull(base.kaminoDebtUsd) ?? this.kaminoCloseNumberOrNull(extra.kaminoDebtUsd),
+      kaminoCollateralUsd: this.kaminoCloseNumberOrNull(base.kaminoCollateralUsd) ?? this.kaminoCloseNumberOrNull(extra.kaminoCollateralUsd),
       kaminoCycleOpenedAt: base.kaminoCycleOpenedAt ?? extra.kaminoCycleOpenedAt ?? null
     };
   }
