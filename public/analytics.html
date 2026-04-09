@@ -64,6 +64,7 @@
           <span class="label">Tipo:</span>
           <label><input type="checkbox" data-type="abertura" checked /> Abertura</label>
           <label><input type="checkbox" data-type="fechamento" checked /> Fechamento</label>
+          <label><input type="checkbox" data-type="fechamento-emprestimo" checked /> Fechamento Empréstimo</label>
           <label><input type="checkbox" data-type="monitorando" checked /> Monitorando</label>
           <label><input type="checkbox" data-type="operacional" checked /> Operacional</label>
         </div>
@@ -106,7 +107,7 @@
       <section class="panel">
         <div class="row row-between">
           <h2>Performance por periodo</h2>
-          <span class="badge">Fechamentos</span>
+          <span class="badge">Fechamentos + emprestimos</span>
         </div>
         <div class="row wrap">
           <div class="field">
@@ -217,7 +218,7 @@
             </div>
           </div>
         </div>
-        <p class="hint">Grafico usa eventos de fechamento (PnL realizado).</p>
+        <p class="hint">Grafico usa eventos de fechamento da pool e do emprestimo (PnL realizado).</p>
       </section>
 
       <section class="panel">

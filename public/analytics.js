@@ -49,12 +49,22 @@ const actionLabels = {
   "out-of-range-wait": "aguardando confirmacao fora da faixa",
   "skip-low-sol": "SOL baixo",
   "skip-low-sol-position": "posicao existente (SOL baixo)",
-  "swap": "swap"
+  "swap": "swap",
+  "kamino-rebalanced": "re-range (Kamino)",
+  "kamino-rebalance-failed": "falha Kamino",
+  "kamino-deposit": "Kamino: depositar colateral",
+  "kamino-borrow": "Kamino: emprestimo",
+  "kamino-reopen": "Kamino: reabrir pool",
+  "kamino-repay": "Kamino: pagar divida",
+  "kamino-withdraw": "Kamino: retirar colateral",
+  "kamino-close": "Pago Emprestimo",
+  "kamino-wait-funds": "Kamino: aguardando saldo"
 };
 
 const actionTypeLabels = {
   "abertura": "Abertura",
   "fechamento": "Fechamento",
+  "fechamento-emprestimo": "Fechamento Empréstimo",
   "fechamento + abertura": "Fechamento + abertura",
   "monitorando": "Monitorando",
   "operacional": "Operacional"
@@ -82,6 +92,7 @@ let analyticsColumnVisibility = loadAnalyticsColumnVisibility();
 const analyticsTypeDefaults = {
   abertura: true,
   fechamento: true,
+  "fechamento-emprestimo": true,
   monitorando: true,
   operacional: true
 };
@@ -204,6 +215,43 @@ function formatCloseTimestamp(item) {
   if (!item) return "-";
   if (!item.positionClosedAt) return "-";
   return formatTimestamp(item.positionClosedAt);
+}
+
+function isLoanCloseEvent(item) {
+  return item?.actionType === "fechamento-emprestimo";
+}
+
+function isPerformanceCloseEvent(item) {
+  return item?.action === "close-position" || isLoanCloseEvent(item);
+}
+
+function getHistoryEventMetrics(item) {
+  const isLoanClose = isLoanCloseEvent(item);
+  const feesRaw = Number(item?.positionFeesUsd);
+  const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
+  const pnlRaw = Number(isLoanClose ? item?.kaminoLoanPnlUsd : item?.positionPnlUsd);
+  const hasPnl = Number.isFinite(pnlRaw);
+  const entryUsdRaw = Number(item?.positionEntryUsd);
+  const exitUsdRaw = Number(item?.positionExitUsd);
+  const entryUsd = Number.isFinite(entryUsdRaw) ? entryUsdRaw : null;
+  const exitUsd = Number.isFinite(exitUsdRaw) ? exitUsdRaw : null;
+  const pnl = hasPnl ? pnlRaw : null;
+  const pnlFromEntry = entryUsd != null && exitUsd != null ? (exitUsd - entryUsd) : null;
+  const pnlNet = isLoanClose
+    ? (pnlFromEntry ?? pnl)
+    : (pnl != null ? pnl - fees : null);
+  const pnlTotal = isLoanClose ? (pnlFromEntry ?? pnl) : pnl;
+  const pnlTotalNet = isLoanClose ? (pnlFromEntry ?? pnl) : (pnl != null ? pnl - fees : null);
+  return {
+    isLoanClose,
+    fees,
+    entryUsd,
+    exitUsd,
+    pnl,
+    pnlNet,
+    pnlTotal,
+    pnlTotalNet
+  };
 }
 
 function sumNumeric(items, key) {
@@ -339,13 +387,7 @@ function renderHistory(items) {
   const rows = items.slice(0, limit).map((item) => {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
     const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
-    const pnlRaw = Number(item.positionPnlUsd);
-    const hasPnl = Number.isFinite(pnlRaw);
-    const feesRaw = Number(item.positionFeesUsd);
-    const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
-    const poolPnl = hasPnl ? pnlRaw : 0;
-    const pnlTotal = hasPnl ? poolPnl : null;
-    const pnlTotalNet = hasPnl ? poolPnl - fees : null;
+    const metrics = getHistoryEventMetrics(item);
     return `
       <tr>
         <td data-col="datetime">${formatTimestamp(item.timestamp)}</td>
@@ -360,9 +402,9 @@ function renderHistory(items) {
         <td data-col="feesUsd">${formatNumber(item.positionFeesUsd, 2)}</td>
         <td data-col="txFeeUsd">${formatNumber(item.txFeeUsd, 6)}</td>
         <td data-col="exitUsd">${formatNumber(item.positionExitUsd, 2)}</td>
-        <td data-col="pnlUsd">${formatNumber(item.positionPnlUsd, 2)}</td>
-        <td data-col="pnlTotal">${formatNumber(pnlTotal, 2)}</td>
-        <td data-col="pnlTotalNet">${formatNumber(pnlTotalNet, 2)}</td>
+        <td data-col="pnlUsd">${formatNumber(metrics.isLoanClose ? item.kaminoLoanPnlUsd : item.positionPnlUsd, 2)}</td>
+        <td data-col="pnlTotal">${formatNumber(metrics.pnlTotal, 2)}</td>
+        <td data-col="pnlTotalNet">${formatNumber(metrics.pnlTotalNet, 2)}</td>
       </tr>
     `;
   });
@@ -373,8 +415,8 @@ function renderHistory(items) {
 function updateSummary(items, options = {}) {
   const total = items.length;
   const opens = items.filter((i) => i.action === "open-position").length;
-  const rebalances = items.filter((i) => i.action === "rebalanced").length;
-  const closes = items.filter((i) => i.action === "close-position").length;
+  const rebalances = items.filter((i) => i.action === "rebalanced" || i.action === "kamino-rebalanced").length;
+  const closes = items.filter((i) => isPerformanceCloseEvent(i)).length;
 
   const sum = (list, key) => list.reduce((acc, item) => acc + (Number(item[key]) || 0), 0);
   const inA = sum(items, "openTokenA");
@@ -585,7 +627,7 @@ function getPerfBucketKey(date, group) {
 function aggregatePerformance(items, group) {
   const buckets = new Map();
   items.forEach((item) => {
-    if (item?.action !== "close-position") return;
+    if (!isPerformanceCloseEvent(item)) return;
     if (!item?.timestamp) return;
     const date = new Date(item.timestamp);
     if (Number.isNaN(date.getTime())) return;
@@ -602,24 +644,24 @@ function aggregatePerformance(items, group) {
       pnlTotal: 0,
       pnlTotalNet: 0
     };
-    const fees = Number(item.positionFeesUsd) || 0;
-    const pnlRaw = Number(item.positionPnlUsd);
-    const hasPnl = Number.isFinite(pnlRaw);
-    if (!hasPnl) {
+    const metrics = getHistoryEventMetrics(item);
+    const hasAnyMetric = metrics.pnl != null
+      || metrics.pnlNet != null
+      || metrics.pnlTotal != null
+      || metrics.pnlTotalNet != null
+      || metrics.fees !== 0;
+    if (!hasAnyMetric) {
       return;
     }
-    const pnl = hasPnl ? pnlRaw : 0;
-    const entryUsd = Number(item.positionEntryUsd);
-    bucket.fees += fees;
-    if (Number.isFinite(entryUsd) && entryUsd > 0) {
-      bucket.entrySum += entryUsd;
+    bucket.fees += metrics.fees;
+    if (metrics.entryUsd != null && metrics.entryUsd > 0) {
+      bucket.entrySum += metrics.entryUsd;
       bucket.entryCount += 1;
     }
-    const pnlNet = pnl - fees;
-    bucket.pnl += pnl;
-    bucket.pnlNet += pnlNet;
-    bucket.pnlTotal += pnl;
-    bucket.pnlTotalNet += pnlNet;
+    bucket.pnl += metrics.pnl ?? 0;
+    bucket.pnlNet += metrics.pnlNet ?? 0;
+    bucket.pnlTotal += metrics.pnlTotal ?? 0;
+    bucket.pnlTotalNet += metrics.pnlTotalNet ?? 0;
     buckets.set(key, bucket);
   });
   const series = Array.from(buckets.values()).sort((a, b) => a.date - b.date);
@@ -821,9 +863,9 @@ function hidePerfTooltip() {
 
 function updatePerformanceStats(items) {
   const closeItems = Array.isArray(items)
-    ? items.filter((item) => item?.action === "close-position")
+    ? items.filter((item) => isPerformanceCloseEvent(item))
     : [];
-  const totalFeesUsd = sumNumeric(closeItems, "positionFeesUsd");
+  const totalFeesUsd = closeItems.reduce((acc, item) => acc + getHistoryEventMetrics(item).fees, 0);
   const avgEntryUsd = averageNumeric(closeItems, "positionEntryUsd");
   const feeYieldPct = avgEntryUsd != null ? (totalFeesUsd / avgEntryUsd) * 100 : null;
   const periodDays = getPerfPeriodDays(closeItems);
