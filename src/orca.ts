@@ -47,6 +47,7 @@ const FORCE_SPLIT_SOL = true;
 const JUPITER_DIRECT_ONLY = false;
 const KAMINO_SWAP_SLIPPAGE_BPS = 100;
 const DEFAULT_KAMINO_MARKET = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF";
+const JUPITER_NATIVE_SOL_SWAP_BUFFER = 0.005;
 
 export function computeRiskAwareRepayChunk(params: {
   debtRemaining: number;
@@ -106,6 +107,17 @@ export function selectRepayChunkWithQuote(params: {
     return { chunk: 0, reason: "capacidade insuficiente (price/quote)" };
   }
   return { chunk };
+}
+
+export function computeSpendableNativeSol(
+  totalNativeSol: number,
+  minSolBalance: number,
+  extraReserveSol = JUPITER_NATIVE_SOL_SWAP_BUFFER
+): number {
+  const safeTotal = Number.isFinite(totalNativeSol) ? Math.max(0, totalNativeSol) : 0;
+  const safeMinBalance = Number.isFinite(minSolBalance) ? Math.max(0, minSolBalance) : 0;
+  const safeExtraReserve = Number.isFinite(extraReserveSol) ? Math.max(0, extraReserveSol) : 0;
+  return Math.max(0, safeTotal - safeMinBalance - safeExtraReserve);
 }
 
 export async function performSplitRepayWithCollateralHelper(params: {
@@ -7882,7 +7894,7 @@ export class OrcaBot {
         this.lastSolBalanceFallback = true;
         logger.warn({ err, fallbackSol: nativeSol }, "falha ao ler SOL; usando cache");
       }
-      const availableSol = Math.max(0, nativeSol - this.config.minSolBalance);
+      const availableSol = computeSpendableNativeSol(nativeSol, this.config.minSolBalance);
       if (this.poolState.isTokenASol) {
         tokenA += availableSol;
       }
@@ -8045,10 +8057,7 @@ export class OrcaBot {
     let availableNativeSol = 0;
     try {
       totalNativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
-      availableNativeSol = Math.max(
-        0,
-        totalNativeSol - this.config.minSolBalance
-      );
+      availableNativeSol = computeSpendableNativeSol(totalNativeSol, this.config.minSolBalance);
       if (availableNativeSol > 0 && targetMint !== NATIVE_MINT.toBase58()) {
         candidates.push({
           mint: NATIVE_MINT.toBase58(),
@@ -8289,7 +8298,7 @@ export class OrcaBot {
     let availableNativeSol = 0;
     try {
       totalNativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
-      availableNativeSol = Math.max(0, totalNativeSol - this.config.minSolBalance);
+      availableNativeSol = computeSpendableNativeSol(totalNativeSol, this.config.minSolBalance);
       if (availableNativeSol > 0 && targetMint !== NATIVE_MINT.toBase58()) {
         candidates.push({
           mint: NATIVE_MINT.toBase58(),
@@ -8738,15 +8747,18 @@ export class OrcaBot {
         const message = formatErrorWithLogs(stringifyError(err), logs);
         lastError = message;
         const lower = message.toLowerCase();
+        const isInsufficientLamports = lower.includes("insufficient lamports");
         const isJupiterRetryable =
-          this.isKaminoRetryableError(message) ||
-          lower.includes("0x1771") ||
-          lower.includes("0x1553") ||
-          lower.includes("sqrtprice") ||
-          lower.includes("sqrt_price") ||
-          lower.includes("price out of bounds") ||
-          lower.includes("priceoutofbounds") ||
-          lower.includes("simulation failed");
+          !isInsufficientLamports && (
+            this.isKaminoRetryableError(message) ||
+            lower.includes("0x1771") ||
+            lower.includes("0x1553") ||
+            lower.includes("sqrtprice") ||
+            lower.includes("sqrt_price") ||
+            lower.includes("price out of bounds") ||
+            lower.includes("priceoutofbounds") ||
+            lower.includes("simulation failed")
+          );
         if (attempt < maxAttempts && isJupiterRetryable) {
           logger.warn({ attempt, err: message }, "swap jupiter retry after transient/slippage/price-bounds error");
           await this.sleep(KAMINO_REBALANCE_RETRY_SEC * 1000);
@@ -9435,7 +9447,7 @@ export class OrcaBot {
     }
 
     const nativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
-    const minSolReserveForFeeSwap = 0.005;
+    const minSolReserveForFeeSwap = Math.max(0, this.config.minSolBalance) + JUPITER_NATIVE_SOL_SWAP_BUFFER;
 
     const candidates = [
       {
