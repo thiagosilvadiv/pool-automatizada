@@ -296,6 +296,9 @@ export class BotRunner {
         this.recordEvent(this.bot.getStatus());
       }
       this.flushKaminoLogs();
+      if (result.ok) {
+        this.maybeRequestAutoAdd(this.bot.getStatus());
+      }
       return { ok: result.ok, reason: result.reason, status: this.getStatus() };
     } catch (err) {
       logger.error({ err }, "close-kamino failed");
@@ -838,6 +841,9 @@ export class BotRunner {
           this.recordEvent(this.bot.getStatus());
         }
         this.flushKaminoLogs();
+        if (result.ok) {
+          this.maybeRequestAutoAdd(this.bot.getStatus());
+        }
         if (!result.ok) {
           logger.warn({ reason: result.reason }, "pendingKaminoClose falhou");
         }
@@ -1636,6 +1642,9 @@ export class BotRunner {
       this.autoAddRequestedByMint.delete(mergedPositionMint);
       this.hedgeDecisionByMint.delete(mergedPositionMint);
     }
+    if (action === "kamino-close" && mergedPositionMint) {
+      this.autoAddRequestedByMint.delete(mergedPositionMint);
+    }
     if (action === "close-position") {
       this.lastHedgeClose = null;
     }
@@ -1660,7 +1669,7 @@ export class BotRunner {
     if (!mint) {
       return;
     }
-    if (status.lastAction !== "no-action") {
+    if (status.lastAction !== "no-action" && status.lastAction !== "kamino-close") {
       return;
     }
     if (this.autoAddRequestedByMint.has(mint)) {

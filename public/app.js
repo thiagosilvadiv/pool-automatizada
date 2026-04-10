@@ -244,6 +244,7 @@ function applyStatusSnapshot(status) {
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const closeBtn = document.getElementById("closeBtn");
+const addLiquidityBtn = document.getElementById("addLiquidityBtn");
 const topupBtn = document.getElementById("topupBtn");
 const closeEmptyAccountsBtn = document.getElementById("closeEmptyAccountsBtn");
 const swapToSolBtn = document.getElementById("swapToSolBtn");
@@ -1650,6 +1651,9 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
     kaminoLastErrorEl.textContent = status.kaminoLastError ? String(status.kaminoLastError) : "-";
   }
   renderKaminoCollaterals(status.kaminoCollaterals, status.kaminoActive);
+  if (addLiquidityBtn) {
+    addLiquidityBtn.disabled = !status.positionMint;
+  }
   if (kaminoCloseBtn) {
     kaminoCloseBtn.disabled = !status.kaminoActive;
   }
@@ -1810,6 +1814,18 @@ closeBtn.addEventListener("click", async () => {
   await fetch("/api/close-position", { method: "POST" });
   updateUI();
 });
+
+if (addLiquidityBtn) {
+  addLiquidityBtn.addEventListener("click", async () => {
+    const res = await fetch("/api/add-liquidity", { method: "POST" });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) {
+      const msg = data?.error ?? data?.reason ?? "Falha ao adicionar liquidez.";
+      window.alert(msg);
+    }
+    updateUI();
+  });
+}
 
 if (kaminoCloseBtn) {
   kaminoCloseBtn.addEventListener("click", async () => {

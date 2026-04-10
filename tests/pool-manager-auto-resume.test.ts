@@ -1,6 +1,11 @@
 ﻿import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig, type Config } from "../src/config.js";
 import { PoolManager } from "../src/pool-manager.js";
+vi.mock("../src/orca.js", () => ({
+  OrcaBot: {
+    create: vi.fn()
+  }
+}));
 
 const originalEnv = { ...process.env };
 
@@ -34,6 +39,10 @@ function createRunner(options?: {
   running?: boolean;
   startImpl?: () => Promise<void>;
   closeImpl?: () => Promise<void>;
+  autoAddEnabled?: boolean;
+  busy?: boolean;
+  status?: Record<string, unknown>;
+  autoAddImpl?: (limits: { maxTokenA?: number; maxTokenB?: number }) => Promise<{ ok: boolean; reason?: string }>;
 }) {
   let running = Boolean(options?.running);
   const start = vi.fn(async () => {
@@ -55,7 +64,7 @@ function createRunner(options?: {
       lastAction: "close-position"
     };
   });
-  const getStatus = vi.fn(() => ({ running }));
+  const getStatus = vi.fn(() => ({ running, ...(options?.status ?? {}) }));
 
   return {
     start,
@@ -72,10 +81,15 @@ function createRunner(options?: {
     topUpSolNow: vi.fn(async () => ({ ok: true })),
     swapWalletToSolNow: vi.fn(async () => ({ ok: true, swaps: 0, failed: 0, totalOutLamports: 0, details: [] })),
     updateSwapAllowlist: vi.fn(),
-    isAutoAddEnabled: vi.fn(() => false),
-    isBusy: vi.fn(() => false),
+    isAutoAddEnabled: vi.fn(() => Boolean(options?.autoAddEnabled)),
+    isBusy: vi.fn(() => Boolean(options?.busy)),
     getWalletBalances: vi.fn(async () => ({ tokenA: 0, tokenB: 0 })),
-    autoAddLiquidity: vi.fn(async () => ({ ok: true }))
+    autoAddLiquidity: vi.fn(async (limits: { maxTokenA?: number; maxTokenB?: number }) => {
+      if (options?.autoAddImpl) {
+        return options.autoAddImpl(limits);
+      }
+      return { ok: true };
+    })
   };
 }
 
@@ -261,5 +275,38 @@ describe("pool-manager auto-resume", () => {
     expect((manager as any).activePoolIds.has(entry.id)).toBe(true);
     expect((manager as any).resumeLastError.get(entry.id)).toContain("still failing");
     expect((manager as any).resumeTimers.size).toBe(0);
+  });
+
+  it("delegates manual add-liquidity to the selected pool runner", async () => {
+    const { manager } = createManager();
+    const entry = createEntry("pool-add", "Add", "So11111111111111111111111111111111111111112");
+    const runner = createRunner({ autoAddEnabled: true });
+    wirePool(manager, entry, runner);
+    (manager as any).selectedPoolId = entry.id;
+
+    const result = await manager.addLiquiditySelected();
+
+    expect(result.ok).toBe(true);
+    expect(runner.autoAddLiquidity).toHaveBeenCalledWith({});
+  });
+
+  it("queues periodic auto-add checks for running pools with an open position", async () => {
+    vi.useFakeTimers();
+    const { manager } = createManager({ autoAddLiquidityCheckIntervalSec: 300 });
+    const entry = createEntry("pool-auto-add", "Auto Add", "So11111111111111111111111111111111111111112");
+    const runner = createRunner({
+      running: true,
+      autoAddEnabled: true,
+      status: {
+        running: true,
+        positionMint: "mint-1"
+      }
+    });
+    wirePool(manager, entry, runner);
+
+    await (manager as any).runPeriodicAutoAddCheck();
+    await vi.advanceTimersByTimeAsync(1500);
+
+    expect(runner.autoAddLiquidity).toHaveBeenCalledTimes(1);
   });
 });

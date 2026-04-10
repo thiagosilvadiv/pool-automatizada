@@ -1,6 +1,9 @@
 ﻿import express from "express";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerPoolsSummaryRoute } from "../src/server.js";
+vi.mock("../src/pool-manager.js", () => ({
+  PoolManager: class {}
+}));
 
 type ServerHandle = {
   baseUrl: string;

@@ -244,6 +244,15 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
+  app.post("/api/add-liquidity", async (_req: Request, res: Response) => {
+    try {
+      const result = await poolManager.addLiquiditySelected();
+      res.json({ ok: result.ok, reason: result.reason, status: poolManager.getSelectedStatus() });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   app.post("/api/kamino/close", async (_req: Request, res: Response) => {
     try {
       const result = await poolManager.closeKaminoCycleSelected();
@@ -502,6 +511,7 @@ export async function startServer(config: Config): Promise<void> {
       pythSolUsdFeedId: config.pythSolUsdFeedId,
       priceStaleMaxSec: config.priceStaleMaxSec,
       autoAddLiquidityEnabled: config.autoAddLiquidityEnabled,
+      autoAddLiquidityCheckIntervalSec: config.autoAddLiquidityCheckIntervalSec,
       kaminoRebalanceEnabled: config.kaminoRebalanceEnabled,
       kaminoDepositPct: config.kaminoDepositPct,
       kaminoBorrowAsset: config.kaminoBorrowAsset,

@@ -40,6 +40,7 @@ export type Config = {
   autoSwapFeesToUsdcMinUsd: number;
   autoSwapFeesToUsdcDestWallet: string | null;
   autoAddLiquidityEnabled: boolean;
+  autoAddLiquidityCheckIntervalSec: number;
   kaminoRebalanceEnabled: boolean;
   kaminoDepositPct: number;
   kaminoBorrowAsset: "usdc" | "usdt" | "auto";
@@ -516,6 +517,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const envJupiterApiKey = parseEnvString(process.env.JUPITER_API_KEY);
   const envJupiterApiUrl = parseEnvString(process.env.JUPITER_API_URL);
   const envKaminoScanIntervalSec = parseEnvNumber(process.env.KAMINO_SCAN_INTERVAL_SEC);
+  const envAutoAddLiquidityCheckIntervalSec = parseEnvNumber(process.env.AUTO_ADD_LIQUIDITY_CHECK_INTERVAL_SEC);
   const envKaminoMinCombinedPnlUsd = parseEnvNumber(process.env.KAMINO_MIN_COMBINED_PNL_USD);
   const envKaminoEnabled = parseEnvBool(process.env.KAMINO_ENABLED);
   const envKaminoRebalanceEnabled = parseEnvBool(process.env.KAMINO_REBALANCE_ENABLED);
@@ -604,6 +606,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? null,
     autoAddLiquidityEnabled: parseEnvBool(process.env.AUTO_ADD_LIQUIDITY_ENABLED)
       ?? Boolean((data as any).autoAddLiquidityEnabled ?? false),
+    autoAddLiquidityCheckIntervalSec: envAutoAddLiquidityCheckIntervalSec
+      ?? Number((data as any).autoAddLiquidityCheckIntervalSec ?? 300),
     kaminoRebalanceEnabled: envKaminoRebalanceEnabled
       ?? dataKaminoRebalanceEnabled
       ?? (kaminoEnabledFallback ? true : false),
@@ -783,6 +787,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.autoSwapToSolMinOutSol) || config.autoSwapToSolMinOutSol < 0) {
     throw new Error("autoSwapToSolMinOutSol must be >= 0");
+  }
+  if (!Number.isFinite(config.autoAddLiquidityCheckIntervalSec) || config.autoAddLiquidityCheckIntervalSec < 60) {
+    throw new Error("autoAddLiquidityCheckIntervalSec must be >= 60");
   }
   if (!Number.isFinite(config.autoResumeMaxAttempts)
     || !Number.isInteger(config.autoResumeMaxAttempts)

@@ -163,6 +163,8 @@ export class PoolManager {
   private pendingAutoAddPools = new Set<string>();
   private autoAddInProgress = false;
   private autoAddTimer: NodeJS.Timeout | null = null;
+  private autoAddScanTimer: NodeJS.Timeout | null = null;
+  private autoAddScanInFlight = false;
   private activePoolIds = new Set<string>();
   private resumeTimers = new Map<string, NodeJS.Timeout>();
   private resumeAttempts = new Map<string, number>();
@@ -194,6 +196,7 @@ export class PoolManager {
       await this.resumeActivePools();
     }
     this.startKaminoLoansScan();
+    this.startAutoAddLiquidityChecks();
   }
 
   getSwapAllowlist(): { mints: string[]; updatedAt: string | null } {
@@ -580,6 +583,14 @@ export class PoolManager {
       totalOutLamports: result.totalOutLamports,
       details: result.details ?? []
     };
+  }
+
+  async addLiquiditySelected(): Promise<{ ok: boolean; reason?: string }> {
+    if (!this.selectedPoolId) {
+      throw new Error("No pool selected");
+    }
+    const record = this.getRecord(this.selectedPoolId);
+    return record.runner.autoAddLiquidity({});
   }
 
   startAutoCloseEmptyAccounts(): void {
@@ -1382,6 +1393,40 @@ export class PoolManager {
     }
     this.pendingAutoAddPools.add(poolId);
     this.scheduleAutoAdd();
+  }
+
+  private startAutoAddLiquidityChecks(): void {
+    if (this.autoAddScanTimer) {
+      clearInterval(this.autoAddScanTimer);
+    }
+    const intervalMs = Math.max(60, Number(this.baseConfig.autoAddLiquidityCheckIntervalSec ?? 300)) * 1000;
+    this.autoAddScanTimer = setInterval(() => {
+      void this.runPeriodicAutoAddCheck();
+    }, intervalMs);
+  }
+
+  private async runPeriodicAutoAddCheck(): Promise<void> {
+    if (this.autoAddScanInFlight) {
+      return;
+    }
+    this.autoAddScanInFlight = true;
+    try {
+      for (const [id, record] of this.pools.entries()) {
+        if (!record.runner.isAutoAddEnabled()) {
+          continue;
+        }
+        const status = record.runner.getStatus();
+        if (!status?.running || !status?.positionMint) {
+          continue;
+        }
+        if (record.runner.isBusy()) {
+          continue;
+        }
+        this.queueAutoAdd(id);
+      }
+    } finally {
+      this.autoAddScanInFlight = false;
+    }
   }
 
   private scheduleAutoAdd(): void {
