@@ -1848,8 +1848,8 @@ export class OrcaBot {
 
     let balances = await this.getTokenBalances();
     if (balances.tokenA <= 0 && balances.tokenB <= 0) {
-      const bootstrappedFromSol = await this.maybeBootstrapAddLiquidityFromNativeSol(price, solUsdPrice);
-      if (bootstrappedFromSol) {
+      const bootstrappedFromWallet = await this.maybeBootstrapAddLiquidityFromWallet(price, solUsdPrice);
+      if (bootstrappedFromWallet) {
         balances = await this.getTokenBalances();
       }
     }
@@ -8222,15 +8222,12 @@ export class OrcaBot {
     return false;
   }
 
-  private async maybeBootstrapAddLiquidityFromNativeSol(price: number, solUsdPrice: number | null): Promise<boolean> {
+  private async maybeBootstrapAddLiquidityFromWallet(price: number, solUsdPrice: number | null): Promise<boolean> {
     if (!this.poolState) {
       return false;
     }
     if (!this.config.jupiterApiKey) {
       logger.info("bootstrap add-liquidity skipped: Jupiter API key ausente");
-      return false;
-    }
-    if (this.poolState.isTokenASol || this.poolState.isTokenBSol) {
       return false;
     }
     const stableLeg = this.resolveStablePoolLeg();
@@ -8245,25 +8242,11 @@ export class OrcaBot {
       return false;
     }
 
-    let nativeSol = 0;
-    try {
-      nativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
-    } catch (err) {
-      logger.warn({ err }, "bootstrap add-liquidity: falha ao ler saldo SOL");
-      return false;
-    }
-    const availableNativeSol = Math.max(0, nativeSol - this.config.minSolBalance);
-    if (!(Number.isFinite(availableNativeSol) && availableNativeSol > 0)) {
-      logger.info(
-        { nativeSol, minSolBalance: this.config.minSolBalance },
-        "bootstrap add-liquidity skipped: sem SOL livre"
-      );
-      return false;
-    }
-
-    let desiredStableUi: number | null = null;
+    const targetMint = stableLeg.mint;
+    const targetDecimals = stableLeg.decimals;
+    let desiredTargetUi: number | null = null;
     if (this.config.budgetUsd != null) {
-      desiredStableUi = this.config.budgetUsd;
+      desiredTargetUi = this.config.budgetUsd;
       if (this.currentPosition) {
         try {
           const snapshot = await this.getPositionTokenAmounts(this.currentPosition);
@@ -8271,124 +8254,215 @@ export class OrcaBot {
             ? snapshot.tokenB + snapshot.tokenA * price
             : snapshot.tokenA + (price > 0 ? snapshot.tokenB / price : 0);
           if (Number.isFinite(currentStableValue) && currentStableValue > 0) {
-            desiredStableUi = Math.max(0, this.config.budgetUsd - currentStableValue);
+            desiredTargetUi = Math.max(0, this.config.budgetUsd - currentStableValue);
           }
         } catch (err) {
           logger.warn({ err }, "bootstrap add-liquidity: falha ao estimar valor atual da posicao");
         }
       }
-      if (!(Number.isFinite(desiredStableUi) && desiredStableUi > 0)) {
+      if (!(Number.isFinite(desiredTargetUi) && desiredTargetUi > 0)) {
         logger.info(
-          { budgetUsd: this.config.budgetUsd, desiredStableUi },
+          { budgetUsd: this.config.budgetUsd, desiredTargetUi },
           "bootstrap add-liquidity skipped: budget ja preenchido"
         );
         return false;
       }
     }
 
-    let spendSolUi = availableNativeSol;
-    const solPrice = solUsdPrice ?? this.lastStatus.solUsdPrice ?? await this.tryGetSolUsdPrice();
-    if (desiredStableUi != null) {
-      if (!(solPrice && solPrice > 0)) {
-        logger.info(
-          { desiredStableUi },
-          "bootstrap add-liquidity skipped: SOL/USD indisponivel para respeitar budget"
-        );
-        return false;
-      }
-      spendSolUi = Math.min(availableNativeSol, (desiredStableUi / solPrice) * 1.03);
-    }
-    if (!(Number.isFinite(spendSolUi) && spendSolUi > 0)) {
-      return false;
-    }
-
-    let amountRaw = toRawAmount(spendSolUi, 9);
-    if (!isValidU64(amountRaw) || amountRaw <= 0n) {
-      logger.warn({ spendSolUi, amountRaw: amountRaw.toString() }, "bootstrap add-liquidity: amount de SOL fora do range");
-      return false;
-    }
-
-    let desiredStableRaw: bigint | null = null;
-    if (desiredStableUi != null) {
-      desiredStableRaw = toRawAmount(desiredStableUi, stableLeg.decimals);
-      if (!isValidU64(desiredStableRaw) || desiredStableRaw <= 0n) {
-        desiredStableRaw = null;
+    let desiredTargetRaw: bigint | null = null;
+    if (desiredTargetUi != null) {
+      desiredTargetRaw = toRawAmount(desiredTargetUi, targetDecimals);
+      if (!isValidU64(desiredTargetRaw) || desiredTargetRaw <= 0n) {
+        desiredTargetRaw = null;
       }
     }
 
-    let quote = await this.fetchJupiterQuoteExactInDetailed(
-      NATIVE_MINT.toBase58(),
-      stableLeg.mint,
-      amountRaw.toString(),
-      this.config.slippageBps ?? 50
-    );
-    if (!quote.quote) {
+    const candidates: Array<{
+      mint: string;
+      decimals: number;
+      uiAmount: number;
+      actualUiAmount: number;
+      label: string;
+      priority: number;
+    }> = [];
+    let totalNativeSol = 0;
+    let availableNativeSol = 0;
+    try {
+      totalNativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
+      availableNativeSol = Math.max(0, totalNativeSol - this.config.minSolBalance);
+      if (availableNativeSol > 0 && targetMint !== NATIVE_MINT.toBase58()) {
+        candidates.push({
+          mint: NATIVE_MINT.toBase58(),
+          decimals: 9,
+          uiAmount: availableNativeSol,
+          actualUiAmount: totalNativeSol,
+          label: "SOL",
+          priority: 1
+        });
+      }
+    } catch {
+      // ignore native SOL candidate failures
+    }
+
+    const walletTokens = await this.getWalletTokens().catch(() => []);
+    for (const token of walletTokens) {
+      if (token.uiAmount <= 0 || token.decimals <= 0) {
+        continue;
+      }
+      if (token.mint === targetMint) {
+        continue;
+      }
+      const availableUi = this.balanceCoordinator && this.poolId
+        ? this.balanceCoordinator.getAvailableBalance(this.poolId, token.mint, token.uiAmount)
+        : token.uiAmount;
+      if (!(Number.isFinite(availableUi) && availableUi > 0)) {
+        continue;
+      }
+      candidates.push({
+        mint: token.mint,
+        decimals: token.decimals,
+        uiAmount: availableUi,
+        actualUiAmount: token.uiAmount,
+        label: this.isStableLikeMint(token.mint) ? this.getStableLabelForMint(token.mint) : token.mint,
+        priority: this.isStableLikeMint(token.mint) ? 0 : 2
+      });
+    }
+
+    if (!candidates.length) {
       logger.warn(
-        { inputMint: NATIVE_MINT.toBase58(), outputMint: stableLeg.mint, error: quote.error ?? null },
-        "bootstrap add-liquidity quote unavailable"
+        {
+          targetMint,
+          desiredTargetUi,
+          totalNativeSol,
+          availableNativeSol,
+          minSolBalance: this.config.minSolBalance,
+          walletTokenCount: walletTokens.length,
+          allowlistActive: this.isSwapAllowlistActive()
+        },
+        "bootstrap add-liquidity skipped: no spendable wallet candidates"
       );
       return false;
     }
-    let quoteOutAmount = parseU64(quote.quote.outAmount ?? "0");
-    if (!quoteOutAmount || quoteOutAmount <= 0n) {
+
+    candidates.sort((a, b) => {
+      if (a.priority !== b.priority) {
+        return a.priority - b.priority;
+      }
+      if (a.uiAmount === b.uiAmount) {
+        return 0;
+      }
+      return a.uiAmount > b.uiAmount ? -1 : 1;
+    });
+
+    const eligibleCandidates = candidates.filter((candidate) => (
+      !this.isSwapAllowlistActive() || this.isSwapAllowed(candidate.mint)
+    ));
+    if (!eligibleCandidates.length) {
       logger.warn(
-        { outputMint: stableLeg.mint, quoteOutAmount: quote.quote.outAmount ?? null },
-        "bootstrap add-liquidity quote returned zero outAmount"
+        {
+          targetMint,
+          desiredTargetUi,
+          candidates: candidates.slice(0, 5).map((candidate) => ({
+            mint: candidate.mint,
+            uiAmount: candidate.uiAmount,
+            actualUiAmount: candidate.actualUiAmount
+          }))
+        },
+        "bootstrap add-liquidity skipped: all candidates blocked by allowlist"
       );
       return false;
     }
 
-    if (desiredStableRaw && quoteOutAmount > desiredStableRaw) {
-      const scaledInput = scaleInputAmount(amountRaw, quoteOutAmount, desiredStableRaw);
-      if (scaledInput > 0n && scaledInput < amountRaw && isValidU64(scaledInput)) {
-        amountRaw = scaledInput;
-        quote = await this.fetchJupiterQuoteExactInDetailed(
-          NATIVE_MINT.toBase58(),
-          stableLeg.mint,
-          amountRaw.toString(),
-          this.config.slippageBps ?? 50
+    for (const candidate of eligibleCandidates.slice(0, 12)) {
+      let amountRaw = toRawAmount(candidate.uiAmount, candidate.decimals);
+      if (!isValidU64(amountRaw) || amountRaw <= 0n) {
+        continue;
+      }
+
+      let quote = await this.fetchJupiterQuoteExactInDetailed(
+        candidate.mint,
+        targetMint,
+        amountRaw.toString(),
+        this.config.slippageBps ?? 50
+      );
+      if (!quote.quote) {
+        logger.warn(
+          { inputMint: candidate.mint, outputMint: targetMint, error: quote.error ?? null },
+          "bootstrap add-liquidity quote unavailable"
         );
-        if (!quote.quote) {
-          logger.warn(
-            { inputMint: NATIVE_MINT.toBase58(), outputMint: stableLeg.mint, error: quote.error ?? null },
-            "bootstrap add-liquidity quote unavailable after scale-down"
+        continue;
+      }
+      let quoteOutAmount = parseU64(quote.quote.outAmount ?? "0");
+      if (!quoteOutAmount || quoteOutAmount <= 0n) {
+        logger.warn(
+          { inputMint: candidate.mint, outputMint: targetMint, quoteOutAmount: quote.quote.outAmount ?? null },
+          "bootstrap add-liquidity quote returned zero outAmount"
+        );
+        continue;
+      }
+
+      if (desiredTargetRaw && quoteOutAmount > desiredTargetRaw) {
+        const scaledInput = scaleInputAmount(amountRaw, quoteOutAmount, desiredTargetRaw);
+        if (scaledInput > 0n && scaledInput < amountRaw && isValidU64(scaledInput)) {
+          amountRaw = scaledInput;
+          quote = await this.fetchJupiterQuoteExactInDetailed(
+            candidate.mint,
+            targetMint,
+            amountRaw.toString(),
+            this.config.slippageBps ?? 50
           );
-          return false;
-        }
-        quoteOutAmount = parseU64(quote.quote.outAmount ?? "0");
-        if (!quoteOutAmount || quoteOutAmount <= 0n) {
-          logger.warn(
-            { outputMint: stableLeg.mint, quoteOutAmount: quote.quote.outAmount ?? null },
-            "bootstrap add-liquidity scaled quote returned zero outAmount"
-          );
-          return false;
+          if (!quote.quote) {
+            logger.warn(
+              { inputMint: candidate.mint, outputMint: targetMint, error: quote.error ?? null },
+              "bootstrap add-liquidity quote unavailable after scale-down"
+            );
+            continue;
+          }
+          quoteOutAmount = parseU64(quote.quote.outAmount ?? "0");
+          if (!quoteOutAmount || quoteOutAmount <= 0n) {
+            logger.warn(
+              { inputMint: candidate.mint, outputMint: targetMint, quoteOutAmount: quote.quote.outAmount ?? null },
+              "bootstrap add-liquidity scaled quote returned zero outAmount"
+            );
+            continue;
+          }
         }
       }
-    }
 
-    const expectedOutUi = toUiAmount(quoteOutAmount, stableLeg.decimals);
-    logger.info(
-      {
-        inputMint: NATIVE_MINT.toBase58(),
-        outputMint: stableLeg.mint,
-        spendSolUi: toUiAmount(amountRaw, 9),
-        expectedOutUi,
-        desiredStableUi,
-        minSolBalance: this.config.minSolBalance
-      },
-      "bootstrapping add-liquidity balances from native SOL"
-    );
-    const result = await this.executeJupiterSwapDetailed(quote.quote);
-    if (!result.sig) {
+      const inputUi = toUiAmount(amountRaw, candidate.decimals);
+      const expectedOutUi = toUiAmount(quoteOutAmount, targetDecimals);
+      logger.info(
+        {
+          inputMint: candidate.mint,
+          outputMint: targetMint,
+          inputUi,
+          expectedOutUi,
+          desiredTargetUi,
+          label: candidate.label
+        },
+        "bootstrapping add-liquidity balances from wallet candidate"
+      );
+      const result = await this.executeJupiterSwapDetailed(quote.quote);
+      if (result.sig) {
+        this.lastStatus.lastError = null;
+        await this.refreshPoolState();
+        return true;
+      }
       logger.warn(
-        { inputMint: NATIVE_MINT.toBase58(), outputMint: stableLeg.mint, error: result.error ?? null },
+        { inputMint: candidate.mint, outputMint: targetMint, error: result.error ?? null },
         "bootstrap add-liquidity swap failed"
       );
-      return false;
     }
-    this.lastStatus.lastError = null;
-    await this.refreshPoolState();
-    return true;
+
+    logger.warn(
+      {
+        targetMint,
+        desiredTargetUi,
+        attemptedCandidates: eligibleCandidates.slice(0, 12).map((candidate) => candidate.mint)
+      },
+      "bootstrap add-liquidity failed: no candidate produced usable funds"
+    );
+    return false;
   }
 
   private async maybeTopUpSol(reason: "auto" | "manual", solBalance: number): Promise<{ performed: boolean; reason?: string }> {
