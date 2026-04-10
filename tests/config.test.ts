@@ -146,6 +146,11 @@ describe("config", () => {
     expect(config.autoAddLiquidityCheckIntervalSec).toBe(300);
   });
 
+  it("uses zero as the default auto-add liquidity minimum usd", () => {
+    const config = loadWith({});
+    expect(config.autoAddLiquidityMinUsd).toBe(0);
+  });
+
   it("rejects invalid autoResume settings", () => {
     expect(() => loadWith({ autoResumeMaxAttempts: 0 })).toThrow();
     expect(() => loadWith({ autoResumeBaseDelayMs: 50 })).toThrow();
@@ -153,6 +158,10 @@ describe("config", () => {
 
   it("rejects invalid auto-add liquidity check interval", () => {
     expect(() => loadWith({ autoAddLiquidityCheckIntervalSec: 30 })).toThrow();
+  });
+
+  it("rejects invalid auto-add liquidity minimum usd", () => {
+    expect(() => loadWith({ autoAddLiquidityMinUsd: -0.01 })).toThrow();
   });
 
   it("rejects invalid openaiTimeoutMs", () => {

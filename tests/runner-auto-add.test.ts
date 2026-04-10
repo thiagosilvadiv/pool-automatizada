@@ -84,6 +84,7 @@ function createRunner() {
   });
   const bot = {
     closeKaminoCycleNow: vi.fn(async () => ({ ok: true, status })),
+    addLiquidityFromWallet: vi.fn(async () => ({ ok: true })),
     getStatus: vi.fn(() => status),
     getKaminoState: vi.fn(() => null),
     drainHistoryActions: vi.fn(() => []),
@@ -129,5 +130,14 @@ describe("runner auto-add after kamino close", () => {
     expect(result.ok).toBe(true);
     expect(onAutoAddRequest).toHaveBeenCalledWith("pool-1");
     expect((runner as any).autoAddRequestedByMint.has("mint-1")).toBe(true);
+  });
+
+  it("enforces the minimum usd threshold on automatic add-liquidity calls", async () => {
+    const { runner, bot } = createRunner();
+
+    const result = await runner.autoAddLiquidity({});
+
+    expect(result.ok).toBe(true);
+    expect(bot.addLiquidityFromWallet).toHaveBeenCalledWith({ enforceMinUsd: true });
   });
 });

@@ -512,6 +512,7 @@ export async function startServer(config: Config): Promise<void> {
       priceStaleMaxSec: config.priceStaleMaxSec,
       autoAddLiquidityEnabled: config.autoAddLiquidityEnabled,
       autoAddLiquidityCheckIntervalSec: config.autoAddLiquidityCheckIntervalSec,
+      autoAddLiquidityMinUsd: config.autoAddLiquidityMinUsd,
       kaminoRebalanceEnabled: config.kaminoRebalanceEnabled,
       kaminoDepositPct: config.kaminoDepositPct,
       kaminoBorrowAsset: config.kaminoBorrowAsset,

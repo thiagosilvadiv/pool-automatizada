@@ -1777,7 +1777,12 @@ export class OrcaBot {
     }
   }
 
-  async addLiquidityFromWallet(options: { share?: number; maxTokenA?: number; maxTokenB?: number }): Promise<{ ok: boolean; reason?: string }> {
+  async addLiquidityFromWallet(options: {
+    share?: number;
+    maxTokenA?: number;
+    maxTokenB?: number;
+    enforceMinUsd?: boolean;
+  }): Promise<{ ok: boolean; reason?: string }> {
     this.lastStatus.running = true;
     this.resetActionFee();
     await this.refreshPoolState();
@@ -1791,6 +1796,9 @@ export class OrcaBot {
     }
 
     const effectiveShare = Number.isFinite(share) && share > 0 ? Math.min(share, 1) : 1;
+    const autoAddMinUsd = options.enforceMinUsd
+      ? Math.max(0, Number(this.config.autoAddLiquidityMinUsd ?? 0))
+      : 0;
 
     if (!this.currentPosition) {
       await this.loadExistingPosition();
@@ -1858,6 +1866,33 @@ export class OrcaBot {
       }
     }
 
+    if (autoAddMinUsd > 0 && this.config.budgetUsd != null) {
+      try {
+        const snapshot = await this.getPositionTokenAmounts(this.currentPosition);
+        const currentPositionUsd = this.getPoolUsdValue(
+          snapshot.tokenA,
+          snapshot.tokenB,
+          price,
+          solUsdPrice
+        );
+        if (currentPositionUsd != null) {
+          const remainingBudgetUsd = Math.max(0, this.config.budgetUsd - currentPositionUsd);
+          if (remainingBudgetUsd < autoAddMinUsd) {
+            const message = `auto-add ignorado: restante abaixo do minimo configurado (${remainingBudgetUsd.toFixed(2)} USD < ${autoAddMinUsd.toFixed(2)} USD)`;
+            logger.info(
+              { remainingBudgetUsd, autoAddMinUsd, budgetUsd: this.config.budgetUsd, currentPositionUsd },
+              message
+            );
+            this.lastStatus.lastError = null;
+            this.lastStatus.lastAction = "no-action";
+            return { ok: false, reason: message };
+          }
+        }
+      } catch (err) {
+        logger.warn({ err }, "auto-add min usd: falha ao estimar valor atual da posicao");
+      }
+    }
+
     let balances = await this.getTokenBalances();
     if (balances.tokenA <= 0 && balances.tokenB <= 0) {
       const bootstrappedFromWallet = await this.maybeBootstrapAddLiquidityFromWallet(price, solUsdPrice);
@@ -1919,6 +1954,23 @@ export class OrcaBot {
     };
 
     ({ usableA, usableB } = applyValueCap(balances));
+
+    if (autoAddMinUsd > 0) {
+      const plannedAddUsd = this.getPoolUsdValue(usableA, usableB, price, solUsdPrice);
+      if (plannedAddUsd != null && plannedAddUsd < autoAddMinUsd) {
+        const message = `auto-add ignorado: aporte abaixo do minimo configurado (${plannedAddUsd.toFixed(2)} USD < ${autoAddMinUsd.toFixed(2)} USD)`;
+        logger.info({ plannedAddUsd, autoAddMinUsd, usableA, usableB }, message);
+        this.lastStatus.lastError = null;
+        this.lastStatus.lastAction = "no-action";
+        return { ok: false, reason: message };
+      }
+      if (plannedAddUsd == null) {
+        logger.warn(
+          { autoAddMinUsd, usableA, usableB, price, solUsdPrice },
+          "auto-add min usd: nao foi possivel estimar aporte em USD; seguindo sem filtro"
+        );
+      }
+    }
 
     if (usableA <= 0 && usableB <= 0) {
       const message = "saldo insuficiente para adicionar liquidez";

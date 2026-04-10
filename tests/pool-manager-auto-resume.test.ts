@@ -42,7 +42,7 @@ function createRunner(options?: {
   autoAddEnabled?: boolean;
   busy?: boolean;
   status?: Record<string, unknown>;
-  autoAddImpl?: (limits: { maxTokenA?: number; maxTokenB?: number }) => Promise<{ ok: boolean; reason?: string }>;
+  autoAddImpl?: (limits: { maxTokenA?: number; maxTokenB?: number; enforceMinUsd?: boolean }) => Promise<{ ok: boolean; reason?: string }>;
 }) {
   let running = Boolean(options?.running);
   const start = vi.fn(async () => {
@@ -84,7 +84,7 @@ function createRunner(options?: {
     isAutoAddEnabled: vi.fn(() => Boolean(options?.autoAddEnabled)),
     isBusy: vi.fn(() => Boolean(options?.busy)),
     getWalletBalances: vi.fn(async () => ({ tokenA: 0, tokenB: 0 })),
-    autoAddLiquidity: vi.fn(async (limits: { maxTokenA?: number; maxTokenB?: number }) => {
+    autoAddLiquidity: vi.fn(async (limits: { maxTokenA?: number; maxTokenB?: number; enforceMinUsd?: boolean }) => {
       if (options?.autoAddImpl) {
         return options.autoAddImpl(limits);
       }
@@ -287,7 +287,7 @@ describe("pool-manager auto-resume", () => {
     const result = await manager.addLiquiditySelected();
 
     expect(result.ok).toBe(true);
-    expect(runner.autoAddLiquidity).toHaveBeenCalledWith({});
+    expect(runner.autoAddLiquidity).toHaveBeenCalledWith({ enforceMinUsd: false });
   });
 
   it("queues periodic auto-add checks for running pools with an open position", async () => {

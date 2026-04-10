@@ -590,7 +590,7 @@ export class PoolManager {
       throw new Error("No pool selected");
     }
     const record = this.getRecord(this.selectedPoolId);
-    return record.runner.autoAddLiquidity({});
+    return record.runner.autoAddLiquidity({ enforceMinUsd: false });
   }
 
   startAutoCloseEmptyAccounts(): void {

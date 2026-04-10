@@ -501,13 +501,20 @@ export class BotRunner {
     return this.bot.getWalletBalances();
   }
 
-  async autoAddLiquidity(limits: { maxTokenA?: number; maxTokenB?: number }): Promise<{ ok: boolean; reason?: string }> {
+  async autoAddLiquidity(limits: {
+    maxTokenA?: number;
+    maxTokenB?: number;
+    enforceMinUsd?: boolean;
+  }): Promise<{ ok: boolean; reason?: string }> {
     if (this.inFlight) {
       return { ok: false, reason: "busy" };
     }
     this.inFlight = true;
     try {
-      const result = await this.bot.addLiquidityFromWallet(limits);
+      const result = await this.bot.addLiquidityFromWallet({
+        ...limits,
+        enforceMinUsd: limits.enforceMinUsd ?? true
+      });
       this.lastTickAt = new Date().toISOString();
       this.recordEvent(this.bot.getStatus());
       this.flushKaminoLogs();

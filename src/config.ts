@@ -41,6 +41,7 @@ export type Config = {
   autoSwapFeesToUsdcDestWallet: string | null;
   autoAddLiquidityEnabled: boolean;
   autoAddLiquidityCheckIntervalSec: number;
+  autoAddLiquidityMinUsd: number;
   kaminoRebalanceEnabled: boolean;
   kaminoDepositPct: number;
   kaminoBorrowAsset: "usdc" | "usdt" | "auto";
@@ -518,6 +519,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const envJupiterApiUrl = parseEnvString(process.env.JUPITER_API_URL);
   const envKaminoScanIntervalSec = parseEnvNumber(process.env.KAMINO_SCAN_INTERVAL_SEC);
   const envAutoAddLiquidityCheckIntervalSec = parseEnvNumber(process.env.AUTO_ADD_LIQUIDITY_CHECK_INTERVAL_SEC);
+  const envAutoAddLiquidityMinUsd = parseEnvNumber(process.env.AUTO_ADD_LIQUIDITY_MIN_USD);
   const envKaminoMinCombinedPnlUsd = parseEnvNumber(process.env.KAMINO_MIN_COMBINED_PNL_USD);
   const envKaminoEnabled = parseEnvBool(process.env.KAMINO_ENABLED);
   const envKaminoRebalanceEnabled = parseEnvBool(process.env.KAMINO_REBALANCE_ENABLED);
@@ -608,6 +610,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? Boolean((data as any).autoAddLiquidityEnabled ?? false),
     autoAddLiquidityCheckIntervalSec: envAutoAddLiquidityCheckIntervalSec
       ?? Number((data as any).autoAddLiquidityCheckIntervalSec ?? 300),
+    autoAddLiquidityMinUsd: envAutoAddLiquidityMinUsd
+      ?? Number((data as any).autoAddLiquidityMinUsd ?? 0),
     kaminoRebalanceEnabled: envKaminoRebalanceEnabled
       ?? dataKaminoRebalanceEnabled
       ?? (kaminoEnabledFallback ? true : false),
@@ -790,6 +794,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.autoAddLiquidityCheckIntervalSec) || config.autoAddLiquidityCheckIntervalSec < 60) {
     throw new Error("autoAddLiquidityCheckIntervalSec must be >= 60");
+  }
+  if (!Number.isFinite(config.autoAddLiquidityMinUsd) || config.autoAddLiquidityMinUsd < 0) {
+    throw new Error("autoAddLiquidityMinUsd must be >= 0");
   }
   if (!Number.isFinite(config.autoResumeMaxAttempts)
     || !Number.isInteger(config.autoResumeMaxAttempts)
