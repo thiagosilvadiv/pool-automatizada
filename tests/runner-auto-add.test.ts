@@ -85,13 +85,20 @@ function createRunner() {
   const bot = {
     closeKaminoCycleNow: vi.fn(async () => ({ ok: true, status })),
     addLiquidityFromWallet: vi.fn(async () => ({ ok: true })),
+    closeActivePosition: vi.fn(async () => ({
+      ...status,
+      lastAction: "close-position",
+      eventPositionMint: status.positionMint ?? "mint-1",
+      positionMint: null
+    })),
     getStatus: vi.fn(() => status),
     getKaminoState: vi.fn(() => null),
     drainHistoryActions: vi.fn(() => []),
     drainKaminoLogs: vi.fn(() => []),
     setError: vi.fn(),
     setPoolMeta: vi.fn(),
-    resetKaminoCycle: vi.fn()
+    resetKaminoCycle: vi.fn(),
+    suppressKaminoAutoClose: vi.fn()
   } as any;
   const onAutoAddRequest = vi.fn();
   const historyStore = {
@@ -139,5 +146,17 @@ describe("runner auto-add after kamino close", () => {
 
     expect(result.ok).toBe(true);
     expect(bot.addLiquidityFromWallet).toHaveBeenCalledWith({ enforceMinUsd: true });
+  });
+
+  it("keeps the runner active after a manual close-position", async () => {
+    const { runner, bot } = createRunner();
+    (runner as any).running = true;
+
+    const status = await runner.closePositionNow();
+
+    expect(bot.suppressKaminoAutoClose).toHaveBeenCalled();
+    expect(bot.closeActivePosition).toHaveBeenCalled();
+    expect(status.running).toBe(true);
+    expect((runner as any).running).toBe(true);
   });
 });

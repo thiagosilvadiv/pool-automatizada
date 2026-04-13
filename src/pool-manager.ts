@@ -451,10 +451,6 @@ export class PoolManager {
   async closePool(id: string): Promise<void> {
     const record = this.getRecord(id);
     await record.runner.closePositionNow();
-    this.clearResumeTracking(id);
-    if (this.activePoolIds.delete(id)) {
-      await this.savePools();
-    }
   }
 
   getStatus(id: string): ReturnType<BotRunner["getStatus"]> | null {

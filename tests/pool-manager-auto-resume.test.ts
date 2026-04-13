@@ -290,6 +290,20 @@ describe("pool-manager auto-resume", () => {
     expect(runner.autoAddLiquidity).toHaveBeenCalledWith({ enforceMinUsd: false });
   });
 
+  it("keeps the pool active after a manual close-position", async () => {
+    const { manager } = createManager();
+    const entry = createEntry("pool-close", "Close", "So11111111111111111111111111111111111111112");
+    const runner = createRunner({ running: true });
+    wirePool(manager, entry, runner);
+    (manager as any).selectedPoolId = entry.id;
+    (manager as any).activePoolIds.add(entry.id);
+
+    await manager.closeSelected();
+
+    expect(runner.closePositionNow).toHaveBeenCalledTimes(1);
+    expect((manager as any).activePoolIds.has(entry.id)).toBe(true);
+  });
+
   it("queues periodic auto-add checks for running pools with an open position", async () => {
     vi.useFakeTimers();
     const { manager } = createManager({ autoAddLiquidityCheckIntervalSec: 300 });

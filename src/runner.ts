@@ -1194,9 +1194,6 @@ export class BotRunner {
     if (closed) {
       this.pendingClose = false;
       this.pendingCloseRequestedAt = null;
-      if (this.running && mode === "manual") {
-        this.stop();
-      }
     } else if (wasRunning) {
       this.pendingClose = true;
       this.pendingCloseMode = mode;
