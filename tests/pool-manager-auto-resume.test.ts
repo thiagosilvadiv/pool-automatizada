@@ -326,7 +326,7 @@ describe("pool-manager auto-resume", () => {
 
     await manager.closeSelected();
 
-    expect(runner.closePositionNow).toHaveBeenCalledTimes(1);
+    expect(runner.rebalancePositionNow).toHaveBeenCalledTimes(1);
     expect((manager as any).activePoolIds.has(entry.id)).toBe(true);
   });
 
