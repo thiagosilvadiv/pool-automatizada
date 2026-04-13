@@ -179,6 +179,9 @@ export type KaminoLogEntry = {
 const MAX_KAMINO_LOGS = 80;
 
 function finiteOrNull(value: unknown): number | null {
+  if (value == null || value === "") {
+    return null;
+  }
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
 }
@@ -722,6 +725,36 @@ export class BotRunner {
     return null;
   }
 
+  private findLatestReconstructedHistoryEntry(
+    mint: string | null,
+    options?: { items?: HistoryEvent[]; beforeIndex?: number }
+  ): number | null {
+    if (!mint) {
+      return null;
+    }
+    const items = options?.items ?? this.history;
+    const beforeIndex = Number.isFinite(options?.beforeIndex ?? NaN)
+      ? Math.max(0, Math.min(Number(options?.beforeIndex), items.length))
+      : items.length;
+    for (let i = beforeIndex - 1; i >= 0; i -= 1) {
+      const item = items[i];
+      if (!item || item.positionMint !== mint || item.positionEntrySource !== "reconstructed") {
+        continue;
+      }
+      const entryUsd = finiteOrNull(item.positionEntryUsd);
+      if (entryUsd == null) {
+        continue;
+      }
+      if (!isEntryUsdSane(entryUsd, item.budgetUsd ?? null, item.portfolioUsd ?? null, {
+        minBudgetFactor: MIN_ENTRY_BUDGET_FACTOR
+      })) {
+        continue;
+      }
+      return entryUsd;
+    }
+    return null;
+  }
+
   private resolveCloseEntry(
     entryUsd: number | null,
     mint: string | null,
@@ -736,6 +769,13 @@ export class BotRunner {
       return trusted;
     }
     if (entrySource === "reconstructed") {
+      // When we only have reconstructed data (common after resume/restart),
+      // keep it as a fallback so close rows don't lose entry/PNL fields.
+      const reconstructed = finiteOrNull(entryUsd)
+        ?? this.findLatestReconstructedHistoryEntry(mint, options);
+      if (reconstructed != null) {
+        return { value: reconstructed, source: "reconstructed" };
+      }
       return { value: null, source: null };
     }
     return { value: null, source: entrySource ?? null };

@@ -326,7 +326,7 @@ describe("runner history hedge close", () => {
     expect(historyStore.save).toHaveBeenCalled();
   });
 
-  it("keeps close entry empty when the only known value was reconstructed", async () => {
+  it("keeps reconstructed close entry when there is no trusted deposit entry", async () => {
     const { runner } = createRunner({
       history: [
         {
@@ -435,8 +435,9 @@ describe("runner history hedge close", () => {
     await (runner as any).loadHistoryIfNeeded();
 
     const [closeEvent] = runner.getHistory();
-    expect(closeEvent.positionEntryUsd).toBeNull();
-    expect(closeEvent.positionPnlUsd).toBeNull();
+    expect(closeEvent.positionEntryUsd).toBe(78.54);
+    expect(closeEvent.positionEntrySource).toBe("reconstructed");
+    expect(closeEvent.positionPnlUsd).toBeCloseTo(0.45, 6);
   });
 
   it("merges legacy kamino-close duplicates when only one row has the real exit", () => {
