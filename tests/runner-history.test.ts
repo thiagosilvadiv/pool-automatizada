@@ -81,6 +81,7 @@ function createBot(status: BotStatus = createStatus()) {
   let currentStatus = status;
   return {
     tick: vi.fn(async () => currentStatus),
+    rebalanceActivePosition: vi.fn(async () => currentStatus),
     getStatus: vi.fn(() => currentStatus),
     setStatus(next: Partial<BotStatus>) {
       currentStatus = { ...currentStatus, ...next };
@@ -129,6 +130,25 @@ function createRunner(payload: unknown = null) {
 }
 
 describe("runner history hedge close", () => {
+  it("keeps the runner active after a manual rebalance request", async () => {
+    const { bot, runner } = createRunner();
+
+    (runner as any).running = true;
+    bot.setStatus({
+      running: true,
+      lastAction: "rebalanced",
+      positionMint: "mint-1",
+      eventPositionMint: "mint-0",
+      eventPositionExitUsd: 95
+    });
+
+    const status = await runner.rebalancePositionNow();
+
+    expect(bot.rebalanceActivePosition).toHaveBeenCalledTimes(1);
+    expect((runner as any).running).toBe(true);
+    expect(status.running).toBe(true);
+  });
+
   it("prefers the explicit hedgeClose passed to recordEvent for close-position history", () => {
     const { runner } = createRunner();
 

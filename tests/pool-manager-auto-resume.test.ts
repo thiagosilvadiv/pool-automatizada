@@ -39,6 +39,7 @@ function createRunner(options?: {
   running?: boolean;
   startImpl?: () => Promise<void>;
   closeImpl?: () => Promise<void>;
+  rebalanceImpl?: () => Promise<void>;
   autoAddEnabled?: boolean;
   busy?: boolean;
   status?: Record<string, unknown>;
@@ -64,12 +65,22 @@ function createRunner(options?: {
       lastAction: "close-position"
     };
   });
+  const rebalancePositionNow = vi.fn(async () => {
+    if (options?.rebalanceImpl) {
+      await options.rebalanceImpl();
+    }
+    return {
+      running,
+      lastAction: "rebalanced"
+    };
+  });
   const getStatus = vi.fn(() => ({ running, ...(options?.status ?? {}) }));
 
   return {
     start,
     stop,
     closePositionNow,
+    rebalancePositionNow,
     getStatus,
     updateConfig: vi.fn(),
     getHistory: vi.fn(() => []),
@@ -145,6 +156,21 @@ describe("pool-manager auto-resume", () => {
     await manager.removePool("pool-2");
     expect((manager as any).activePoolIds.has("pool-2")).toBe(false);
     expect(saves.at(-1)?.activePoolIds ?? []).not.toContain("pool-2");
+  });
+
+  it("keeps the pool active when manual rebalance is requested", async () => {
+    const { manager, saves } = createManager();
+    const entry = createEntry("pool-1", "Pool 1", "So11111111111111111111111111111111111111112");
+    const runner = createRunner({ running: true });
+    wirePool(manager, entry, runner);
+    (manager as any).selectedPoolId = entry.id;
+    (manager as any).activePoolIds = new Set([entry.id]);
+
+    await manager.closeSelected();
+
+    expect(runner.rebalancePositionNow).toHaveBeenCalledTimes(1);
+    expect((manager as any).activePoolIds.has(entry.id)).toBe(true);
+    expect(saves).toHaveLength(0);
   });
 
   it("loads legacy pool state without activePoolIds", async () => {

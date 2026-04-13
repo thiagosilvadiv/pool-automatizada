@@ -220,8 +220,10 @@ export class BotRunner {
   private pendingClose = false;
   private pendingCloseMode: "manual" = "manual";
   private pendingKaminoClose = false;
+  private pendingManualRebalance = false;
   private rateLimitUntil: number | null = null;
   private pendingCloseRequestedAt: string | null = null;
+  private pendingManualRebalanceRequestedAt: string | null = null;
   private autoAddRequestedByMint = new Set<string>();
   private onAutoAddRequest?: (poolId: string) => void;
 
@@ -279,6 +281,19 @@ export class BotRunner {
       return this.getStatus();
     }
     return this.performClose("manual");
+  }
+
+  async rebalancePositionNow(): Promise<RunnerStatus> {
+    if (this.inFlight) {
+      this.pendingManualRebalance = true;
+      this.pendingManualRebalanceRequestedAt = new Date().toISOString();
+      logger.info(
+        { pendingManualRebalanceRequestedAt: this.pendingManualRebalanceRequestedAt },
+        "manual rebalance requested during tick; pending"
+      );
+      return this.getStatus();
+    }
+    return this.performManualRebalance();
   }
 
   async closeKaminoCycleNow(): Promise<{ ok: boolean; reason?: string; status: RunnerStatus }> {
@@ -490,7 +505,7 @@ export class BotRunner {
   }
 
   isBusy(): boolean {
-    return this.inFlight || this.pendingClose;
+    return this.inFlight || this.pendingClose || this.pendingManualRebalance;
   }
 
   isAutoAddEnabled(): boolean {
@@ -862,6 +877,10 @@ export class BotRunner {
       }
       return;
     }
+    if (this.pendingManualRebalance) {
+      await this.performManualRebalance();
+      return;
+    }
     if (this.pendingClose) {
       await this.performClose(this.pendingCloseMode);
       return;
@@ -1018,13 +1037,8 @@ export class BotRunner {
           return;
         }
       }
-      const queuedHistory = this.bot.drainHistoryActions();
-      const hasQueuedTerminalAction = queuedHistory.some((snapshot) => snapshot?.lastAction === status.lastAction);
-      if (!hasQueuedTerminalAction) {
-        this.recordEvent(status, { hedgeClose: hedgeCloseForClosePosition ?? hedgeCloseForRebalance });
-      }
-      queuedHistory.forEach((snapshot) => {
-        this.recordEvent(snapshot);
+      this.recordStatusAndQueuedHistory(status, {
+        hedgeClose: hedgeCloseForClosePosition ?? hedgeCloseForRebalance
       });
       this.flushKaminoLogs();
       this.maybeRequestAutoAdd(status);
@@ -1045,7 +1059,9 @@ export class BotRunner {
       }
     } finally {
       this.inFlight = false;
-      if (this.pendingClose) {
+      if (this.pendingManualRebalance) {
+        await this.performManualRebalance();
+      } else if (this.pendingClose) {
         await this.performClose(this.pendingCloseMode);
       }
     }
@@ -1164,6 +1180,31 @@ export class BotRunner {
       this.logHedgeError("close-failed", `Falha ao fechar hedge: ${errMessage}`, this.config.hedgeSymbol);
     }
     return null;
+  }
+
+  private async performManualRebalance(): Promise<RunnerStatus> {
+    if (this.inFlight) {
+      return this.getStatus();
+    }
+    this.inFlight = true;
+    try {
+      const status = await withRetry(() => this.bot.rebalanceActivePosition(), {
+        retries: 2,
+        baseDelayMs: 1000
+      });
+      this.lastTickAt = new Date().toISOString();
+      this.recordStatusAndQueuedHistory(status);
+      this.flushKaminoLogs();
+      this.maybeRequestAutoAdd(status);
+    } catch (err) {
+      logger.error({ err }, "manual rebalance failed");
+      this.bot.setError(err);
+    } finally {
+      this.inFlight = false;
+      this.pendingManualRebalance = false;
+      this.pendingManualRebalanceRequestedAt = null;
+    }
+    return this.getStatus();
   }
 
   private async performClose(mode: "manual"): Promise<RunnerStatus> {
@@ -1663,6 +1704,20 @@ export class BotRunner {
       this.recordEvent(snapshot);
     });
     return queued.length;
+  }
+
+  private recordStatusAndQueuedHistory(
+    status: BotStatus,
+    options?: { hedgeClose?: HedgeCloseResult | null }
+  ): void {
+    const queuedHistory = this.bot.drainHistoryActions();
+    const hasQueuedTerminalAction = queuedHistory.some((snapshot) => snapshot?.lastAction === status.lastAction);
+    if (!hasQueuedTerminalAction) {
+      this.recordEvent(status, options);
+    }
+    queuedHistory.forEach((snapshot) => {
+      this.recordEvent(snapshot);
+    });
   }
 
   private maybeRequestAutoAdd(status: BotStatus): void {

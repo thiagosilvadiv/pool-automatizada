@@ -237,7 +237,16 @@ export async function startServer(config: Config): Promise<void> {
 
   app.post("/api/close-position", async (_req: Request, res: Response) => {
     try {
-      await poolManager.closeSelected();
+      await poolManager.rebalanceSelected();
+      res.json({ ok: true, status: poolManager.getSelectedStatus() });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post("/api/rebalance-position", async (_req: Request, res: Response) => {
+    try {
+      await poolManager.rebalanceSelected();
       res.json({ ok: true, status: poolManager.getSelectedStatus() });
     } catch (err) {
       res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -585,7 +594,16 @@ export async function startServer(config: Config): Promise<void> {
 
   app.post("/api/pools/:id/close", async (req: Request, res: Response) => {
     try {
-      await poolManager.closePool(req.params.id);
+      await poolManager.rebalancePool(req.params.id);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(404).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post("/api/pools/:id/rebalance", async (req: Request, res: Response) => {
+    try {
+      await poolManager.rebalancePool(req.params.id);
       res.json({ ok: true });
     } catch (err) {
       res.status(404).json({ ok: false, error: err instanceof Error ? err.message : String(err) });

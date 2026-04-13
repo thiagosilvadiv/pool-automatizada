@@ -1519,7 +1519,7 @@ function renderPools(data, config) {
               <button class="ghost" data-action="select" data-id="${pool.id}">Selecionar</button>
               <button class="ghost" data-action="edit" data-id="${pool.id}">Editar</button>
               ${startStopAction}
-              <button class="danger" data-action="close" data-id="${pool.id}">Fechar</button>
+              <button class="danger" data-action="close" data-id="${pool.id}">Rebalancear</button>
               <button class="ghost danger" data-action="remove" data-id="${pool.id}">Remover</button>
             </div>
           </details>
@@ -1809,9 +1809,9 @@ stopBtn.addEventListener("click", async () => {
 });
 
 closeBtn.addEventListener("click", async () => {
-  const ok = window.confirm("Fechar a posicao agora? Isso remove toda a liquidez.");
+  const ok = window.confirm("Rebalancear a posicao agora? O bot vai fechar a pool atual e seguir o fluxo normal de reabertura/Kamino, sem parar o processo.");
   if (!ok) return;
-  await fetch("/api/close-position", { method: "POST" });
+  await fetch("/api/rebalance-position", { method: "POST" });
   updateUI();
 });
 
@@ -2469,9 +2469,9 @@ async function handlePoolAction(action, id) {
   }
 
   if (action === "close") {
-    const ok = window.confirm("Fechar a posicao dessa pool? Isso remove toda a liquidez.");
+    const ok = window.confirm("Rebalancear a posicao dessa pool? O bot vai fechar a pool atual e seguir o fluxo normal de reabertura/Kamino, sem parar o processo.");
     if (!ok) return;
-    await fetch(`/api/pools/${id}/close`, { method: "POST" });
+    await fetch(`/api/pools/${id}/rebalance`, { method: "POST" });
     updateUI();
     return;
   }

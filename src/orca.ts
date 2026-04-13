@@ -1402,15 +1402,25 @@ export class OrcaBot {
       return this.getStatus();
     }
 
-    logger.info({ price, positionRange }, "price out of range; rebalancing");
+    return this.performStandardRebalance({
+      price,
+      solUsdPrice,
+      executionRange,
+      positionRange,
+      logMessage: "price out of range; rebalancing"
+    });
+  }
+
+  private async performStandardRebalance(input: {
+    price: number;
+    solUsdPrice: number | null;
+    executionRange: Range;
+    positionRange: Range;
+    logMessage: string;
+  }): Promise<BotStatus> {
+    logger.info({ price: input.price, positionRange: input.positionRange }, input.logMessage);
     this.outOfRangeSince = null;
-    await this.updatePortfolioSnapshot(price, solUsdPrice);
-    let preCloseBalancesRaw: { tokenA: number; tokenB: number } | null = null;
-    try {
-      preCloseBalancesRaw = await this.getTokenBalancesRaw();
-    } catch {
-      preCloseBalancesRaw = null;
-    }
+    await this.updatePortfolioSnapshot(input.price, input.solUsdPrice);
     this.captureCloseSnapshot();
     await this.closePosition(this.currentPosition);
     this.queueHistoryAction("close-position", { lastAction: "close-position" });
@@ -1419,14 +1429,17 @@ export class OrcaBot {
     this.missingPositionSince = null;
     await this.loadExistingPosition();
     if (this.currentPosition) {
-      logger.error({ price, positionRange }, "position still open after rebalance close; aborting open");
+      logger.error(
+        { price: input.price, positionRange: input.positionRange },
+        "position still open after rebalance close; aborting open"
+      );
       this.setError("Fechamento falhou: posicao ainda aberta");
       this.lastStatus.lastAction = "close-failed";
       this.lastStatus.positionRange = await this.getPositionRange(this.currentPosition);
       this.lastStatus.positionMint = this.currentPositionMint;
       return this.getStatus();
     }
-    const result = await this.openPosition(executionRange, price, solUsdPrice);
+    const result = await this.openPosition(input.executionRange, input.price, input.solUsdPrice);
     this.lastStatus.lastAction = result === "open-position" ? "rebalanced" : result;
     if (result === "open-position") {
       this.lastRebalanceAt = Date.now();
@@ -1440,7 +1453,7 @@ export class OrcaBot {
           logger.warn({ err }, "auto swap-to-sol failed after re-range");
         }
       }
-      await this.updatePortfolioSnapshot(price, solUsdPrice);
+      await this.updatePortfolioSnapshot(input.price, input.solUsdPrice);
     }
     this.lastStatus.positionRange = null;
     this.lastStatus.positionMint = this.currentPositionMint;
@@ -1498,6 +1511,141 @@ export class OrcaBot {
     this.lastStatus.positionMint = null;
     this.lastStatus.positionRange = null;
     return this.getStatus();
+  }
+
+  async rebalanceActivePosition(): Promise<BotStatus> {
+    this.lastStatus.running = true;
+    this.lastStatus.eventPositionMint = null;
+    this.lastStatus.eventPositionEntryUsd = null;
+    this.lastStatus.eventPositionEntrySource = null;
+    this.lastStatus.eventPositionFeesUsd = null;
+    this.lastStatus.eventPositionExitUsd = null;
+    this.resetActionFee();
+    await this.refreshPoolState();
+
+    const trendSnapshot = await this.updateTrendStatus();
+    const rangeAnchor = this.config.rangeAnchor ?? null;
+    let preferredExitToken: "tokenA" | "tokenB" | null = null;
+    const preferredExitDirection = this.config.preferredExitDirection === "up" ? "up" : "down";
+    let exitSide: "lower" | "upper" | null = null;
+    let valueToken: "tokenA" | "tokenB" | null = null;
+    if (rangeAnchor) {
+      exitSide = this.resolveRangeAnchorExitSide(rangeAnchor);
+      valueToken = null;
+      this.lastStatus.trendPreferredExitToken = null;
+    } else {
+      preferredExitToken = this.resolvePreferredExitToken(trendSnapshot.direction, trendSnapshot.stale);
+      this.lastStatus.trendPreferredExitToken = preferredExitToken;
+      const exitPreference = resolveDirectionalExitPreference(preferredExitToken, preferredExitDirection, {
+        invertPriceAxis: this.shouldInvertUserPriceAxis()
+      });
+      exitSide = exitPreference?.exitSide ?? null;
+      valueToken = exitPreference?.valueToken ?? null;
+    }
+    this.lastStatus.effectiveExitToken = preferredExitToken;
+    this.lastStatus.effectiveExitDirection = preferredExitDirection;
+    this.lastStatus.effectiveExitSide = exitSide;
+    this.lastStatus.effectiveValueToken = valueToken;
+
+    const price = await this.getCurrentPrice();
+    const range = calculateRange(price, this.config.rangeWidthPct, {
+      exitBiasPct: this.config.rangeExitBiasPct,
+      exitSide: exitSide ?? undefined,
+      valueToken: valueToken ?? undefined
+    });
+    const executionRange = this.getExecutionRange(range, price);
+    this.lastStatus.lastPrice = price;
+    this.lastStatus.targetRange = executionRange;
+    const solUsdPrice = await this.tryGetSolUsdPrice();
+    this.lastStatus.solUsdPrice = solUsdPrice;
+    this.lastStatus.budgetUsd = this.config.budgetUsd;
+    this.lastStatus.budgetSol = solUsdPrice && this.config.budgetUsd
+      ? this.config.budgetUsd / solUsdPrice
+      : null;
+
+    if (!this.currentPosition) {
+      await this.loadExistingPosition();
+    }
+
+    if (!this.currentPosition) {
+      this.lastStatus.lastAction = "close-no-position";
+      this.lastStatus.positionRange = null;
+      this.lastStatus.positionMint = this.currentPositionMint;
+      return this.getStatus();
+    }
+
+    await this.updatePortfolioSnapshot(price, solUsdPrice);
+    const positionRange = await this.getPositionRange(this.currentPosition);
+    if (!positionRange) {
+      logger.warn("failed to read position range during manual rebalance; reloading position");
+      await this.loadExistingPosition();
+      this.lastStatus.lastAction = "reload-position";
+      this.lastStatus.positionRange = null;
+      this.lastStatus.positionMint = this.currentPositionMint;
+      return this.getStatus();
+    }
+
+    const pnlNoFeesUsd = this.getPositionPnlNoFeesUsd();
+    if (pnlNoFeesUsd == null) {
+      this.nullPnlNoFeesTicks += 1;
+    } else {
+      this.nullPnlNoFeesTicks = 0;
+    }
+    const kaminoGraceSec = Number(this.config.kaminoGracePeriodSec ?? 120);
+    const kaminoGraceActive = kaminoGraceSec > 0
+      && this.kaminoPoolOpenedAt != null
+      && (Date.now() - this.kaminoPoolOpenedAt) / 1000 < kaminoGraceSec;
+    const shouldUseKamino = !kaminoGraceActive
+      && this.config.kaminoRebalanceEnabled
+      && pnlNoFeesUsd != null
+      && pnlNoFeesUsd < 0;
+    if (kaminoGraceActive) {
+      logger.info(
+        { elapsedSec: Math.floor((Date.now() - (this.kaminoPoolOpenedAt ?? Date.now())) / 1000), kaminoGraceSec },
+        "Kamino ignorado: grace period ativo"
+      );
+    }
+    if (this.config.kaminoRebalanceEnabled && !shouldUseKamino) {
+      logger.info(
+        { pnlNoFeesUsd },
+        "Kamino ignorado: PnL sem taxas nao negativo ou indisponivel"
+      );
+    }
+    let lockOk = true;
+    if (shouldUseKamino) {
+      const lock = this.canUseKaminoLock();
+      lockOk = lock.ok;
+      if (!lockOk) {
+        this.setError(`Kamino ativo na pool ${lock.ownerName}`);
+      }
+    }
+    if (shouldUseKamino && lockOk) {
+      logger.info(
+        { price, positionRange, pnlNoFeesUsd },
+        "manual rebalance requested; using normal Kamino rebalance flow"
+      );
+      const result = await this.rebalanceWithKamino({
+        price,
+        solUsdPrice,
+        executionRange,
+        positionRange
+      });
+      this.lastStatus.lastAction = result;
+      this.lastStatus.positionRange = null;
+      this.lastStatus.positionMint = this.currentPositionMint;
+      if (result !== "kamino-rebalanced" && !this.kaminoState?.active) {
+        this.releaseKaminoLockIfOwned();
+      }
+      return this.getStatus();
+    }
+
+    return this.performStandardRebalance({
+      price,
+      solUsdPrice,
+      executionRange,
+      positionRange,
+      logMessage: "manual rebalance requested; rebalancing current position"
+    });
   }
 
   clearKaminoAutoCloseHold(): void {
