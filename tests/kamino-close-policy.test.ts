@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { isKaminoCloseAllowed } from "../src/kamino-close-policy.js";
+import {
+  computeKaminoPnlNoFeesUsd,
+  isKaminoCloseAllowed,
+  shouldUseKaminoAfterClose
+} from "../src/kamino-close-policy.js";
 
 describe("kamino close policy", () => {
   it("permits manual close regardless of debt", () => {
@@ -45,5 +49,23 @@ describe("kamino close policy", () => {
       trigger: "debt-zero",
       debtAmount: 0.01
     })).toBe(false);
+  });
+});
+
+describe("kamino rebalance policy", () => {
+  it("computes post-close pnl without fees using entry, exit, fees and tx fee", () => {
+    expect(computeKaminoPnlNoFeesUsd({
+      entryUsd: 152.67,
+      exitUsd: 153.11,
+      feesUsd: 0.29,
+      txFeeUsd: 0.049001
+    })).toBeCloseTo(0.100999, 6);
+  });
+
+  it("requires confirmed negative post-close pnl to use Kamino", () => {
+    expect(shouldUseKaminoAfterClose(-0.01)).toBe(true);
+    expect(shouldUseKaminoAfterClose(0)).toBe(false);
+    expect(shouldUseKaminoAfterClose(0.10)).toBe(false);
+    expect(shouldUseKaminoAfterClose(null)).toBe(false);
   });
 });

@@ -30,7 +30,11 @@ import { notifyKaminoFundsNeeded } from "./evolution-notify.js";
 import type { KaminoPositionState, KaminoWithdrawResult } from "./kamino-client.js";
 import { isObligationBorrowsEmptyError, isObligationDepositsEmptyError } from "./kamino-client.js";
 import { BalanceCoordinator } from "./balance-coordinator.js";
-import { isKaminoCloseAllowed } from "./kamino-close-policy.js";
+import {
+  computeKaminoPnlNoFeesUsd,
+  isKaminoCloseAllowed,
+  shouldUseKaminoAfterClose
+} from "./kamino-close-policy.js";
 import type { KaminoCloseMode, KaminoCloseTrigger } from "./kamino-close-policy.js";
 
 const whirlpools = whirlpoolsSdk as any;
@@ -1447,22 +1451,13 @@ export class OrcaBot {
       this.lastStatus.positionMint = this.currentPositionMint;
       return this.getStatus();
     }
-    const result = await this.openPosition(input.executionRange, input.price, input.solUsdPrice);
-    this.lastStatus.lastAction = result === "open-position" ? "rebalanced" : result;
-    if (result === "open-position") {
-      this.lastRebalanceAt = Date.now();
-      if (this.kaminoState?.active) {
-        this.kaminoPoolOpenedAt = Date.now();
-      }
-      if (this.config.autoSwapToSolEnabled) {
-        try {
-          await this.swapWalletToSol("auto");
-        } catch (err) {
-          logger.warn({ err }, "auto swap-to-sol failed after re-range");
-        }
-      }
-      await this.updatePortfolioSnapshot(input.price, input.solUsdPrice);
-    }
+    const result = await this.reopenPositionAfterClose({
+      executionRange: input.executionRange,
+      price: input.price,
+      solUsdPrice: input.solUsdPrice,
+      action: "rebalanced"
+    });
+    this.lastStatus.lastAction = result;
     this.lastStatus.positionRange = null;
     this.lastStatus.positionMint = this.currentPositionMint;
     return this.getStatus();
@@ -3245,6 +3240,19 @@ export class OrcaBot {
       ?? null;
   }
 
+  private getCapturedClosePnlNoFeesUsd(solUsdPrice: number | null): number | null {
+    const txFeeLamports = this.lastStatus.lastActionFeeLamports ?? null;
+    const txFeeUsd = txFeeLamports != null && solUsdPrice != null
+      ? (txFeeLamports / LAMPORTS_PER_SOL) * solUsdPrice
+      : null;
+    return computeKaminoPnlNoFeesUsd({
+      entryUsd: this.lastStatus.eventPositionEntryUsd ?? null,
+      exitUsd: this.lastStatus.eventPositionExitUsd ?? null,
+      feesUsd: this.lastStatus.eventPositionFeesUsd ?? null,
+      txFeeUsd
+    });
+  }
+
   private getPositionPnlNoFeesUsd(): number | null {
     const entryUsd = this.lastStatus.positionEntryUsd ?? null;
     const valueUsd = this.lastStatus.positionValueUsd ?? null;
@@ -3257,6 +3265,36 @@ export class OrcaBot {
       return pnlUsd - feesUsd;
     }
     return null;
+  }
+
+  private async reopenPositionAfterClose(input: {
+    executionRange: Range;
+    price: number;
+    solUsdPrice: number | null;
+    action: "rebalanced" | "kamino-rebalanced";
+  }): Promise<string> {
+    const result = await this.openPosition(input.executionRange, input.price, input.solUsdPrice);
+    if (result === "open-position") {
+      this.lastRebalanceAt = Date.now();
+      if (input.action === "kamino-rebalanced" && this.kaminoState?.active) {
+        this.kaminoPoolOpenedAt = Date.now();
+      }
+      if (this.config.autoSwapToSolEnabled) {
+        try {
+          await this.swapWalletToSol("auto");
+        } catch (err) {
+          logger.warn(
+            { err, action: input.action },
+            input.action === "kamino-rebalanced"
+              ? "auto swap-to-sol failed after kamino re-range"
+              : "auto swap-to-sol failed after re-range"
+          );
+        }
+      }
+      await this.updatePortfolioSnapshot(input.price, input.solUsdPrice);
+      return input.action;
+    }
+    return result;
   }
 
   getStatus(): BotStatus {
@@ -6059,6 +6097,9 @@ export class OrcaBot {
     // Fechar o ciclo Kamino nao deve mexer na pool de liquidez, a menos que
     // um chamador peca isso explicitamente.
     const shouldClosePool = options?.closePool ?? false;
+    if (mode === "manual" && shouldClosePool) {
+      throw new Error("Fechamento manual do emprestimo Kamino nao pode fechar a pool.");
+    }
     let closedPool = false;
     if (shouldClosePool) {
       await this.refreshPoolState();
@@ -7359,6 +7400,24 @@ export class OrcaBot {
     if (this.currentPosition) {
       this.setError("Fechamento falhou: posicao ainda aberta");
       return "close-failed";
+    }
+    const closePnlNoFeesUsd = this.getCapturedClosePnlNoFeesUsd(input.solUsdPrice);
+    if (!shouldUseKaminoAfterClose(closePnlNoFeesUsd)) {
+      const reason = closePnlNoFeesUsd == null
+        ? "PnL pos-fechamento indisponivel"
+        : `PnL pos-fechamento sem taxas = ${closePnlNoFeesUsd.toFixed(6)} USD`;
+      logger.info({ closePnlNoFeesUsd }, "Kamino abortado apos fechamento real; reabrindo pool sem emprestimo");
+      this.queueKaminoLog(
+        "rebalance-skip-positive",
+        `${reason}; reabrindo pool sem Kamino.`,
+        "warn"
+      );
+      return this.reopenPositionAfterClose({
+        executionRange: input.executionRange,
+        price: input.price,
+        solUsdPrice: input.solUsdPrice,
+        action: "rebalanced"
+      });
     }
     if (!preCloseSnapshotOk) {
       const message = "Snapshot pre-fechamento invalido; deposito Kamino cancelado.";

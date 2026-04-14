@@ -27,3 +27,23 @@ export function isKaminoCloseAllowed(params: {
   }
   return false;
 }
+
+export function computeKaminoPnlNoFeesUsd(params: {
+  entryUsd: number | null;
+  exitUsd: number | null;
+  feesUsd?: number | null;
+  txFeeUsd?: number | null;
+}): number | null {
+  const entryUsd = Number.isFinite(params.entryUsd) ? Number(params.entryUsd) : null;
+  const exitUsd = Number.isFinite(params.exitUsd) ? Number(params.exitUsd) : null;
+  if (entryUsd == null || exitUsd == null) {
+    return null;
+  }
+  const feesUsd = Number.isFinite(params.feesUsd) ? Number(params.feesUsd) : 0;
+  const txFeeUsd = Number.isFinite(params.txFeeUsd) ? Number(params.txFeeUsd) : 0;
+  return exitUsd - entryUsd - feesUsd - txFeeUsd;
+}
+
+export function shouldUseKaminoAfterClose(closePnlNoFeesUsd: number | null): boolean {
+  return closePnlNoFeesUsd != null && Number.isFinite(closePnlNoFeesUsd) && closePnlNoFeesUsd < 0;
+}
