@@ -184,6 +184,17 @@ describe("config", () => {
     expect(() => loadWith({ kaminoCollateralMode: "both" })).not.toThrow();
   });
 
+  it("defaults kaminoAutoCloseOnTokenChange to false for safety", () => {
+    const config = loadWith({});
+    expect(config.kaminoAutoCloseOnTokenChange).toBe(false);
+  });
+
+  it("allows explicit env override to re-enable legacy token-change close", () => {
+    process.env.KAMINO_AUTO_CLOSE_ON_TOKEN_CHANGE = "true";
+    const config = loadWith({});
+    expect(config.kaminoAutoCloseOnTokenChange).toBe(true);
+  });
+
   it("rejects invalid kamino settings", () => {
     expect(() => loadWith({ kaminoDepositPct: -1 })).toThrow();
     expect(() => loadWith({ kaminoDepositPct: 120 })).toThrow();

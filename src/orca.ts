@@ -30,6 +30,8 @@ import { notifyKaminoFundsNeeded } from "./evolution-notify.js";
 import type { KaminoPositionState, KaminoWithdrawResult } from "./kamino-client.js";
 import { isObligationBorrowsEmptyError, isObligationDepositsEmptyError } from "./kamino-client.js";
 import { BalanceCoordinator } from "./balance-coordinator.js";
+import { isKaminoCloseAllowed } from "./kamino-close-policy.js";
+import type { KaminoCloseMode, KaminoCloseTrigger } from "./kamino-close-policy.js";
 
 const whirlpools = whirlpoolsSdk as any;
 const common = commonSdk as any;
@@ -1189,7 +1191,10 @@ export class OrcaBot {
           );
           if (!this.isKaminoAutoCloseSuppressed()) {
             try {
-              const closed = await this.closeKaminoCycle("target", { closePool: false });
+              const closed = await this.closeKaminoCycle("target", {
+                closePool: false,
+                trigger: "wait-funds"
+              });
               if (closed) {
                 this.lastStatus.lastAction = "kamino-close";
                 this.lastStatus.positionRange = null;
@@ -1226,7 +1231,10 @@ export class OrcaBot {
           );
           if (!this.isKaminoAutoCloseSuppressed()) {
             try {
-              const closed = await this.closeKaminoCycle("target", { closePool: false });
+              const closed = await this.closeKaminoCycle("target", {
+                closePool: false,
+                trigger: "wait-funds"
+              });
               if (closed) {
                 this.lastStatus.lastAction = "kamino-close";
                 this.lastStatus.positionRange = null;
@@ -1682,7 +1690,10 @@ export class OrcaBot {
       return { ok: false, reason: "rate-limit", status: this.getStatus() };
     }
     try {
-      const closed = await this.closeKaminoCycle("manual", { closePool: false });
+      const closed = await this.closeKaminoCycle("manual", {
+        closePool: false,
+        trigger: "manual"
+      });
       if (closed) {
         this.lastStatus.lastAction = "kamino-close";
         return { ok: true, status: this.getStatus() };
@@ -4278,7 +4289,10 @@ export class OrcaBot {
               return;
             }
             try {
-              await this.closeKaminoCycle("target", { closePool: false });
+              await this.closeKaminoCycle("target", {
+                closePool: false,
+                trigger: "debt-zero"
+              });
             } catch (closeErr) {
               this.kaminoHealth.recordError(closeErr, "kamino-close");
               const msg = `Falha ao sacar colateral residual: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}.`;
@@ -4430,7 +4444,10 @@ export class OrcaBot {
         return;
       }
       try {
-        await this.closeKaminoCycle("target", { closePool: false });
+        await this.closeKaminoCycle("target", {
+          closePool: false,
+          trigger: "recover-debt-zero"
+        });
       } catch (err) {
         this.kaminoHealth.recordError(err, "kamino-recover-withdraw");
         this.queueKaminoLog(
@@ -5146,7 +5163,10 @@ export class OrcaBot {
         "Divida zerada com colateral residual; sacando colateral automaticamente (independe do kaminoCloseRule).",
         "warn"
       );
-      const closed = await this.closeKaminoCycle("target", { closePool: false });
+      const closed = await this.closeKaminoCycle("target", {
+        closePool: false,
+        trigger: "debt-zero"
+      });
       if (closed) {
         this.lastStatus.lastAction = "kamino-close";
       }
@@ -5295,7 +5315,10 @@ export class OrcaBot {
           { rule, collaterals: collaterals.map((item) => item.mint) },
           "kamino target atingido (todos); fechando ciclo completo"
         );
-        const closed = await this.closeKaminoCycle("target", { closePool: false });
+        const closed = await this.closeKaminoCycle("target", {
+          closePool: false,
+          trigger: "price-target"
+        });
         if (closed) {
           this.lastStatus.lastAction = "kamino-close";
           return true;
@@ -5790,12 +5813,32 @@ export class OrcaBot {
   }
 
   private async closeKaminoCycle(
-    mode: "manual" | "target" | "token-change",
-    options?: { closePool?: boolean }
+    mode: KaminoCloseMode,
+    options?: { closePool?: boolean; trigger?: KaminoCloseTrigger }
   ): Promise<boolean> {
+    const trigger = options?.trigger
+      ?? (mode === "manual" ? "manual" : mode === "target" ? "price-target" : "token-change");
     let state = this.kaminoState;
     if (!state || !state.active) {
       this.setError("Nenhum ciclo Kamino ativo");
+      return false;
+    }
+    if (!isKaminoCloseAllowed({
+      mode,
+      trigger,
+      debtAmount: Number(state.debtAmount ?? 0)
+    })) {
+      const debtAmount = Math.max(0, Number(state.debtAmount ?? 0));
+      const message = debtAmount > 1e-8
+        ? `Fechamento automatico Kamino bloqueado (${trigger}): divida ativa ${debtAmount.toFixed(8)}. Permitido apenas por alvo ou fechamento manual.`
+        : `Fechamento automatico Kamino bloqueado (${trigger}). Permitido apenas por alvo ou fechamento manual.`;
+      this.setKaminoState({
+        ...state,
+        lastError: message,
+        updatedAt: new Date().toISOString()
+      });
+      this.queueKaminoLog("close-blocked-policy", message, "warn");
+      this.lastStatus.lastError = message;
       return false;
     }
     if (this.isRateLimited()) {
@@ -5990,6 +6033,27 @@ export class OrcaBot {
           return false;
         }
       }
+    }
+    const liveDebtAmount = Math.max(
+      0,
+      Number.isFinite(onChainDebtAmount) ? onChainDebtAmount : 0,
+      Number.isFinite(recordedDebtAmount) ? recordedDebtAmount : 0
+    );
+    if (
+      (trigger === "debt-zero" || trigger === "recover-debt-zero")
+      && liveDebtAmount > epsilon
+    ) {
+      const message =
+        `Fechamento automatico Kamino bloqueado (${trigger}): divida on-chain ainda ativa `
+        + `(${liveDebtAmount.toFixed(8)}). Permitido apenas por alvo ou fechamento manual.`;
+      this.setKaminoState({
+        ...state,
+        lastError: message,
+        updatedAt: new Date().toISOString()
+      });
+      this.queueKaminoLog("close-blocked-policy", message, "warn");
+      this.lastStatus.lastError = message;
+      return false;
     }
 
     // Fechar o ciclo Kamino nao deve mexer na pool de liquidez, a menos que
@@ -7392,31 +7456,17 @@ export class OrcaBot {
         : (this.kaminoState.collateralMint ? [this.kaminoState.collateralMint] : []);
       const nextMint = exitTokens[0]?.mint;
       if (nextMint && existing.length > 0 && !existing.includes(nextMint)) {
-        if (this.config.kaminoAutoCloseOnTokenChange) {
-          try {
-            const closed = await this.closeKaminoCycle("token-change", { closePool: false });
-            if (!closed) {
-              this.setError("Fechamento do ciclo Kamino pendente");
-              return "kamino-rebalance-failed";
-            }
-          } catch (err) {
-            this.setError(err);
-            return "kamino-rebalance-failed";
-          }
-          if (this.kaminoState?.active) {
-            this.setError("Falha ao fechar ciclo Kamino anterior");
-            return "kamino-rebalance-failed";
-          }
-          const refreshedBalances = await this.getTokenBalances();
-          exitTokens = await resolveTokens(refreshedBalances);
-          if (!exitTokens || exitTokens.length === 0) {
-            this.setError("Nao foi possivel determinar token de saida apos fechar ciclo Kamino");
-            return "kamino-rebalance-failed";
-          }
-        } else {
-          this.setError("Token de colateral mudou; feche o ciclo Kamino antes de continuar");
-          return "kamino-rebalance-failed";
-        }
+        const tokenChangeMessage = this.config.kaminoAutoCloseOnTokenChange
+          ? "Fechamento automatico do Kamino por troca de token foi bloqueado; aguarde o alvo ou feche manualmente o ciclo."
+          : "Token de colateral mudou; feche o ciclo Kamino manualmente ou aguarde o alvo.";
+        this.queueKaminoLog("token-change-blocked", tokenChangeMessage, "warn");
+        this.setKaminoState({
+          ...this.kaminoState,
+          lastError: tokenChangeMessage,
+          updatedAt: new Date().toISOString()
+        });
+        this.setError(tokenChangeMessage);
+        return "kamino-rebalance-failed";
       }
     }
 

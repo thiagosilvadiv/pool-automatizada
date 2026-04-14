@@ -506,7 +506,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   const autoResumeBaseDelayMs = parseEnvNumber(process.env.AUTO_RESUME_BASE_DELAY_MS)
     ?? Number((data as any).autoResumeBaseDelayMs ?? 5000);
   const kaminoAutoCloseOnTokenChange = parseEnvBool(process.env.KAMINO_AUTO_CLOSE_ON_TOKEN_CHANGE)
-    ?? Boolean((data as any).kaminoAutoCloseOnTokenChange ?? true);
+    ?? Boolean((data as any).kaminoAutoCloseOnTokenChange ?? false);
   const kaminoConvertToCollateral = parseEnvBool(process.env.KAMINO_CONVERT_TO_COLLATERAL)
     ?? Boolean((data as any).kaminoConvertToCollateral ?? false);
   const envNetwork = parseEnvString(process.env.NETWORK);
