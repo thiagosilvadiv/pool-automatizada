@@ -126,6 +126,39 @@ export function computeSpendableNativeSol(
   return Math.max(0, safeTotal - safeMinBalance - safeExtraReserve);
 }
 
+export function clampNativeFundingBalances(input: {
+  tokenA: number;
+  tokenB: number;
+  isTokenASol: boolean;
+  isTokenBSol: boolean;
+  totalNativeSol: number;
+  minSolBalance: number;
+  extraReserveSol?: number;
+}): {
+  tokenA: number;
+  tokenB: number;
+  spendableNativeSol: number;
+  clampedA: boolean;
+  clampedB: boolean;
+} {
+  const tokenA = Number.isFinite(input.tokenA) ? Math.max(0, input.tokenA) : 0;
+  const tokenB = Number.isFinite(input.tokenB) ? Math.max(0, input.tokenB) : 0;
+  const spendableNativeSol = computeSpendableNativeSol(
+    input.totalNativeSol,
+    input.minSolBalance,
+    input.extraReserveSol
+  );
+  const nextTokenA = input.isTokenASol ? Math.min(tokenA, spendableNativeSol) : tokenA;
+  const nextTokenB = input.isTokenBSol ? Math.min(tokenB, spendableNativeSol) : tokenB;
+  return {
+    tokenA: nextTokenA,
+    tokenB: nextTokenB,
+    spendableNativeSol,
+    clampedA: input.isTokenASol && nextTokenA + 1e-12 < tokenA,
+    clampedB: input.isTokenBSol && nextTokenB + 1e-12 < tokenB
+  };
+}
+
 export async function performSplitRepayWithCollateralHelper(params: {
   kamino: {
     withdraw(input: { mint: string; amount: number }): Promise<KaminoWithdrawResult>;
@@ -1184,7 +1217,7 @@ export class OrcaBot {
           // reserved=null/0: ciclo foi recuperado (recover) sem informação
           // de quanto foi emprestado. O borrow pode já existir on-chain.
           // Verifica se há saldo na wallet para abrir a pool diretamente.
-          const walletBal = await this.getTokenBalances().catch(() => ({ tokenA: 0, tokenB: 0 }));
+          const walletBal = await this.getFundingBalances("kamino-recover-wallet").catch(() => ({ tokenA: 0, tokenB: 0 }));
       if (walletBal.tokenA <= 0 && walletBal.tokenB <= 0) {
         const pendingDebtWallet = Number(this.kaminoState?.debtAmount ?? 0);
         if (pendingDebtWallet > 1e-8) {
@@ -2047,11 +2080,11 @@ export class OrcaBot {
       }
     }
 
-    let balances = await this.getTokenBalances();
+    let balances = await this.getFundingBalances("add-liquidity");
     if (balances.tokenA <= 0 && balances.tokenB <= 0) {
       const bootstrappedFromWallet = await this.maybeBootstrapAddLiquidityFromWallet(price, solUsdPrice);
       if (bootstrappedFromWallet) {
-        balances = await this.getTokenBalances();
+        balances = await this.getFundingBalances("add-liquidity-bootstrap");
       }
     }
     let usableA = options.maxTokenA != null ? Number(options.maxTokenA) : balances.tokenA * effectiveShare;
@@ -2162,7 +2195,7 @@ export class OrcaBot {
     const slippage = common.Percentage.fromFraction(this.config.slippageBps, 10_000);
     const swapped = await this.rebalanceToTarget(usableA, usableB, targetA, targetB, price, slippage);
     if (swapped) {
-      balances = await this.getTokenBalances();
+      balances = await this.getFundingBalances("add-liquidity-post-swap");
     } else if (targetA > usableA * 1.05 || targetB > usableB * 1.05) {
       // Swap era necessário mas não ocorreu (bloqueado por allowlist,
       // rebalanceSwapPct=0, ou falha no swap).
@@ -2619,11 +2652,11 @@ export class OrcaBot {
       }
       return { tokenA, tokenB };
     };
-    let balances = applyLimits(await this.getTokenBalances());
+    let balances = applyLimits(await this.getFundingBalances("open-position"));
     if (balances.tokenA <= 0 && balances.tokenB <= 0) {
       const bootstrapped = await this.maybeBootstrapOpenPositionBalances(price, solUsdPrice);
       if (bootstrapped) {
-        balances = applyLimits(await this.getTokenBalances());
+        balances = applyLimits(await this.getFundingBalances("open-position-bootstrap"));
       }
     }
     let tokenExtensionCtx = await whirlpools.TokenExtensionUtil.buildTokenExtensionContext(
@@ -2662,7 +2695,7 @@ export class OrcaBot {
 
     const swapped = await this.rebalanceToTarget(balances.tokenA, balances.tokenB, targetA, targetB, price, slippage);
     if (swapped) {
-      balances = applyLimits(await this.getTokenBalances());
+      balances = applyLimits(await this.getFundingBalances("open-position-post-swap"));
       await this.refreshPoolState();
       if (!this.poolState) {
         throw new Error("poolState not initialized after refresh");
@@ -2842,6 +2875,27 @@ export class OrcaBot {
             return "quote-failed";
           }
           continue;
+        }
+        const logs = await extractSendTxLogs(err);
+        const detailedError = formatErrorWithLogs(stringifyError(err), logs);
+        if (detailedError.toLowerCase().includes("insufficient lamports")) {
+          this.logOpenPositionContext("insufficient-native-sol", {
+            balances,
+            targetA,
+            targetB,
+            usableA,
+            usableB,
+            requiredA,
+            requiredB,
+            lowerTick,
+            upperTick,
+            attempt,
+            error: detailedError,
+            maxTokenA: options?.maxTokenA ?? null,
+            maxTokenB: options?.maxTokenB ?? null
+          });
+          this.setError("Saldo de SOL insuficiente para abrir a pool com seguranca.");
+          return "insufficient-balance";
         }
         throw err;
       }
@@ -7915,7 +7969,7 @@ export class OrcaBot {
     }
     if (reservedTokenA <= 0 && reservedTokenB <= 0) {
       // Tenta usar saldo livre da wallet antes de desistir
-      const walletBalances = await this.getTokenBalances();
+      const walletBalances = await this.getFundingBalances("kamino-reopen-wallet");
       const hasWallet = walletBalances.tokenA > 0 || walletBalances.tokenB > 0;
       if (!hasWallet) {
         this.setError("Saldo emprestado insuficiente para reabrir a pool");
@@ -7951,7 +8005,7 @@ export class OrcaBot {
             const budgetTokenB = this.poolState.isTokenBSol ? budgetSol : budgetSol * input.price;
             const reservedValueB = reservedTokenB + reservedTokenA * input.price;
             if (budgetTokenB > reservedValueB) {
-              const available = await this.getTokenBalances();
+              const available = await this.getFundingBalances("kamino-reopen-budget-topup");
               const extraA = Math.max(0, available.tokenA - reservedTokenA);
               const extraB = Math.max(0, available.tokenB - reservedTokenB);
               const extraValueB = extraB + extraA * input.price;
@@ -8229,6 +8283,53 @@ export class OrcaBot {
   private async getTokenBalances(): Promise<{ tokenA: number; tokenB: number }> {
     const raw = await this.getTokenBalancesRaw();
     return this.applyBalanceCoordinator(raw);
+  }
+
+  private async getFundingBalances(
+    context: string
+  ): Promise<{ tokenA: number; tokenB: number }> {
+    const balances = await this.getTokenBalances();
+    if (!this.poolState || (!this.poolState.isTokenASol && !this.poolState.isTokenBSol)) {
+      return balances;
+    }
+
+    let nativeSol = 0;
+    try {
+      nativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
+    } catch (err) {
+      const fallback = Number(this.lastStatus.solBalance ?? 0);
+      nativeSol = Number.isFinite(fallback) ? fallback : 0;
+      this.lastSolBalanceFallback = true;
+      logger.warn({ err, fallbackSol: nativeSol, context }, "falha ao ler SOL para funding; usando cache");
+    }
+
+    const clamped = clampNativeFundingBalances({
+      tokenA: balances.tokenA,
+      tokenB: balances.tokenB,
+      isTokenASol: this.poolState.isTokenASol,
+      isTokenBSol: this.poolState.isTokenBSol,
+      totalNativeSol: nativeSol,
+      minSolBalance: this.config.minSolBalance
+    });
+
+    if (clamped.clampedA || clamped.clampedB) {
+      logger.info(
+        {
+          context,
+          walletNativeSol: nativeSol,
+          spendableNativeSol: clamped.spendableNativeSol,
+          tokenA: balances.tokenA,
+          tokenB: balances.tokenB,
+          fundingTokenA: clamped.tokenA,
+          fundingTokenB: clamped.tokenB,
+          isTokenASol: this.poolState.isTokenASol,
+          isTokenBSol: this.poolState.isTokenBSol
+        },
+        "native SOL funding clamped to spendable wallet balance"
+      );
+    }
+
+    return { tokenA: clamped.tokenA, tokenB: clamped.tokenB };
   }
 
   private async listWalletTokensByProgram(
