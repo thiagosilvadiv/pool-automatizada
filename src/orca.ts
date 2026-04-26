@@ -36,6 +36,7 @@ import {
   shouldUseKaminoAfterClose
 } from "./kamino-close-policy.js";
 import type { KaminoCloseMode, KaminoCloseTrigger } from "./kamino-close-policy.js";
+import { decideRecoveredKaminoResume } from "./kamino-reopen-policy.js";
 
 const whirlpools = whirlpoolsSdk as any;
 const common = commonSdk as any;
@@ -1210,96 +1211,21 @@ export class OrcaBot {
       }
 
       let openOptions: { maxTokenA?: number; maxTokenB?: number } | undefined;
+      let recoveredBaselineBalances: { tokenA: number; tokenB: number } | null = null;
       if (this.kaminoState?.active) {
         const reservedA = Number(this.kaminoState.reservedTokenA ?? 0);
         const reservedB = Number(this.kaminoState.reservedTokenB ?? 0);
         if (reservedA <= 0 && reservedB <= 0) {
-          // reserved=null/0: ciclo foi recuperado (recover) sem informação
-          // de quanto foi emprestado. O borrow pode já existir on-chain.
-          // Verifica se há saldo na wallet para abrir a pool diretamente.
-          const walletBal = await this.getFundingBalances("kamino-recover-wallet").catch(() => ({ tokenA: 0, tokenB: 0 }));
-      if (walletBal.tokenA <= 0 && walletBal.tokenB <= 0) {
-        const pendingDebtWallet = Number(this.kaminoState?.debtAmount ?? 0);
-        if (pendingDebtWallet > 1e-8) {
-          this.queueKaminoLog(
-            "wait-funds",
-            `Tentando quitar divida Kamino (${pendingDebtWallet.toFixed(4)}) via colateral depositado.`,
-            "warn"
-          );
-          if (!this.isKaminoAutoCloseSuppressed()) {
-            try {
-              const closed = await this.closeKaminoCycle("target", {
-                closePool: false,
-                trigger: "wait-funds"
-              });
-              if (closed) {
-                this.lastStatus.lastAction = "kamino-close";
-                this.lastStatus.positionRange = null;
-                this.lastStatus.positionMint = this.currentPositionMint;
-                return this.getStatus();
-              }
-            } catch (err) {
-              this.queueKaminoLog(
-                "wait-funds",
-                `Falha ao fechar ciclo Kamino: ${err instanceof Error ? err.message : String(err)}. Aguardando proximo tick.`,
-                "warn"
-              );
-            }
+          const recovered = await this.prepareRecoveredKaminoOpen({
+            price,
+            solUsdPrice,
+            executionRange
+          });
+          if (recovered.kind === "wait") {
+            return this.getStatus();
           }
-          this.lastStatus.lastAction = "kamino-wait-funds";
-          this.lastStatus.positionRange = null;
-          this.lastStatus.positionMint = this.currentPositionMint;
-          return this.getStatus();
-        }
-        if (this.lastStatus.lastAction !== "kamino-wait-funds") {
-          this.queueKaminoLog("wait-funds", "Aguardando saldo emprestado para reabrir a pool.", "warn");
-        }
-        this.lastStatus.lastAction = "kamino-wait-funds";
-        this.lastStatus.positionRange = null;
-        this.lastStatus.positionMint = this.currentPositionMint;
-        return this.getStatus();
-      }
-        const pendingDebt = Number(this.kaminoState?.debtAmount ?? 0);
-        if (pendingDebt > 1e-8) {
-          this.queueKaminoLog(
-            "wait-funds",
-            `Tentando quitar divida Kamino (${pendingDebt.toFixed(4)}) para reabrir a pool.`,
-            "warn"
-          );
-          if (!this.isKaminoAutoCloseSuppressed()) {
-            try {
-              const closed = await this.closeKaminoCycle("target", {
-                closePool: false,
-                trigger: "wait-funds"
-              });
-              if (closed) {
-                this.lastStatus.lastAction = "kamino-close";
-                this.lastStatus.positionRange = null;
-                this.lastStatus.positionMint = this.currentPositionMint;
-                return this.getStatus();
-              }
-            } catch (err) {
-              this.queueKaminoLog(
-                "wait-funds",
-                `Falha ao fechar ciclo Kamino: ${err instanceof Error ? err.message : String(err)}. Aguardando proximo tick.`,
-                "warn"
-              );
-            }
-          }
-          this.lastStatus.lastAction = "kamino-wait-funds";
-          this.lastStatus.positionRange = null;
-          this.lastStatus.positionMint = this.currentPositionMint;
-          return this.getStatus();
-        }
-        // Há saldo na wallet — abre a pool com o que tem.
-        // Não tenta forçar novo deposit+borrow para não criar loop
-        // com o reconcileKaminoState que reativa o ciclo a cada tick.
-          this.queueKaminoLog(
-            "wait-funds",
-            "Saldo disponivel na wallet; abrindo pool com saldo atual.",
-            "warn"
-          );
-          // openOptions fica undefined → openPosition usa todo saldo disponível
+          openOptions = recovered.openOptions;
+          recoveredBaselineBalances = recovered.baselineBalances ?? null;
         } else {
           const caps: { maxTokenA?: number; maxTokenB?: number } = {};
           if (reservedA > 0) caps.maxTokenA = reservedA;
@@ -1315,6 +1241,18 @@ export class OrcaBot {
         this.lastRebalanceAt = Date.now();
         if (this.kaminoState?.active) {
           this.kaminoPoolOpenedAt = Date.now();
+          if (recoveredBaselineBalances) {
+            const postOpenBalances = await this.getTokenBalancesRaw();
+            this.setKaminoState({
+              ...this.kaminoState,
+              baselineTokenA: recoveredBaselineBalances.tokenA,
+              baselineTokenB: recoveredBaselineBalances.tokenB,
+              reservedTokenA: Math.max(0, postOpenBalances.tokenA - recoveredBaselineBalances.tokenA),
+              reservedTokenB: Math.max(0, postOpenBalances.tokenB - recoveredBaselineBalances.tokenB),
+              updatedAt: new Date().toISOString(),
+              lastError: null
+            });
+          }
         }
         if (this.config.autoSwapToSolEnabled) {
           try {
@@ -3361,7 +3299,10 @@ export class OrcaBot {
   }
 
   getKaminoHealth(): KaminoHealthStatus {
-    const issues = this.kaminoHealth.diagnose(this.kaminoState);
+    const healthContext = {
+      hasOpenPosition: Boolean(this.currentPosition)
+    };
+    const issues = this.kaminoHealth.diagnose(this.kaminoState, healthContext);
     const recent = this.kaminoHealth.getRecentErrors();
     const counts = new Map<string, number>();
     for (const item of recent) {
@@ -3374,7 +3315,7 @@ export class OrcaBot {
       ? new Date(lastProgressAtMs).toISOString()
       : null;
     return {
-      stuck: this.kaminoHealth.isStuck(this.kaminoState),
+      stuck: this.kaminoHealth.isStuck(this.kaminoState, healthContext),
       issues,
       consecutiveErrors: this.kaminoHealth.getConsecutiveErrors(),
       lastProgressAt,
@@ -8330,6 +8271,194 @@ export class OrcaBot {
     }
 
     return { tokenA: clamped.tokenA, tokenB: clamped.tokenB };
+  }
+
+  private async prepareRecoveredKaminoOpen(input: {
+    price: number;
+    solUsdPrice: number | null;
+    executionRange: Range;
+  }): Promise<
+    | {
+        kind: "open";
+        openOptions?: { maxTokenA?: number; maxTokenB?: number };
+        baselineBalances?: { tokenA: number; tokenB: number } | null;
+      }
+    | {
+        kind: "wait";
+      }
+  > {
+    const state = this.kaminoState;
+    if (!state?.active || !this.poolState) {
+      return { kind: "wait" };
+    }
+
+    const walletBalances = await this.getFundingBalances("kamino-recover-wallet").catch(() => ({ tokenA: 0, tokenB: 0 }));
+    const tokenAMint = this.poolState.tokenMintA.toBase58();
+    const tokenBMint = this.poolState.tokenMintB.toBase58();
+    const debtMint = state.debtMint ?? null;
+
+    let walletDebtBalance = 0;
+    if (debtMint === tokenAMint) {
+      walletDebtBalance = walletBalances.tokenA;
+    } else if (debtMint === tokenBMint) {
+      walletDebtBalance = walletBalances.tokenB;
+    } else if (debtMint === NATIVE_MINT.toBase58()) {
+      const nativeSol = (this.lastStatus.solBalance ?? 0);
+      walletDebtBalance = Math.max(0, nativeSol - this.config.minSolBalance);
+    } else if (debtMint) {
+      walletDebtBalance = await this.getWalletTokenBalance(debtMint).catch(() => 0);
+    }
+
+    const plan = decideRecoveredKaminoResume({
+      walletTokenA: walletBalances.tokenA,
+      walletTokenB: walletBalances.tokenB,
+      debtAmount: state.debtAmount ?? 0,
+      walletDebtBalance
+    });
+
+    if (plan.action === "use-wallet") {
+      this.queueKaminoLog("recover-open", plan.reason, state.debtAmount > 1e-8 ? "warn" : "info");
+      return {
+        kind: "open",
+        openOptions: {
+          maxTokenA: plan.maxTokenA > 0 ? plan.maxTokenA : undefined,
+          maxTokenB: plan.maxTokenB > 0 ? plan.maxTokenB : undefined
+        },
+        baselineBalances: null
+      };
+    }
+
+    if (plan.action === "wait-funds") {
+      this.queueKaminoLog("wait-funds", plan.reason, "warn");
+      this.lastStatus.lastAction = "kamino-wait-funds";
+      this.lastStatus.positionRange = null;
+      this.lastStatus.positionMint = this.currentPositionMint;
+      return { kind: "wait" };
+    }
+
+    if (!debtMint) {
+      this.queueKaminoLog("wait-funds", "Divida ativa sem mint definido; aguardando recovery do Kamino.", "warn");
+      this.lastStatus.lastAction = "kamino-wait-funds";
+      this.lastStatus.positionRange = null;
+      this.lastStatus.positionMint = this.currentPositionMint;
+      return { kind: "wait" };
+    }
+
+    if (!this.config.jupiterApiKey) {
+      const message = "Jupiter API key ausente; nao foi possivel converter saldo da divida para reabrir a pool.";
+      this.setError(message);
+      this.queueKaminoLog("wait-funds", message, "warn");
+      this.lastStatus.lastAction = "kamino-wait-funds";
+      this.lastStatus.positionRange = null;
+      this.lastStatus.positionMint = this.currentPositionMint;
+      return { kind: "wait" };
+    }
+
+    const debtDecimals = debtMint === NATIVE_MINT.toBase58()
+      ? 9
+      : await this.getTokenDecimals(debtMint);
+    const baselineBalances = await this.getTokenBalancesRaw();
+
+    let shareA = 0.5;
+    try {
+      const ticks = this.getTicksForRange(input.executionRange, input.price);
+      const tokenExtensionCtx = await whirlpools.TokenExtensionUtil.buildTokenExtensionContext(
+        this.ctx.fetcher,
+        this.poolState.pool.getData(),
+        whirlpools.IGNORE_CACHE
+      );
+      const ratio = await this.getRangeRatio(
+        ticks.lowerTick,
+        ticks.upperTick,
+        input.price,
+        tokenExtensionCtx
+      );
+      if (input.price + ratio > 0) {
+        shareA = input.price / (input.price + ratio);
+      }
+    } catch (err) {
+      logger.warn({ err }, "falha ao calcular ratio para recovery Kamino");
+      shareA = 0.5;
+    }
+
+    const totalDebtRaw = toRawAmount(plan.debtBalanceToUse, debtDecimals);
+    let debtForA = BigInt(0);
+    let debtForB = BigInt(0);
+    if (isValidU64(totalDebtRaw) && totalDebtRaw > 0n) {
+      if (totalDebtRaw <= BigInt(Number.MAX_SAFE_INTEGER)) {
+        debtForA = BigInt(Math.floor(Number(totalDebtRaw) * shareA));
+      } else {
+        const scale = BigInt(Math.floor(shareA * 1_000_000));
+        debtForA = (totalDebtRaw * scale) / 1_000_000n;
+      }
+      debtForB = totalDebtRaw - debtForA;
+    }
+
+    try {
+      const skipSwapA = tokenAMint === debtMint;
+      const skipSwapB = tokenBMint === debtMint;
+      if (!skipSwapA && debtForA > 0n && (!this.isSwapAllowlistActive() || this.isSwapAllowed(tokenAMint))) {
+        await this.swapStableToToken({
+          stableMint: debtMint,
+          stableDecimals: debtDecimals,
+          outputMint: tokenAMint,
+          outputDecimals: this.poolState.decimalsA,
+          amountStableRaw: debtForA,
+          label: "kamino-recover-tokenA"
+        });
+      }
+      if (!skipSwapB && debtForB > 0n && (!this.isSwapAllowlistActive() || this.isSwapAllowed(tokenBMint))) {
+        await this.swapStableToToken({
+          stableMint: debtMint,
+          stableDecimals: debtDecimals,
+          outputMint: tokenBMint,
+          outputDecimals: this.poolState.decimalsB,
+          amountStableRaw: debtForB,
+          label: "kamino-recover-tokenB"
+        });
+      }
+    } catch (err) {
+      const message = `Falha ao converter saldo da divida para reabrir a pool: ${stringifyError(err)}`;
+      this.setError(message);
+      this.queueKaminoLog("wait-funds", message, "warn");
+      this.lastStatus.lastAction = "kamino-wait-funds";
+      this.lastStatus.positionRange = null;
+      this.lastStatus.positionMint = this.currentPositionMint;
+      return { kind: "wait" };
+    }
+
+    const postSwapBalances = await this.getTokenBalancesRaw();
+    const reservedTokenA = Math.max(0, postSwapBalances.tokenA - baselineBalances.tokenA);
+    const reservedTokenB = Math.max(0, postSwapBalances.tokenB - baselineBalances.tokenB);
+    if (reservedTokenA <= 0 && reservedTokenB <= 0) {
+      const message = "Saldo da divida encontrado, mas a conversao nao gerou tokens utilizaveis para reabrir a pool.";
+      this.setError(message);
+      this.queueKaminoLog("wait-funds", message, "warn");
+      this.lastStatus.lastAction = "kamino-wait-funds";
+      this.lastStatus.positionRange = null;
+      this.lastStatus.positionMint = this.currentPositionMint;
+      return { kind: "wait" };
+    }
+
+    this.setKaminoState({
+      ...state,
+      baselineTokenA: baselineBalances.tokenA,
+      baselineTokenB: baselineBalances.tokenB,
+      reservedTokenA,
+      reservedTokenB,
+      updatedAt: new Date().toISOString(),
+      lastError: null
+    });
+    this.queueKaminoLog("recover-open", plan.reason, "warn");
+
+    return {
+      kind: "open",
+      openOptions: {
+        maxTokenA: reservedTokenA > 0 ? reservedTokenA : undefined,
+        maxTokenB: reservedTokenB > 0 ? reservedTokenB : undefined
+      },
+      baselineBalances
+    };
   }
 
   private async listWalletTokensByProgram(

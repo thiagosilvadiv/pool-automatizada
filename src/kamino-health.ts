@@ -3,6 +3,10 @@ import type { KaminoCycleState } from "./kamino-types.js";
 
 type ErrorType = "rate-limit" | "insufficient-funds" | "blockhash" | "protocol" | "unknown";
 
+type HealthContext = {
+  hasOpenPosition?: boolean;
+};
+
 export type ErrorRecord = {
   timestamp: number;
   type: ErrorType;
@@ -54,8 +58,9 @@ export class KaminoHealthMonitor {
     this.consecutiveErrors = 0;
   }
 
-  isStuck(state: KaminoCycleState | null): boolean {
+  isStuck(state: KaminoCycleState | null, context?: HealthContext): boolean {
     if (!state?.active) return false;
+    if (context?.hasOpenPosition) return false;
     const stuckThresholdMs = 30 * 60 * 1000; // 30 min
     return (Date.now() - this.lastProgressAt) > stuckThresholdMs;
   }
@@ -72,13 +77,13 @@ export class KaminoHealthMonitor {
     return { rateLimitCount, protocolErrorCount, totalCount: recent.length };
   }
 
-  diagnose(state: KaminoCycleState | null): string[] {
+  diagnose(state: KaminoCycleState | null, context?: HealthContext): string[] {
     const issues: string[] = [];
     const rates = this.getRecentErrorRate();
     if (rates.rateLimitCount > 5) {
       issues.push("RATE_LIMIT_EXCESSIVO: RPC está throttling. Considere trocar endpoint.");
     }
-    if (this.isStuck(state)) {
+    if (this.isStuck(state, context)) {
       issues.push("CICLO_PRESO: Kamino ativo há mais de 30min sem progresso.");
     }
     if (this.consecutiveErrors > 3) {
