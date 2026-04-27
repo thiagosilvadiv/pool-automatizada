@@ -7530,6 +7530,14 @@ export class OrcaBot {
       const depositUsd = usdValue != null ? usdValue * (depositPct / 100) : null;
       return { ...token, depositAmount: amount, depositUsd };
     }).filter((item) => item.depositAmount > 0);
+    const buildKaminoDepositAmountMap = (position: Awaited<ReturnType<typeof kamino.getPositionState>> | null) => {
+      const map = new Map<string, number>();
+      for (const item of position?.deposits ?? []) {
+        if (!item?.mint) continue;
+        map.set(item.mint, (map.get(item.mint) ?? 0) + Math.max(0, Number(item.amount ?? 0)));
+      }
+      return map;
+    };
     if (!deposits.length) {
       this.setError("Saldo insuficiente para depositar no Kamino");
       return "kamino-rebalance-failed";
@@ -7550,8 +7558,15 @@ export class OrcaBot {
     }
 
     const depositedEntries: { mint: string; amount: number }[] = [];
+    let preDepositState: Awaited<ReturnType<typeof kamino.getPositionState>> | null = null;
+    let postDepositState: Awaited<ReturnType<typeof kamino.getPositionState>> | null = null;
+    let depositsForState: Array<typeof deposits[number] & { actualTotalAmount: number | null }> = deposits.map((entry) => ({
+      ...entry,
+      actualTotalAmount: null
+    }));
     try {
       await kamino.ensureObligation();
+      preDepositState = await kamino.getPositionState().catch(() => null);
       for (const entry of deposits) {
         const preOpState = await kamino.getPositionState().catch(() => null);
         logger.info(
@@ -7593,6 +7608,32 @@ export class OrcaBot {
         }
       }
       deposited = depositedEntries.length > 0;
+      if (depositedEntries.length > 0) {
+        kamino.invalidatePositionCache();
+        postDepositState = await kamino.getPositionState().catch(() => null);
+        const beforeMap = buildKaminoDepositAmountMap(preDepositState);
+        const afterMap = buildKaminoDepositAmountMap(postDepositState);
+        depositsForState = deposits.map((entry) => {
+          const beforeAmount = beforeMap.get(entry.mint) ?? 0;
+          const afterAmount = afterMap.get(entry.mint) ?? beforeAmount;
+          const actualAddedAmount = afterAmount > beforeAmount ? (afterAmount - beforeAmount) : null;
+          const actualTotalAmount = afterAmount > 0 ? afterAmount : null;
+          let depositAmount = entry.depositAmount;
+          let depositUsd = entry.depositUsd;
+          if (actualAddedAmount != null && Number.isFinite(actualAddedAmount) && actualAddedAmount > 0) {
+            if (depositUsd != null && entry.depositAmount > 0) {
+              depositUsd = depositUsd * (actualAddedAmount / entry.depositAmount);
+            }
+            depositAmount = actualAddedAmount;
+          }
+          return {
+            ...entry,
+            depositAmount,
+            depositUsd,
+            actualTotalAmount
+          };
+        });
+      }
     } catch (err) {
       this.setError(err);
       for (const entry of depositedEntries) {
@@ -7610,9 +7651,9 @@ export class OrcaBot {
     // Este estado parcial (sem debtAmount/avgPriceUsdc) será substituído
     // pelo estado completo após o borrow completar.
     if (depositedEntries.length > 0 && !this.kaminoState?.active) {
-      const partialCollaterals = depositedEntries.map((entry) => ({
+      const partialCollaterals = depositsForState.map((entry) => ({
         mint: entry.mint,
-        amount: entry.amount,
+        amount: entry.actualTotalAmount ?? entry.depositAmount,
         usd: null,
         debtUsd: null,
         avgPriceUsdc: null,
@@ -7643,7 +7684,7 @@ export class OrcaBot {
       });
     }
 
-    const totalDepositUsd = deposits.reduce((sum, entry) => sum + (entry.depositUsd ?? 0), 0);
+    const totalDepositUsd = depositsForState.reduce((sum, entry) => sum + (entry.depositUsd ?? 0), 0);
     const maxBorrowUsd = totalDepositUsd * Math.max(0, Math.min(1, this.config.kaminoMaxLtv ?? 0));
     const desiredBorrowUsd = this.config.budgetUsd != null
       ? Math.min(maxBorrowUsd, this.config.budgetUsd)
@@ -7664,7 +7705,7 @@ export class OrcaBot {
       return "kamino-rebalance-failed";
     }
     try {
-      const preOpState = await kamino.getPositionState().catch(() => null);
+      const preOpState = postDepositState ?? await kamino.getPositionState().catch(() => null);
       logger.info(
         {
           operation: "borrow-start",
@@ -7726,9 +7767,9 @@ export class OrcaBot {
         if (pnl != null && Number.isFinite(pnl) && pnl < 0) return Math.abs(pnl);
         return 0;
       })();
-      const depositsForAvg: Array<typeof deposits[number] & { safeDepositUsd: number | null }> = [];
+      const depositsForAvg: Array<typeof depositsForState[number] & { safeDepositUsd: number | null }> = [];
       let totalDepositUsdForAvg = 0;
-      for (const entry of deposits) {
+      for (const entry of depositsForState) {
         // CORREÇÃO: garantir depositUsd correto para SOL
         let safeDepositUsd = entry.depositUsd ?? null;
         if ((safeDepositUsd == null || safeDepositUsd <= 0) && entry.mint === NATIVE_MINT.toBase58()) {
@@ -7756,7 +7797,9 @@ export class OrcaBot {
         const baseAmount = avgMode === "reset" ? 0 : (prev.amount ?? 0);
         const baseUsd = avgMode === "reset" ? 0 : (prev.usd ?? 0);
         const baseDebtUsd = avgMode === "reset" ? 0 : (prev.debtUsd ?? 0);
-        const nextAmount = baseAmount + entry.depositAmount;
+        const nextAmount = entry.actualTotalAmount != null && Number.isFinite(entry.actualTotalAmount) && entry.actualTotalAmount > 0
+          ? entry.actualTotalAmount
+          : (baseAmount + entry.depositAmount);
         const nextUsd = baseUsd + (entry.safeDepositUsd ?? 0);
         const nextDebtUsd = baseDebtUsd + debtUsd;
         const avgNumerator = nextUsd > 0 ? nextUsd : (avgBasis === "debt" ? nextDebtUsd : nextUsd);
