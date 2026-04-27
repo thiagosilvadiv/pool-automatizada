@@ -1937,6 +1937,7 @@ export class OrcaBot {
         return { ok: false, reason: message, status: this.getStatus() };
       }
 
+      let skipWalletDepositForNativeSol = false;
       for (let step = 0; step < 24; step += 1) {
         kamino.invalidatePositionCache();
         currentPosition = await kamino.getPositionState().catch(() => null);
@@ -1946,21 +1947,42 @@ export class OrcaBot {
           break;
         }
 
-        const walletAmount = await this.getAvailableWalletTokenAmount(mint);
+        const walletAmount = skipWalletDepositForNativeSol && mint === NATIVE_MINT.toBase58()
+          ? 0
+          : await this.getAvailableWalletTokenAmount(mint);
         const depositAmount = Math.min(walletAmount, remainingAmount);
         if (depositAmount > epsilon) {
-          logger.info(
-            { mint, depositAmount, targetAmount, currentCollateralAmount, step },
-            "reconstrutor manual Kamino: depositando colateral"
-          );
-          lastDepositSig = await kamino.depositCollateral({ mint, amount: depositAmount });
-          this.kaminoHealth.recordSuccess("kamino-deposit");
-          this.recordKaminoSuccess("deposit", mint, depositAmount, lastDepositSig);
-          this.queueHistoryAction("kamino-deposit", { lastAction: "kamino-deposit" });
-          this.lastStatus.lastAction = "kamino-deposit";
-          depositCount += 1;
-          cycleStarted = true;
-          continue;
+          try {
+            logger.info(
+              { mint, depositAmount, targetAmount, currentCollateralAmount, step },
+              "reconstrutor manual Kamino: depositando colateral"
+            );
+            lastDepositSig = await kamino.depositCollateral({ mint, amount: depositAmount });
+            this.kaminoHealth.recordSuccess("kamino-deposit");
+            this.recordKaminoSuccess("deposit", mint, depositAmount, lastDepositSig);
+            this.queueHistoryAction("kamino-deposit", { lastAction: "kamino-deposit" });
+            this.lastStatus.lastAction = "kamino-deposit";
+            depositCount += 1;
+            cycleStarted = true;
+            continue;
+          } catch (err) {
+            const message = stringifyError(err).toLowerCase();
+            const isNativeLamportsError = mint === NATIVE_MINT.toBase58()
+              && (
+                message.includes("insufficient lamports")
+                || message.includes("custom program error: 0x1")
+                || message.includes("insufficient funds")
+              );
+            if (!isNativeLamportsError) {
+              throw err;
+            }
+            skipWalletDepositForNativeSol = true;
+            this.queueKaminoLog(
+              "manual-target-wallet-sol-insufficient",
+              "Saldo SOL insuficiente para deposito direto; seguindo com borrow + swap para atingir a meta.",
+              "warn"
+            );
+          }
         }
 
         const stableInfo = await ensureStable();
