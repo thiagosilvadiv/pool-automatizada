@@ -139,6 +139,16 @@ describe("runner auto-add after kamino close", () => {
     expect((runner as any).autoAddRequestedByMint.has("mint-1")).toBe(true);
   });
 
+  it("does not close the liquidity position when closing only the Kamino loan", async () => {
+    const { runner, bot } = createRunner();
+
+    const result = await runner.closeKaminoCycleNow();
+
+    expect(result.ok).toBe(true);
+    expect(bot.closeKaminoCycleNow).toHaveBeenCalledTimes(1);
+    expect(bot.closeActivePosition).not.toHaveBeenCalled();
+  });
+
   it("enforces the minimum usd threshold on automatic add-liquidity calls", async () => {
     const { runner, bot } = createRunner();
 

@@ -37,6 +37,7 @@ import {
 } from "./kamino-close-policy.js";
 import type { KaminoCloseMode, KaminoCloseTrigger } from "./kamino-close-policy.js";
 import { decideRecoveredKaminoResume } from "./kamino-reopen-policy.js";
+import { shouldBootstrapAutoAddFromWallet } from "./auto-add-policy.js";
 
 const whirlpools = whirlpoolsSdk as any;
 const common = commonSdk as any;
@@ -2019,43 +2020,40 @@ export class OrcaBot {
     }
 
     let balances = await this.getFundingBalances("add-liquidity");
-    if (balances.tokenA <= 0 && balances.tokenB <= 0) {
-      const bootstrappedFromWallet = await this.maybeBootstrapAddLiquidityFromWallet(price, solUsdPrice);
-      if (bootstrappedFromWallet) {
-        balances = await this.getFundingBalances("add-liquidity-bootstrap");
+    const computeUsableBalances = (nextBalances: { tokenA: number; tokenB: number }) => {
+      let nextUsableA = options.maxTokenA != null ? Number(options.maxTokenA) : nextBalances.tokenA * effectiveShare;
+      let nextUsableB = options.maxTokenB != null ? Number(options.maxTokenB) : nextBalances.tokenB * effectiveShare;
+      if (!Number.isFinite(nextUsableA) || nextUsableA < 0) {
+        nextUsableA = 0;
       }
-    }
-    let usableA = options.maxTokenA != null ? Number(options.maxTokenA) : balances.tokenA * effectiveShare;
-    let usableB = options.maxTokenB != null ? Number(options.maxTokenB) : balances.tokenB * effectiveShare;
-    if (!Number.isFinite(usableA) || usableA < 0) {
-      usableA = 0;
-    }
-    if (!Number.isFinite(usableB) || usableB < 0) {
-      usableB = 0;
-    }
-    if (options.maxTokenA != null) {
-      usableA = Math.min(usableA, balances.tokenA);
-    }
-    if (options.maxTokenB != null) {
-      usableB = Math.min(usableB, balances.tokenB);
-    }
+      if (!Number.isFinite(nextUsableB) || nextUsableB < 0) {
+        nextUsableB = 0;
+      }
+      if (options.maxTokenA != null) {
+        nextUsableA = Math.min(nextUsableA, nextBalances.tokenA);
+      }
+      if (options.maxTokenB != null) {
+        nextUsableB = Math.min(nextUsableB, nextBalances.tokenB);
+      }
+      if (this.config.maxTokenA != null) {
+        nextUsableA = Math.min(nextUsableA, this.config.maxTokenA);
+      }
+      if (this.config.maxTokenB != null) {
+        nextUsableB = Math.min(nextUsableB, this.config.maxTokenB);
+      }
+      return { usableA: nextUsableA, usableB: nextUsableB };
+    };
 
-    if (this.config.maxTokenA != null) {
-      usableA = Math.min(usableA, this.config.maxTokenA);
-    }
-    if (this.config.maxTokenB != null) {
-      usableB = Math.min(usableB, this.config.maxTokenB);
-    }
+    let { usableA, usableB } = computeUsableBalances(balances);
 
-    const valueCap = usableB + usableA * price;
-    let valueCapUsd = Number.isFinite(valueCap) && valueCap > 0 ? valueCap : null;
+    let budgetValueCapUsd: number | null = null;
     if (this.config.budgetUsd != null) {
       const budgetTokenB = await this.convertBudgetUsdToTokenBValue(
         price,
         this.lastStatus.solUsdPrice ?? null
       );
       if (budgetTokenB != null) {
-        valueCapUsd = valueCapUsd != null ? Math.min(valueCapUsd, budgetTokenB) : budgetTokenB;
+        budgetValueCapUsd = budgetTokenB;
       }
     }
     const applyValueCap = (nextBalances: { tokenA: number; tokenB: number }) => {
@@ -2067,10 +2065,10 @@ export class OrcaBot {
       if (this.config.maxTokenB != null) {
         capB = Math.min(capB, this.config.maxTokenB);
       }
-      if (valueCapUsd != null) {
+      if (budgetValueCapUsd != null) {
         const currentValue = capB + capA * price;
         if (currentValue > 0) {
-          const factor = Math.min(1, valueCapUsd / currentValue);
+          const factor = Math.min(1, budgetValueCapUsd / currentValue);
           capA *= factor;
           capB *= factor;
         }
@@ -2080,8 +2078,23 @@ export class OrcaBot {
 
     ({ usableA, usableB } = applyValueCap(balances));
 
+    let plannedAddUsd = this.getPoolUsdValue(usableA, usableB, price, solUsdPrice);
+    if (shouldBootstrapAutoAddFromWallet({
+      balanceTokenA: usableA,
+      balanceTokenB: usableB,
+      plannedAddUsd,
+      autoAddMinUsd
+    })) {
+      const bootstrappedFromWallet = await this.maybeBootstrapAddLiquidityFromWallet(price, solUsdPrice);
+      if (bootstrappedFromWallet) {
+        balances = await this.getFundingBalances("add-liquidity-bootstrap");
+        ({ usableA, usableB } = computeUsableBalances(balances));
+        ({ usableA, usableB } = applyValueCap(balances));
+        plannedAddUsd = this.getPoolUsdValue(usableA, usableB, price, solUsdPrice);
+      }
+    }
+
     if (autoAddMinUsd > 0) {
-      const plannedAddUsd = this.getPoolUsdValue(usableA, usableB, price, solUsdPrice);
       if (plannedAddUsd != null && plannedAddUsd < autoAddMinUsd) {
         const message = `auto-add ignorado: aporte abaixo do minimo configurado (${plannedAddUsd.toFixed(2)} USD < ${autoAddMinUsd.toFixed(2)} USD)`;
         logger.info({ plannedAddUsd, autoAddMinUsd, usableA, usableB }, message);
@@ -6089,29 +6102,15 @@ export class OrcaBot {
       return false;
     }
 
-    // Fechar o ciclo Kamino nao deve mexer na pool de liquidez, a menos que
-    // um chamador peca isso explicitamente.
-    const shouldClosePool = options?.closePool ?? false;
-    if (mode === "manual" && shouldClosePool) {
-      throw new Error("Fechamento manual do emprestimo Kamino nao pode fechar a pool.");
+    // Fechamento do emprestimo Kamino nunca fecha a pool de liquidez.
+    // A posicao de Orca deve ser controlada pelo fluxo proprio de close/rebalance.
+    if (options?.closePool) {
+      const message = "Fechamento do emprestimo Kamino preserva a pool de liquidez aberta; closePool foi ignorado.";
+      logger.warn({ mode, positionMint: this.currentPositionMint }, message);
+      this.queueKaminoLog("close-pool-ignored", message, "warn");
     }
     let closedPool = false;
-    if (shouldClosePool) {
-      await this.refreshPoolState();
-      if (this.currentPosition) {
-        this.captureCloseSnapshot();
-        await this.closePosition(this.currentPosition);
-        this.queueHistoryAction("close-position", { lastAction: "close-position" });
-        this.currentPosition = null;
-        this.currentPositionMint = null;
-        this.missingPositionSince = null;
-        closedPool = true;
-      }
-      await this.loadExistingPosition();
-      if (this.currentPosition) {
-        throw new Error("Fechamento falhou: posicao ainda aberta");
-      }
-    } else if (this.currentPosition) {
+    if (this.currentPosition) {
       logger.info(
         { mode, positionMint: this.currentPositionMint },
         "closing Kamino while preserving active liquidity position"
