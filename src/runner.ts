@@ -334,9 +334,10 @@ export class BotRunner {
 
   async testKaminoNow(input: {
     collateralMint: string;
-    collateralAmount: number;
+    collateralAmount?: number;
     borrowUsd?: number;
-  }): Promise<{ ok: boolean; reason?: string; depositSig?: string; borrowSig?: string; status: RunnerStatus }> {
+    targetCollateralAmount?: number;
+  }): Promise<{ ok: boolean; reason?: string; depositSig?: string; borrowSig?: string; summary?: string; status: RunnerStatus }> {
     if (this.inFlight) {
       return { ok: false, reason: "busy", status: this.getStatus() };
     }

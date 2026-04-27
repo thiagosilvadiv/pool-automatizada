@@ -40,7 +40,6 @@ const kaminoAvgModeHintEl = document.getElementById("kaminoAvgModeHint");
 const kaminoTestTokenSelect = document.getElementById("kaminoTestToken");
 const kaminoTestMintInput = document.getElementById("kaminoTestMint");
 const kaminoTestAmountInput = document.getElementById("kaminoTestAmount");
-const kaminoTestBorrowInput = document.getElementById("kaminoTestBorrow");
 const kaminoTestBtn = document.getElementById("kaminoTestBtn");
 const kaminoTestResult = document.getElementById("kaminoTestResult");
 const historyBody = document.getElementById("historyBody");
@@ -1889,30 +1888,24 @@ if (kaminoTestBtn) {
         : choice === "tokenB" ? info?.tokenBMint
           : (kaminoTestMintInput?.value ?? "").trim();
     const amountRaw = kaminoTestAmountInput?.value ?? "";
-    const borrowRaw = kaminoTestBorrowInput?.value ?? "";
     const amount = Number(amountRaw);
-    const borrowUsd = borrowRaw.trim() ? Number(borrowRaw) : undefined;
 
     if (!mint) {
       setKaminoTestResult("Selecione um token ou informe o mint.", true);
       return;
     }
     if (!Number.isFinite(amount) || amount <= 0) {
-      setKaminoTestResult("Informe a quantidade de colateral.", true);
-      return;
-    }
-    if (borrowUsd != null && (!Number.isFinite(borrowUsd) || borrowUsd < 0)) {
-      setKaminoTestResult("Borrow USD invalido.", true);
+      setKaminoTestResult("Informe a meta total do colateral.", true);
       return;
     }
 
-    setKaminoTestResult("Enviando transacao para Kamino...", false);
+    setKaminoTestResult("Reconstruindo colateral no Kamino...", false);
     if (kaminoTestBtn) kaminoTestBtn.disabled = true;
     try {
       const res = await fetch("/api/kamino/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ collateralMint: mint, collateralAmount: amount, borrowUsd })
+        body: JSON.stringify({ collateralMint: mint, targetCollateralAmount: amount })
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) {
@@ -1920,9 +1913,10 @@ if (kaminoTestBtn) {
         setKaminoTestResult(msg, true);
       } else {
         const parts = [];
-        if (data.depositSig) parts.push(`Deposito OK: ${data.depositSig}`);
-        if (data.borrowSig) parts.push(`Emprestimo OK: ${data.borrowSig}`);
-        setKaminoTestResult(parts.length ? parts.join(" | ") : "Deposito enviado.", false);
+        if (data.summary) parts.push(String(data.summary));
+        if (data.depositSig) parts.push(`Ultimo deposito: ${data.depositSig}`);
+        if (data.borrowSig) parts.push(`Ultimo emprestimo: ${data.borrowSig}`);
+        setKaminoTestResult(parts.length ? parts.join(" | ") : "Reconstrucao enviada.", false);
       }
     } catch (err) {
       setKaminoTestResult(err instanceof Error ? err.message : String(err), true);

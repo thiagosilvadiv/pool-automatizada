@@ -280,52 +280,61 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
-  // Desligar teste/hedge/bybit rotas herdadas
-  app.post("/api/kamino/test", (_req: Request, res: Response) => {
-    res.status(404).json({ ok: false, error: "disabled" });
-  });
-
-  app.post("/api/bybit/order", (_req: Request, res: Response) => {
-    res.status(404).json({ ok: false, error: "disabled" });
-  });
-
-  // Manter rota kamino/test desabilitada acima
-  /* app.post("/api/kamino/test", async (req: Request, res: Response) => {
+  app.post("/api/kamino/test", async (req: Request, res: Response) => {
     try {
       const mint = String(req.body?.collateralMint ?? "").trim();
-      const amount = Number(req.body?.collateralAmount);
+      const amountRaw = req.body?.collateralAmount;
+      const amount = amountRaw == null || amountRaw === "" ? undefined : Number(amountRaw);
       const borrowUsdRaw = req.body?.borrowUsd;
-      const borrowUsd = borrowUsdRaw == null ? undefined : Number(borrowUsdRaw);
+      const borrowUsd = borrowUsdRaw == null || borrowUsdRaw === "" ? undefined : Number(borrowUsdRaw);
+      const targetCollateralAmountRaw = req.body?.targetCollateralAmount;
+      const targetCollateralAmount =
+        targetCollateralAmountRaw == null || targetCollateralAmountRaw === ""
+          ? undefined
+          : Number(targetCollateralAmountRaw);
 
       if (!mint) {
         res.status(400).json({ ok: false, error: "collateralMint is required" });
         return;
       }
-      if (!Number.isFinite(amount) || amount <= 0) {
-        res.status(400).json({ ok: false, error: "collateralAmount must be > 0" });
-        return;
-      }
-      if (borrowUsd !== undefined && (!Number.isFinite(borrowUsd) || borrowUsd < 0)) {
-        res.status(400).json({ ok: false, error: "borrowUsd must be >= 0" });
-        return;
+      if (targetCollateralAmount !== undefined) {
+        if (!Number.isFinite(targetCollateralAmount) || targetCollateralAmount <= 0) {
+          res.status(400).json({ ok: false, error: "targetCollateralAmount must be > 0" });
+          return;
+        }
+      } else {
+        if (amount === undefined || !Number.isFinite(amount) || amount <= 0) {
+          res.status(400).json({ ok: false, error: "collateralAmount must be > 0" });
+          return;
+        }
+        if (borrowUsd !== undefined && (!Number.isFinite(borrowUsd) || borrowUsd < 0)) {
+          res.status(400).json({ ok: false, error: "borrowUsd must be >= 0" });
+          return;
+        }
       }
 
       const result = await poolManager.testKaminoSelected({
         collateralMint: mint,
         collateralAmount: amount,
-        borrowUsd
+        borrowUsd,
+        targetCollateralAmount
       });
       res.json({
         ok: result.ok,
         reason: result.reason,
         depositSig: result.depositSig,
         borrowSig: result.borrowSig,
+        summary: result.summary,
         status: poolManager.getSelectedStatus()
       });
     } catch (err) {
       res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
     }
-  }); */
+  });
+
+  app.post("/api/bybit/order", (_req: Request, res: Response) => {
+    res.status(404).json({ ok: false, error: "disabled" });
+  });
 
   app.post("/api/reset", async (req: Request, res: Response) => {
     try {

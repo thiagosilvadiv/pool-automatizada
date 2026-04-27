@@ -548,9 +548,10 @@ export class PoolManager {
 
   async testKaminoSelected(input: {
     collateralMint: string;
-    collateralAmount: number;
+    collateralAmount?: number;
     borrowUsd?: number;
-  }): Promise<{ ok: boolean; reason?: string; depositSig?: string; borrowSig?: string }> {
+    targetCollateralAmount?: number;
+  }): Promise<{ ok: boolean; reason?: string; depositSig?: string; borrowSig?: string; summary?: string }> {
     if (!this.selectedPoolId) {
       throw new Error("No pool selected");
     }
@@ -560,7 +561,8 @@ export class PoolManager {
       ok: result.ok,
       reason: result.reason,
       depositSig: result.depositSig,
-      borrowSig: result.borrowSig
+      borrowSig: result.borrowSig,
+      summary: result.summary
     };
   }
 

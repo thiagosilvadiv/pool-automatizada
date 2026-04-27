@@ -1673,22 +1673,449 @@ export class OrcaBot {
     }
   }
 
+  private getKaminoPositionCollateralAmount(position: KaminoPositionState | null, mint: string): number {
+    if (!position || !mint) {
+      return 0;
+    }
+    const deposits = Array.isArray(position.deposits) ? position.deposits : [];
+    const amountFromDeposits = deposits.reduce((sum, item) => {
+      if (item?.mint !== mint) {
+        return sum;
+      }
+      return sum + Math.max(0, Number(item.amount ?? 0));
+    }, 0);
+    if (amountFromDeposits > 0) {
+      return amountFromDeposits;
+    }
+    if (position.collateralMint === mint) {
+      return Math.max(0, Number(position.collateralAmount ?? 0));
+    }
+    return 0;
+  }
+
+  private getKaminoPositionBorrowAmount(position: KaminoPositionState | null, mint: string | null | undefined): number {
+    if (!position || !mint) {
+      return 0;
+    }
+    const borrows = Array.isArray(position.borrows) ? position.borrows : [];
+    const amountFromBorrows = borrows.reduce((sum, item) => {
+      if (item?.mint !== mint) {
+        return sum;
+      }
+      return sum + Math.max(0, Number(item.amount ?? 0));
+    }, 0);
+    if (amountFromBorrows > 0) {
+      return amountFromBorrows;
+    }
+    if (position.debtMint === mint) {
+      return Math.max(0, Number(position.debtAmount ?? 0));
+    }
+    return 0;
+  }
+
+  private async getAvailableWalletTokenAmount(mint: string): Promise<number> {
+    if (mint === NATIVE_MINT.toBase58()) {
+      try {
+        const totalNativeSol = (await this.connection.getBalance(this.wallet.publicKey)) / LAMPORTS_PER_SOL;
+        return computeSpendableNativeSol(totalNativeSol, this.config.minSolBalance);
+      } catch (err) {
+        logger.warn({ err }, "falha ao ler saldo nativo para operacao manual do Kamino");
+        const fallback = Number(this.lastStatus.solBalance ?? 0);
+        return computeSpendableNativeSol(fallback, this.config.minSolBalance);
+      }
+    }
+    return this.getWalletTokenBalance(mint);
+  }
+
+  private async estimateKaminoCollateralUsd(
+    mint: string,
+    amount: number,
+    fallbackBorrowUsd = 0
+  ): Promise<number | null> {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return null;
+    }
+    let depositedUsd = await this.tryPriceCollateral(mint, amount);
+    if (depositedUsd == null && mint === NATIVE_MINT.toBase58()) {
+      for (let attempt = 0; attempt < 3 && depositedUsd == null; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+        try {
+          const retryPrice = await this.tryGetSolUsdPrice();
+          if (retryPrice != null) {
+            depositedUsd = retryPrice * amount;
+          }
+        } catch {
+          // continua tentando
+        }
+      }
+    }
+    if (depositedUsd == null && mint === NATIVE_MINT.toBase58()) {
+      const cachedSolPrice = this.lastStatus.solUsdPrice;
+      if (cachedSolPrice != null && cachedSolPrice > 0) {
+        depositedUsd = cachedSolPrice * amount;
+        logger.warn({ cachedSolPrice, amount }, "avgPriceUsdc: usando solUsdPrice cacheado como fallback");
+      }
+    }
+    if (depositedUsd == null && fallbackBorrowUsd > 0 && mint !== NATIVE_MINT.toBase58()) {
+      depositedUsd = fallbackBorrowUsd;
+    }
+    return depositedUsd;
+  }
+
+  private async syncManualKaminoTargetState(input: {
+    position: KaminoPositionState | null;
+    collateralMint: string;
+    debtMint: string | null;
+    previous: KaminoCycleState | null;
+    startNewCycle: boolean;
+    lastError?: string | null;
+  }): Promise<{ collateralAmount: number; debtAmount: number; ltv: number | null }> {
+    const collateralAmount = this.getKaminoPositionCollateralAmount(input.position, input.collateralMint);
+    const effectiveDebtMint = input.position?.debtMint ?? input.debtMint ?? null;
+    const debtAmount = this.getKaminoPositionBorrowAmount(input.position, effectiveDebtMint);
+    if (collateralAmount <= 0 && debtAmount <= 0) {
+      return { collateralAmount: 0, debtAmount: 0, ltv: null };
+    }
+
+    const collateralUsd = await this.estimateKaminoCollateralUsd(input.collateralMint, collateralAmount);
+    const avgPriceUsdc = collateralUsd != null && collateralAmount > 0
+      ? collateralUsd / collateralAmount
+      : null;
+    const poolLossUsd = (() => {
+      const pnl = this.lastStatus.positionPnlUsd ?? null;
+      if (pnl != null && Number.isFinite(pnl) && pnl < 0) {
+        return Math.abs(pnl);
+      }
+      return 0;
+    })();
+    const lossAdjPctRaw = (avgPriceUsdc != null && collateralUsd != null && collateralUsd > 0 && poolLossUsd > 0)
+      ? (poolLossUsd / collateralUsd) * 100
+      : 0;
+    const lossAdjPct = this.config.kaminoIncludePoolLossInTarget ? lossAdjPctRaw : 0;
+    const targetPriceUsdc = avgPriceUsdc != null
+      ? avgPriceUsdc * (1 + ((this.config.kaminoPriceBufferPct ?? 0) + lossAdjPct) / 100)
+      : null;
+    const debtUsd = debtAmount > 0 ? debtAmount : null;
+    const baseCycleCount = input.previous?.cycleCount ?? 0;
+    const cycleCount = input.startNewCycle
+      ? baseCycleCount + 1
+      : Math.max(baseCycleCount, 1);
+    const nextState: KaminoCycleState = {
+      active: true,
+      ownerPoolId: this.poolId ?? input.previous?.ownerPoolId ?? null,
+      ownerPoolName: this.poolName ?? input.previous?.ownerPoolName ?? null,
+      marketAddress: this.getKaminoMarketAddress(),
+      baselineTokenA: null,
+      baselineTokenB: null,
+      reservedTokenA: null,
+      reservedTokenB: null,
+      reservedCollateralDust: null,
+      collateralMint: input.collateralMint,
+      collateralAmount,
+      collateralUsd,
+      debtMint: effectiveDebtMint,
+      debtAmount,
+      debtUsd,
+      avgPriceUsdc,
+      targetPriceUsdc,
+      collaterals: [{
+        mint: input.collateralMint,
+        amount: collateralAmount,
+        usd: collateralUsd,
+        debtUsd,
+        avgPriceUsdc,
+        targetPriceUsdc
+      }],
+      cycleCount,
+      updatedAt: new Date().toISOString(),
+      lastError: input.lastError ?? null,
+      entrySource: "deposit"
+    };
+    this.setKaminoState(nextState);
+    this.lastStatus.positionEntrySource = "deposit";
+    this.lastStatus.lastError = input.lastError ?? null;
+    await this.refreshKaminoCollateralMetrics().catch(() => undefined);
+    const ltv = input.position?.ltv ?? (
+      collateralUsd != null && collateralUsd > 0
+        ? debtAmount / collateralUsd
+        : null
+    );
+    return { collateralAmount, debtAmount, ltv };
+  }
+
+  private async testKaminoTargetNow(input: {
+    collateralMint: string;
+    targetCollateralAmount: number;
+  }): Promise<{ ok: boolean; reason?: string; depositSig?: string; borrowSig?: string; summary?: string; status: BotStatus }> {
+    const mint = String(input.collateralMint ?? "").trim();
+    const targetAmount = Number(input.targetCollateralAmount);
+    const epsilon = Math.max(1e-6, targetAmount * 1e-6);
+    const previous = this.kaminoState;
+    let lastDepositSig: string | undefined;
+    let lastBorrowSig: string | undefined;
+    let depositCount = 0;
+    let borrowCount = 0;
+    let swapCount = 0;
+    let cycleStarted = !previous?.active || Number(previous?.collateralAmount ?? 0) <= 0;
+
+    try {
+      const kamino = await this.ensureKaminoClient();
+      const supported = await kamino.supportsCollateral(mint);
+      if (!supported) {
+        const message = `Token nao suportado como colateral no Kamino${this.getKaminoMarketHint()}`;
+        this.setError(message);
+        return { ok: false, reason: message, status: this.getStatus() };
+      }
+
+      await kamino.ensureObligation();
+      kamino.invalidatePositionCache();
+      let currentPosition = await kamino.getPositionState().catch(() => null);
+      const existingDeposits = Array.isArray(currentPosition?.deposits)
+        ? currentPosition!.deposits!.filter((item) => Number(item?.amount ?? 0) > epsilon)
+        : [];
+      const foreignDeposits = existingDeposits.filter((item) => item.mint !== mint);
+      if (foreignDeposits.length > 0) {
+        const message = "Reconstrutor manual suporta apenas um colateral por vez no Kamino.";
+        this.setError(message);
+        return { ok: false, reason: message, status: this.getStatus() };
+      }
+
+      const maxLtv = Math.max(0, Math.min(0.95, Number(this.config.kaminoMaxLtv ?? 0)));
+      if (!(Number.isFinite(maxLtv) && maxLtv > 0 && maxLtv < 1)) {
+        const message = "kaminoMaxLtv da pool precisa estar entre 0 e 1 para reconstruir o colateral.";
+        this.setError(message);
+        return { ok: false, reason: message, status: this.getStatus() };
+      }
+
+      let stable: { mint: string; decimals: number; label: string } | null = null;
+      let stableMintForState: string | null = null;
+      const ensureStable = async () => {
+        if (stable) {
+          return stable;
+        }
+        const resolved = await this.resolveKaminoBorrowStable(kamino);
+        if (!resolved.stable) {
+          throw new Error(`Borrow indisponivel: ${resolved.reason ?? "reserve nao encontrada"}${this.getKaminoMarketHint()}`);
+        }
+        stable = resolved.stable;
+        stableMintForState = resolved.stable.mint;
+        return stable;
+      };
+
+      let unitUsd = await this.estimateKaminoCollateralUsd(mint, 1);
+      if (!(unitUsd != null && unitUsd > 0)) {
+        const message = "Nao foi possivel precificar o colateral para reconstruir a meta.";
+        this.setError(message);
+        return { ok: false, reason: message, status: this.getStatus() };
+      }
+
+      const currentAmount = this.getKaminoPositionCollateralAmount(currentPosition, mint);
+      const currentDebtAmount = Number(currentPosition?.debtAmount ?? 0);
+      const currentDebtMint = currentPosition?.debtMint ?? null;
+      if (currentDebtAmount > epsilon) {
+        const stableInfo = await ensureStable();
+        if (currentDebtMint && currentDebtMint !== stableInfo.mint) {
+          const message = "A divida ativa usa outro mint; reconstrutor manual suporta apenas o borrow configurado na pool.";
+          this.setError(message);
+          return { ok: false, reason: message, status: this.getStatus() };
+        }
+      }
+
+      const walletAvailable = await this.getAvailableWalletTokenAmount(mint);
+      const walletUsableAmount = Math.max(0, Math.min(walletAvailable, Math.max(0, targetAmount - currentAmount)));
+      const equityUsd = (currentAmount * unitUsd) - currentDebtAmount;
+      const maxReachableUsd = (equityUsd + (walletUsableAmount * unitUsd)) / (1 - maxLtv);
+      const maxReachableAmount = unitUsd > 0 ? maxReachableUsd / unitUsd : 0;
+      if (Number.isFinite(maxReachableAmount) && maxReachableAmount > 0 && targetAmount > maxReachableAmount * 1.002) {
+        const message = `Meta inalcançavel com o saldo atual e LTV da pool. Maximo estimado: ${maxReachableAmount.toFixed(6)}.`;
+        this.setError(message);
+        return { ok: false, reason: message, status: this.getStatus() };
+      }
+
+      for (let step = 0; step < 24; step += 1) {
+        kamino.invalidatePositionCache();
+        currentPosition = await kamino.getPositionState().catch(() => null);
+        const currentCollateralAmount = this.getKaminoPositionCollateralAmount(currentPosition, mint);
+        const remainingAmount = targetAmount - currentCollateralAmount;
+        if (remainingAmount <= epsilon) {
+          break;
+        }
+
+        const walletAmount = await this.getAvailableWalletTokenAmount(mint);
+        const depositAmount = Math.min(walletAmount, remainingAmount);
+        if (depositAmount > epsilon) {
+          logger.info(
+            { mint, depositAmount, targetAmount, currentCollateralAmount, step },
+            "reconstrutor manual Kamino: depositando colateral"
+          );
+          lastDepositSig = await kamino.depositCollateral({ mint, amount: depositAmount });
+          this.kaminoHealth.recordSuccess("kamino-deposit");
+          this.recordKaminoSuccess("deposit", mint, depositAmount, lastDepositSig);
+          this.queueHistoryAction("kamino-deposit", { lastAction: "kamino-deposit" });
+          this.lastStatus.lastAction = "kamino-deposit";
+          depositCount += 1;
+          cycleStarted = true;
+          continue;
+        }
+
+        const stableInfo = await ensureStable();
+        if (!this.config.jupiterApiKey) {
+          throw new Error("Jupiter API key ausente; nao foi possivel converter o emprestimo em colateral.");
+        }
+        unitUsd = await this.estimateKaminoCollateralUsd(mint, 1);
+        if (!(unitUsd != null && unitUsd > 0)) {
+          throw new Error("Nao foi possivel precificar o colateral durante a reconstrucao.");
+        }
+
+        const effectiveDebtAmount = this.getKaminoPositionBorrowAmount(currentPosition, stableInfo.mint);
+        const collateralUsd = currentCollateralAmount * unitUsd;
+        const remainingUsd = remainingAmount * unitUsd;
+        const maxBorrowNow = Math.max(0, (collateralUsd * maxLtv) - effectiveDebtAmount);
+        if (maxBorrowNow < KAMINO_REPAY_MIN_STABLE) {
+          throw new Error(`Meta parcial atingida; sem margem para novo borrow dentro do LTV. Restante: ${remainingAmount.toFixed(6)}.`);
+        }
+
+        const borrowUsd = Math.min(remainingUsd, maxBorrowNow);
+        if (!Number.isFinite(borrowUsd) || borrowUsd < KAMINO_REPAY_MIN_STABLE) {
+          throw new Error("Borrow calculado abaixo do minimo operacional.");
+        }
+
+        logger.info(
+          { mint, borrowUsd, maxBorrowNow, targetAmount, currentCollateralAmount, step },
+          "reconstrutor manual Kamino: tomando emprestimo"
+        );
+        lastBorrowSig = await kamino.borrow({ mint: stableInfo.mint, amount: borrowUsd });
+        this.kaminoHealth.recordSuccess("kamino-borrow");
+        this.recordKaminoSuccess("borrow", stableInfo.mint, borrowUsd, lastBorrowSig);
+        this.queueHistoryAction("kamino-borrow", { lastAction: "kamino-borrow" });
+        this.lastStatus.lastAction = "kamino-borrow";
+        borrowCount += 1;
+        cycleStarted = true;
+
+        const targetDecimals = await this.getTokenDecimals(mint);
+        const amountStableRaw = toRawAmount(borrowUsd, stableInfo.decimals);
+        if (!isValidU64(amountStableRaw) || amountStableRaw <= 0n) {
+          throw new Error("Borrow calculado fora do range suportado.");
+        }
+        await this.swapStableToToken({
+          stableMint: stableInfo.mint,
+          stableDecimals: stableInfo.decimals,
+          outputMint: mint,
+          outputDecimals: targetDecimals,
+          amountStableRaw,
+          label: "kamino-manual-target"
+        });
+        swapCount += 1;
+      }
+
+      kamino.invalidatePositionCache();
+      currentPosition = await kamino.getPositionState().catch(() => null);
+      const metrics = await this.syncManualKaminoTargetState({
+        position: currentPosition,
+        collateralMint: mint,
+        debtMint: stableMintForState ?? currentPosition?.debtMint ?? null,
+        previous,
+        startNewCycle: cycleStarted,
+        lastError: null
+      });
+      const ltvPct = metrics.ltv != null ? metrics.ltv * 100 : null;
+      const summary = `Colateral ${metrics.collateralAmount.toFixed(6)} / alvo ${targetAmount.toFixed(6)} / LTV ${ltvPct != null ? ltvPct.toFixed(2) + "%" : "-" } / ${depositCount} depositos / ${borrowCount} borrows / ${swapCount} swaps`;
+      if (metrics.collateralAmount + epsilon < targetAmount) {
+        const message = `Meta parcial atingida: ${metrics.collateralAmount.toFixed(6)} de ${targetAmount.toFixed(6)}.`;
+        this.setError(message);
+        return {
+          ok: false,
+          reason: message,
+          depositSig: lastDepositSig,
+          borrowSig: lastBorrowSig,
+          summary,
+          status: this.getStatus()
+        };
+      }
+
+      this.lastStatus.lastError = null;
+      return {
+        ok: true,
+        depositSig: lastDepositSig,
+        borrowSig: lastBorrowSig,
+        summary,
+        status: this.getStatus()
+      };
+    } catch (err) {
+      this.kaminoHealth.recordError(err, "kamino-test");
+      const message = err instanceof Error ? err.message : String(err);
+      this.setError(message);
+      try {
+        const kamino = await this.ensureKaminoClient();
+        kamino.invalidatePositionCache();
+        const currentPosition = await kamino.getPositionState().catch(() => null);
+        const metrics = await this.syncManualKaminoTargetState({
+          position: currentPosition,
+          collateralMint: mint,
+          debtMint: currentPosition?.debtMint ?? null,
+          previous,
+          startNewCycle: cycleStarted,
+          lastError: message
+        });
+        if (metrics.collateralAmount > 0 || metrics.debtAmount > 0) {
+          const ltvPct = metrics.ltv != null ? metrics.ltv * 100 : null;
+          const summary = `Parcial: colateral ${metrics.collateralAmount.toFixed(6)} / LTV ${ltvPct != null ? ltvPct.toFixed(2) + "%" : "-" } / ${depositCount} depositos / ${borrowCount} borrows / ${swapCount} swaps`;
+          return {
+            ok: false,
+            reason: `${message} Progresso parcial mantido no Kamino.`,
+            depositSig: lastDepositSig,
+            borrowSig: lastBorrowSig,
+            summary,
+            status: this.getStatus()
+          };
+        }
+      } catch {
+        // ignora falhas ao sincronizar estado parcial
+      }
+      if (!this.kaminoState?.active) {
+        this.releaseKaminoLockIfOwned();
+      }
+      return {
+        ok: false,
+        reason: message,
+        depositSig: lastDepositSig,
+        borrowSig: lastBorrowSig,
+        status: this.getStatus()
+      };
+    }
+  }
+
   async testKaminoNow(input: {
     collateralMint: string;
-    collateralAmount: number;
+    collateralAmount?: number;
     borrowUsd?: number;
-  }): Promise<{ ok: boolean; reason?: string; depositSig?: string; borrowSig?: string; status: BotStatus }> {
+    targetCollateralAmount?: number;
+  }): Promise<{ ok: boolean; reason?: string; depositSig?: string; borrowSig?: string; summary?: string; status: BotStatus }> {
     this.lastStatus.running = true;
     this.resetActionFee();
 
     const mint = String(input.collateralMint ?? "").trim();
-    const amount = Number(input.collateralAmount);
+    const targetCollateralAmount = input.targetCollateralAmount != null
+      ? Number(input.targetCollateralAmount)
+      : null;
+    const amount = input.collateralAmount != null ? Number(input.collateralAmount) : 0;
     const borrowUsd = input.borrowUsd != null ? Number(input.borrowUsd) : 0;
 
     if (!mint) {
       const message = "Mint do colateral e obrigatorio";
       this.setError(message);
       return { ok: false, reason: message, status: this.getStatus() };
+    }
+    if (targetCollateralAmount != null) {
+      if (!Number.isFinite(targetCollateralAmount) || targetCollateralAmount <= 0) {
+        const message = "Meta total de colateral invalida";
+        this.setError(message);
+        return { ok: false, reason: message, status: this.getStatus() };
+      }
+      return this.testKaminoTargetNow({
+        collateralMint: mint,
+        targetCollateralAmount
+      });
     }
     if (!Number.isFinite(amount) || amount <= 0) {
       const message = "Quantidade de colateral invalida";
@@ -1779,63 +2206,11 @@ export class OrcaBot {
       const baseUsd = avgMode === "reset" || isNewCycle ? 0 : (previous?.collateralUsd ?? 0);
       const baseDebtUsd = avgMode === "reset" || isNewCycle ? 0 : (previous?.debtUsd ?? 0);
       const nextAmount = baseAmount + amount;
-      // Calcula USD do depósito usando o preço USD real do token de colateral.
-      // Para SOL (NATIVE_MINT), usa solUsdPrice (Pyth). Para outros tokens,
-      // tenta obter o preço via Jupiter. Isso garante que avgPriceUsdc reflita
-      // o preço USD verdadeiro do token depositado, não o preço do par da pool.
-      let depositedUsd: number | null = null;
-      try {
-        const solUsdPriceForAvg = await this.tryGetSolUsdPrice();
-        if (mint === NATIVE_MINT.toBase58() && solUsdPriceForAvg != null) {
-          depositedUsd = solUsdPriceForAvg * amount;
-        } else {
-          const decimals = await this.getTokenDecimals(mint);
-          let stableMintInfo: { mint: string; decimals: number; label: string } | null = null;
-          try {
-            stableMintInfo = await this.getStableMintInfo();
-          } catch {
-            stableMintInfo = null;
-          }
-          if (stableMintInfo) {
-            const tokenPrice = await this.getTokenUsdPrice({
-              mint,
-              decimals,
-              stableMint: stableMintInfo.mint,
-              stableDecimals: stableMintInfo.decimals
-            }).catch(() => null);
-            if (tokenPrice != null) {
-              depositedUsd = tokenPrice * amount;
-            }
-          }
-        }
-      } catch (err) {
-        logger.warn({ err }, "falha ao obter preco USD do colateral para avgPriceUsdc; usando fallback");
-      }
-      // Fallbacks robustos para SOL: tenta novamente buscar preço; depois usa cache; evita usar borrowUsd.
-      if (depositedUsd == null && mint === NATIVE_MINT.toBase58()) {
-        for (let attempt = 0; attempt < 3 && depositedUsd == null; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
-          try {
-            const retryPrice = await this.tryGetSolUsdPrice();
-            if (retryPrice != null) {
-              depositedUsd = retryPrice * amount;
-            }
-          } catch {
-            // continua tentando
-          }
-        }
-      }
-      if (depositedUsd == null && mint === NATIVE_MINT.toBase58()) {
-        const cachedSolPrice = this.lastStatus.solUsdPrice;
-        if (cachedSolPrice != null && cachedSolPrice > 0) {
-          depositedUsd = cachedSolPrice * amount;
-          logger.warn({ cachedSolPrice, amount }, "avgPriceUsdc: usando solUsdPrice cacheado como fallback");
-        }
-      }
-      // Fallback de último recurso: usar borrowUsd apenas para tokens não-SOL
-      if (depositedUsd == null && borrowSig && borrowUsd > 0 && mint !== NATIVE_MINT.toBase58()) {
-        depositedUsd = borrowUsd; // estimativa grosseira; será corrigida no próximo ciclo
-      }
+      const depositedUsd = await this.estimateKaminoCollateralUsd(
+        mint,
+        amount,
+        borrowSig && borrowUsd > 0 ? borrowUsd : 0
+      );
       const nextUsd = baseUsd + (depositedUsd ?? 0);
       const nextDebtUsd = baseDebtUsd + (borrowSig ? borrowUsd : 0);
       const avgNumerator = nextUsd > 0 ? nextUsd : (avgBasis === "debt" ? nextDebtUsd : nextUsd);
@@ -7530,14 +7905,6 @@ export class OrcaBot {
       const depositUsd = usdValue != null ? usdValue * (depositPct / 100) : null;
       return { ...token, depositAmount: amount, depositUsd };
     }).filter((item) => item.depositAmount > 0);
-    const buildKaminoDepositAmountMap = (position: Awaited<ReturnType<typeof kamino.getPositionState>> | null) => {
-      const map = new Map<string, number>();
-      for (const item of position?.deposits ?? []) {
-        if (!item?.mint) continue;
-        map.set(item.mint, (map.get(item.mint) ?? 0) + Math.max(0, Number(item.amount ?? 0)));
-      }
-      return map;
-    };
     if (!deposits.length) {
       this.setError("Saldo insuficiente para depositar no Kamino");
       return "kamino-rebalance-failed";
@@ -7558,15 +7925,8 @@ export class OrcaBot {
     }
 
     const depositedEntries: { mint: string; amount: number }[] = [];
-    let preDepositState: Awaited<ReturnType<typeof kamino.getPositionState>> | null = null;
-    let postDepositState: Awaited<ReturnType<typeof kamino.getPositionState>> | null = null;
-    let depositsForState: Array<typeof deposits[number] & { actualTotalAmount: number | null }> = deposits.map((entry) => ({
-      ...entry,
-      actualTotalAmount: null
-    }));
     try {
       await kamino.ensureObligation();
-      preDepositState = await kamino.getPositionState().catch(() => null);
       for (const entry of deposits) {
         const preOpState = await kamino.getPositionState().catch(() => null);
         logger.info(
@@ -7608,32 +7968,6 @@ export class OrcaBot {
         }
       }
       deposited = depositedEntries.length > 0;
-      if (depositedEntries.length > 0) {
-        kamino.invalidatePositionCache();
-        postDepositState = await kamino.getPositionState().catch(() => null);
-        const beforeMap = buildKaminoDepositAmountMap(preDepositState);
-        const afterMap = buildKaminoDepositAmountMap(postDepositState);
-        depositsForState = deposits.map((entry) => {
-          const beforeAmount = beforeMap.get(entry.mint) ?? 0;
-          const afterAmount = afterMap.get(entry.mint) ?? beforeAmount;
-          const actualAddedAmount = afterAmount > beforeAmount ? (afterAmount - beforeAmount) : null;
-          const actualTotalAmount = afterAmount > 0 ? afterAmount : null;
-          let depositAmount = entry.depositAmount;
-          let depositUsd = entry.depositUsd;
-          if (actualAddedAmount != null && Number.isFinite(actualAddedAmount) && actualAddedAmount > 0) {
-            if (depositUsd != null && entry.depositAmount > 0) {
-              depositUsd = depositUsd * (actualAddedAmount / entry.depositAmount);
-            }
-            depositAmount = actualAddedAmount;
-          }
-          return {
-            ...entry,
-            depositAmount,
-            depositUsd,
-            actualTotalAmount
-          };
-        });
-      }
     } catch (err) {
       this.setError(err);
       for (const entry of depositedEntries) {
@@ -7651,9 +7985,9 @@ export class OrcaBot {
     // Este estado parcial (sem debtAmount/avgPriceUsdc) será substituído
     // pelo estado completo após o borrow completar.
     if (depositedEntries.length > 0 && !this.kaminoState?.active) {
-      const partialCollaterals = depositsForState.map((entry) => ({
+      const partialCollaterals = deposits.map((entry) => ({
         mint: entry.mint,
-        amount: entry.actualTotalAmount ?? entry.depositAmount,
+        amount: entry.depositAmount,
         usd: null,
         debtUsd: null,
         avgPriceUsdc: null,
@@ -7684,7 +8018,7 @@ export class OrcaBot {
       });
     }
 
-    const totalDepositUsd = depositsForState.reduce((sum, entry) => sum + (entry.depositUsd ?? 0), 0);
+    const totalDepositUsd = deposits.reduce((sum, entry) => sum + (entry.depositUsd ?? 0), 0);
     const maxBorrowUsd = totalDepositUsd * Math.max(0, Math.min(1, this.config.kaminoMaxLtv ?? 0));
     const desiredBorrowUsd = this.config.budgetUsd != null
       ? Math.min(maxBorrowUsd, this.config.budgetUsd)
@@ -7705,7 +8039,7 @@ export class OrcaBot {
       return "kamino-rebalance-failed";
     }
     try {
-      const preOpState = postDepositState ?? await kamino.getPositionState().catch(() => null);
+      const preOpState = await kamino.getPositionState().catch(() => null);
       logger.info(
         {
           operation: "borrow-start",
@@ -7767,9 +8101,9 @@ export class OrcaBot {
         if (pnl != null && Number.isFinite(pnl) && pnl < 0) return Math.abs(pnl);
         return 0;
       })();
-      const depositsForAvg: Array<typeof depositsForState[number] & { safeDepositUsd: number | null }> = [];
+      const depositsForAvg: Array<typeof deposits[number] & { safeDepositUsd: number | null }> = [];
       let totalDepositUsdForAvg = 0;
-      for (const entry of depositsForState) {
+      for (const entry of deposits) {
         // CORREÇÃO: garantir depositUsd correto para SOL
         let safeDepositUsd = entry.depositUsd ?? null;
         if ((safeDepositUsd == null || safeDepositUsd <= 0) && entry.mint === NATIVE_MINT.toBase58()) {
@@ -7797,9 +8131,7 @@ export class OrcaBot {
         const baseAmount = avgMode === "reset" ? 0 : (prev.amount ?? 0);
         const baseUsd = avgMode === "reset" ? 0 : (prev.usd ?? 0);
         const baseDebtUsd = avgMode === "reset" ? 0 : (prev.debtUsd ?? 0);
-        const nextAmount = entry.actualTotalAmount != null && Number.isFinite(entry.actualTotalAmount) && entry.actualTotalAmount > 0
-          ? entry.actualTotalAmount
-          : (baseAmount + entry.depositAmount);
+        const nextAmount = baseAmount + entry.depositAmount;
         const nextUsd = baseUsd + (entry.safeDepositUsd ?? 0);
         const nextDebtUsd = baseDebtUsd + debtUsd;
         const avgNumerator = nextUsd > 0 ? nextUsd : (avgBasis === "debt" ? nextDebtUsd : nextUsd);
