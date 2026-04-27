@@ -38,6 +38,7 @@ import {
 import type { KaminoCloseMode, KaminoCloseTrigger } from "./kamino-close-policy.js";
 import { decideRecoveredKaminoResume } from "./kamino-reopen-policy.js";
 import { shouldBootstrapAutoAddFromWallet } from "./auto-add-policy.js";
+import { computeKaminoTargetToleranceAmount, computeRiskAwareRepayChunk } from "./kamino-math.js";
 
 const whirlpools = whirlpoolsSdk as any;
 const common = commonSdk as any;
@@ -57,26 +58,7 @@ const KAMINO_SWAP_SLIPPAGE_BPS = 100;
 const DEFAULT_KAMINO_MARKET = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF";
 const JUPITER_NATIVE_SOL_SWAP_BUFFER = 0.005;
 
-export function computeRiskAwareRepayChunk(params: {
-  debtRemaining: number;
-  capacityUi: number;
-  priceCollToDebt: number;
-  minStable: number;
-}): { chunk: number; reason?: string } {
-  const { debtRemaining, capacityUi, priceCollToDebt, minStable } = params;
-  if (!Number.isFinite(capacityUi) || capacityUi <= 0) {
-    return { chunk: 0, reason: "capacidade de saque insuficiente" };
-  }
-  if (!Number.isFinite(priceCollToDebt) || priceCollToDebt <= 0) {
-    return { chunk: 0, reason: "preco indisponivel para colateral" };
-  }
-  const capacityDebt = capacityUi * priceCollToDebt;
-  const chunk = Math.min(debtRemaining, capacityDebt);
-  if (chunk < minStable) {
-    return { chunk: 0, reason: "capacidade de saque insuficiente" };
-  }
-  return { chunk };
-}
+export { computeKaminoTargetToleranceAmount, computeRiskAwareRepayChunk } from "./kamino-math.js";
 
 export function selectRepayChunkWithQuote(params: {
   debtRemaining: number;
@@ -1861,6 +1843,7 @@ export class OrcaBot {
     let depositCount = 0;
     let borrowCount = 0;
     let swapCount = 0;
+    let reachedWithinOperationalTolerance = false;
     let cycleStarted = !previous?.active || Number(previous?.collateralAmount ?? 0) <= 0;
 
     try {
@@ -1943,7 +1926,15 @@ export class OrcaBot {
         currentPosition = await kamino.getPositionState().catch(() => null);
         const currentCollateralAmount = this.getKaminoPositionCollateralAmount(currentPosition, mint);
         const remainingAmount = targetAmount - currentCollateralAmount;
-        if (remainingAmount <= epsilon) {
+        const remainingTolerance = computeKaminoTargetToleranceAmount({
+          targetAmount,
+          unitUsd,
+          minBorrowUsd: KAMINO_REPAY_MIN_STABLE
+        });
+        if (remainingAmount <= remainingTolerance) {
+          if (remainingAmount > epsilon) {
+            reachedWithinOperationalTolerance = true;
+          }
           break;
         }
 
@@ -1999,13 +1990,26 @@ export class OrcaBot {
         const effectiveDebtAmount = this.getKaminoPositionBorrowAmount(currentPosition, stableInfo.mint);
         const collateralUsd = currentCollateralAmount * unitUsd;
         const remainingUsd = remainingAmount * unitUsd;
+        const remainingToleranceByBorrow = computeKaminoTargetToleranceAmount({
+          targetAmount,
+          unitUsd,
+          minBorrowUsd: KAMINO_REPAY_MIN_STABLE
+        });
         const maxBorrowNow = Math.max(0, (collateralUsd * maxLtv) - effectiveDebtAmount);
         if (maxBorrowNow < KAMINO_REPAY_MIN_STABLE) {
+          if (remainingAmount <= remainingToleranceByBorrow) {
+            reachedWithinOperationalTolerance = true;
+            break;
+          }
           throw new Error(`Meta parcial atingida; sem margem para novo borrow dentro do LTV. Restante: ${remainingAmount.toFixed(6)}.`);
         }
 
         const borrowUsd = Math.min(remainingUsd, maxBorrowNow);
         if (!Number.isFinite(borrowUsd) || borrowUsd < KAMINO_REPAY_MIN_STABLE) {
+          if (remainingAmount <= remainingToleranceByBorrow) {
+            reachedWithinOperationalTolerance = true;
+            break;
+          }
           throw new Error("Borrow calculado abaixo do minimo operacional.");
         }
 
@@ -2066,8 +2070,17 @@ export class OrcaBot {
         lastError: null
       });
       const ltvPct = metrics.ltv != null ? metrics.ltv * 100 : null;
-      const summary = `Colateral ${metrics.collateralAmount.toFixed(6)} / alvo ${targetAmount.toFixed(6)} / LTV ${ltvPct != null ? ltvPct.toFixed(2) + "%" : "-" } / ${depositCount} depositos / ${borrowCount} borrows / ${swapCount} swaps`;
-      if (metrics.collateralAmount + epsilon < targetAmount) {
+      const finalRemaining = Math.max(0, targetAmount - metrics.collateralAmount);
+      const finalTolerance = computeKaminoTargetToleranceAmount({
+        targetAmount,
+        unitUsd,
+        minBorrowUsd: KAMINO_REPAY_MIN_STABLE
+      });
+      const summarySuffix = reachedWithinOperationalTolerance && finalRemaining > epsilon
+        ? ` / tolerancia operacional ${finalRemaining.toFixed(6)}`
+        : "";
+      const summary = `Colateral ${metrics.collateralAmount.toFixed(6)} / alvo ${targetAmount.toFixed(6)} / LTV ${ltvPct != null ? ltvPct.toFixed(2) + "%" : "-" } / ${depositCount} depositos / ${borrowCount} borrows / ${swapCount} swaps${summarySuffix}`;
+      if (finalRemaining > finalTolerance) {
         const message = `Meta parcial atingida: ${metrics.collateralAmount.toFixed(6)} de ${targetAmount.toFixed(6)}.`;
         this.setError(message);
         return {
