@@ -567,7 +567,8 @@ export class PoolManager {
   }
 
   async testKaminoSelected(input: {
-    collateralMint: string;
+    collateralMint?: string;
+    collateralSide?: "tokenA" | "tokenB" | "auto";
     collateralAmount?: number;
     borrowUsd?: number;
     targetCollateralAmount?: number;
@@ -576,7 +577,21 @@ export class PoolManager {
       throw new Error("No pool selected");
     }
     const record = this.getRecord(this.selectedPoolId);
-    const result = await record.runner.testKaminoNow(input);
+    const side = input.collateralSide === "tokenA" || input.collateralSide === "tokenB"
+      ? input.collateralSide
+      : "auto";
+    const collateralMint = await this.resolveSelectedCollateralMint(side, input.collateralMint ?? null);
+    if (!collateralMint) {
+      throw new Error(
+        "Nao consegui identificar o mint do colateral da pool selecionada. Tente Token A/Token B."
+      );
+    }
+    const result = await record.runner.testKaminoNow({
+      collateralMint,
+      collateralAmount: input.collateralAmount,
+      borrowUsd: input.borrowUsd,
+      targetCollateralAmount: input.targetCollateralAmount
+    });
     return {
       ok: result.ok,
       reason: result.reason,
@@ -584,6 +599,52 @@ export class PoolManager {
       borrowSig: result.borrowSig,
       summary: result.summary
     };
+  }
+
+  private async resolveSelectedCollateralMint(
+    side: "tokenA" | "tokenB" | "auto",
+    mintHint: string | null
+  ): Promise<string | null> {
+    if (!this.selectedPoolId) {
+      return null;
+    }
+    const hintedMint = String(mintHint ?? "").trim();
+    if (hintedMint) {
+      return hintedMint;
+    }
+
+    const record = this.getRecord(this.selectedPoolId);
+    let status = record.runner.getStatus();
+    if (!status.tokenAMint && !status.tokenBMint) {
+      status = await record.runner.ensureTokenInfoNow();
+    }
+
+    const tokenAMint = status.tokenAMint ? String(status.tokenAMint).trim() : "";
+    const tokenBMint = status.tokenBMint ? String(status.tokenBMint).trim() : "";
+    if (side === "tokenA") return tokenAMint || null;
+    if (side === "tokenB") return tokenBMint || null;
+
+    const collaterals = Array.isArray(status.kaminoCollaterals)
+      ? status.kaminoCollaterals.filter((entry) => entry?.mint).map((entry) => String(entry.mint).trim())
+      : [];
+    if (collaterals.length === 1 && collaterals[0]) {
+      return collaterals[0];
+    }
+
+    const entry = this.entries.find((item) => item.id === this.selectedPoolId) ?? null;
+    const mode = entry?.overrides?.kaminoCollateralMode
+      ?? this.baseConfig.kaminoCollateralMode
+      ?? "max-value";
+    if (mode === "tokenA" && tokenAMint) return tokenAMint;
+    if (mode === "tokenB" && tokenBMint) return tokenBMint;
+
+    const effectiveSide = status.effectiveExitToken ?? status.effectiveValueToken ?? null;
+    if (effectiveSide === "tokenA" && tokenAMint) return tokenAMint;
+    if (effectiveSide === "tokenB" && tokenBMint) return tokenBMint;
+
+    if (tokenAMint && !tokenBMint) return tokenAMint;
+    if (tokenBMint && !tokenAMint) return tokenBMint;
+    return null;
   }
 
   async topUpSolSelected(): Promise<{ ok: boolean; reason?: string }> {
@@ -746,6 +807,18 @@ export class PoolManager {
       return null;
     }
     return this.getStatus(this.selectedPoolId);
+  }
+
+  async ensureSelectedTokenInfo(): Promise<ReturnType<BotRunner["getStatus"]> | null> {
+    if (!this.selectedPoolId) {
+      return null;
+    }
+    const record = this.getRecord(this.selectedPoolId);
+    const status = record.runner.getStatus();
+    if (status.tokenAMint && status.tokenBMint) {
+      return status;
+    }
+    return record.runner.ensureTokenInfoNow();
   }
 
   getSelectedHistory(): ReturnType<BotRunner["getHistory"]> {

@@ -301,6 +301,23 @@ export class BotRunner {
     return this.performClose("manual", { stopAfterClose: true });
   }
 
+  async ensureTokenInfoNow(): Promise<RunnerStatus> {
+    if (this.inFlight) {
+      return this.getStatus();
+    }
+    this.inFlight = true;
+    try {
+      await this.bot.warmupPoolStateNow();
+      return this.getStatus();
+    } catch (err) {
+      logger.warn({ err }, "ensure token info failed");
+      this.bot.setError(err);
+      return this.getStatus();
+    } finally {
+      this.inFlight = false;
+    }
+  }
+
   async rebalancePositionNow(): Promise<RunnerStatus> {
     if (this.inFlight) {
       this.pendingManualRebalance = true;

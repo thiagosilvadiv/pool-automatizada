@@ -1009,6 +1009,11 @@ export class OrcaBot {
     return bot;
   }
 
+  async warmupPoolStateNow(): Promise<BotStatus> {
+    await this.refreshPoolState();
+    return this.getStatus();
+  }
+
   async tick(): Promise<BotStatus> {
     this.lastStatus.running = true;
     this.lastStatus.eventPositionMint = null;

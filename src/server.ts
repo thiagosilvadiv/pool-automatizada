@@ -292,6 +292,13 @@ export async function startServer(config: Config): Promise<void> {
   app.post("/api/kamino/test", async (req: Request, res: Response) => {
     try {
       const mint = String(req.body?.collateralMint ?? "").trim();
+      const sideRaw = String(req.body?.collateralSide ?? "auto").trim().toLowerCase();
+      const collateralSide: "tokenA" | "tokenB" | "auto" =
+        sideRaw === "tokena" || sideRaw === "token_a" || sideRaw === "token-a"
+          ? "tokenA"
+          : sideRaw === "tokenb" || sideRaw === "token_b" || sideRaw === "token-b"
+            ? "tokenB"
+            : "auto";
       const amountRaw = req.body?.collateralAmount;
       const amount = amountRaw == null || amountRaw === "" ? undefined : Number(amountRaw);
       const borrowUsdRaw = req.body?.borrowUsd;
@@ -302,10 +309,6 @@ export async function startServer(config: Config): Promise<void> {
           ? undefined
           : Number(targetCollateralAmountRaw);
 
-      if (!mint) {
-        res.status(400).json({ ok: false, error: "collateralMint is required" });
-        return;
-      }
       if (targetCollateralAmount !== undefined) {
         if (!Number.isFinite(targetCollateralAmount) || targetCollateralAmount <= 0) {
           res.status(400).json({ ok: false, error: "targetCollateralAmount must be > 0" });
@@ -324,6 +327,7 @@ export async function startServer(config: Config): Promise<void> {
 
       const result = await poolManager.testKaminoSelected({
         collateralMint: mint,
+        collateralSide,
         collateralAmount: amount,
         borrowUsd,
         targetCollateralAmount
@@ -516,7 +520,14 @@ export async function startServer(config: Config): Promise<void> {
     await poolManager.ensurePoolsHydrated();
     const selectedId = poolManager.getSelectedPoolId();
     const selected = poolManager.listPools().find((entry) => entry.id === selectedId) ?? null;
-    const selectedStatus = poolManager.getSelectedStatus();
+    let selectedStatus = poolManager.getSelectedStatus();
+    if (selectedStatus && !selectedStatus.tokenAMint && !selectedStatus.tokenBMint) {
+      try {
+        selectedStatus = await poolManager.ensureSelectedTokenInfo();
+      } catch {
+        // best effort: se falhar, mantemos resposta parcial
+      }
+    }
     res.json({
       network: config.network,
       whirlpoolAddress: selected?.whirlpoolAddress ?? null,

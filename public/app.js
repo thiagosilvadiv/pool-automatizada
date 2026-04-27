@@ -541,10 +541,10 @@ function resolveKaminoTestCollateral(info) {
     ? kaminoTestTokenSelect.value
     : "auto";
   if (choice === "tokenA") {
-    return { mint: info?.tokenAMint ?? null, label: describeToken("tokenA", info) };
+    return { mint: info?.tokenAMint ?? null, side: "tokenA", label: describeToken("tokenA", info) };
   }
   if (choice === "tokenB") {
-    return { mint: info?.tokenBMint ?? null, label: describeToken("tokenB", info) };
+    return { mint: info?.tokenBMint ?? null, side: "tokenB", label: describeToken("tokenB", info) };
   }
 
   const activeCollaterals = Array.isArray(cachedStatus?.kaminoCollaterals)
@@ -552,28 +552,29 @@ function resolveKaminoTestCollateral(info) {
     : [];
   if (activeCollaterals.length === 1) {
     const mint = activeCollaterals[0].mint;
-    return { mint, label: formatMintLabel(mint) };
+    return { mint, side: null, label: formatMintLabel(mint) };
   }
 
   const mode = getEffectiveKaminoCollateralMode();
   if (mode === "tokenA") {
-    return { mint: info?.tokenAMint ?? null, label: describeToken("tokenA", info) };
+    return { mint: info?.tokenAMint ?? null, side: "tokenA", label: describeToken("tokenA", info) };
   }
   if (mode === "tokenB") {
-    return { mint: info?.tokenBMint ?? null, label: describeToken("tokenB", info) };
+    return { mint: info?.tokenBMint ?? null, side: "tokenB", label: describeToken("tokenB", info) };
   }
 
   const effectiveSide = cachedStatus?.effectiveExitToken ?? cachedStatus?.effectiveValueToken ?? null;
   if (effectiveSide === "tokenA") {
-    return { mint: info?.tokenAMint ?? null, label: describeToken("tokenA", info) };
+    return { mint: info?.tokenAMint ?? null, side: "tokenA", label: describeToken("tokenA", info) };
   }
   if (effectiveSide === "tokenB") {
-    return { mint: info?.tokenBMint ?? null, label: describeToken("tokenB", info) };
+    return { mint: info?.tokenBMint ?? null, side: "tokenB", label: describeToken("tokenB", info) };
   }
 
   if (mode === "both" || activeCollaterals.length > 1) {
     return {
       mint: null,
+      side: null,
       label: "",
       error: "A pool esta em colateral dual; selecione Token A ou Token B."
     };
@@ -581,6 +582,7 @@ function resolveKaminoTestCollateral(info) {
 
   return {
     mint: null,
+    side: null,
     label: "",
     error: "Nao consegui inferir o colateral da pool. Selecione Token A ou Token B."
   };
@@ -592,6 +594,8 @@ function syncKaminoTestMint(info) {
   kaminoTestMintInput.disabled = true;
   if (resolved.mint) {
     kaminoTestMintInput.value = `${resolved.label || "Colateral"} - ${resolved.mint}`;
+  } else if (resolved.label) {
+    kaminoTestMintInput.value = `${resolved.label} (aguardando mint)`;
   } else {
     kaminoTestMintInput.value = "";
   }
@@ -1987,10 +1991,11 @@ if (kaminoTestBtn) {
     const info = getCurrentTokenInfo();
     const resolved = resolveKaminoTestCollateral(info);
     const mint = resolved.mint;
+    const side = resolved.side ?? "auto";
     const amountRaw = kaminoTestAmountInput?.value ?? "";
     const amount = Number(amountRaw);
 
-    if (!mint) {
+    if (!mint && !resolved.side) {
       setKaminoTestResult(resolved.error ?? "Selecione um colateral valido.", true);
       return;
     }
@@ -2005,7 +2010,11 @@ if (kaminoTestBtn) {
       const res = await fetch("/api/kamino/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ collateralMint: mint, targetCollateralAmount: amount })
+        body: JSON.stringify({
+          collateralMint: mint ?? "",
+          collateralSide: side,
+          targetCollateralAmount: amount
+        })
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) {
