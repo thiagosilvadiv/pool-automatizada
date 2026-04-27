@@ -3864,6 +3864,56 @@ export class OrcaBot {
     this.balanceCoordinator.setPoolReservations(this.poolId, entries);
   }
 
+  private redistributeKaminoDebtUsd(
+    collaterals: KaminoCollateralEntry[],
+    totalDebtUsd: number | null | undefined
+  ): KaminoCollateralEntry[] {
+    if (!Array.isArray(collaterals) || collaterals.length === 0) {
+      return [];
+    }
+    const normalized = collaterals.map((item) => ({
+      ...item,
+      debtUsd: item.debtUsd == null ? null : Number(item.debtUsd)
+    }));
+    if (totalDebtUsd == null) {
+      return normalized;
+    }
+    const safeTotalDebtUsd = Number(totalDebtUsd);
+    if (!Number.isFinite(safeTotalDebtUsd)) {
+      return normalized;
+    }
+    if (safeTotalDebtUsd <= 0) {
+      return normalized.map((item) => ({ ...item, debtUsd: null }));
+    }
+
+    const existingWeights = normalized.map((item) => Math.max(0, Number(item.debtUsd ?? 0)));
+    const existingTotal = existingWeights.reduce((sum, value) => sum + value, 0);
+    const usdWeights = normalized.map((item) => Math.max(0, Number(item.usd ?? item.currentUsd ?? 0)));
+    const usdTotal = usdWeights.reduce((sum, value) => sum + value, 0);
+    const amountWeights = normalized.map((item) => Math.max(0, Number(item.amount ?? 0)));
+    const amountTotal = amountWeights.reduce((sum, value) => sum + value, 0);
+
+    let assignedDebtUsd = 0;
+    return normalized.map((item, index) => {
+      const isLast = index === normalized.length - 1;
+      const weight = existingTotal > 0
+        ? existingWeights[index] / existingTotal
+        : usdTotal > 0
+          ? usdWeights[index] / usdTotal
+          : amountTotal > 0
+            ? amountWeights[index] / amountTotal
+            : 1 / normalized.length;
+      const debtUsd = isLast
+        ? Math.max(0, safeTotalDebtUsd - assignedDebtUsd)
+        : Math.max(0, safeTotalDebtUsd * weight);
+      assignedDebtUsd += debtUsd;
+      return {
+        ...item,
+        debtUsd: debtUsd > 0 ? debtUsd : null
+      };
+    });
+  }
+
   private normalizeKaminoState(state: KaminoCycleState | null): KaminoCycleState | null {
     if (!state) {
       return null;
@@ -3892,6 +3942,18 @@ export class OrcaBot {
         targetPriceUsdc: state.targetPriceUsdc ?? null
       });
     }
+    const normalizedDebtUsd = (() => {
+      const stateDebtUsd = Number(state.debtUsd ?? NaN);
+      const stateDebtAmount = Number(state.debtAmount ?? NaN);
+      if (Number.isFinite(stateDebtAmount)) {
+        return Math.max(0, stateDebtAmount);
+      }
+      if (!Number.isFinite(stateDebtUsd)) {
+        return null;
+      }
+      return Math.max(0, stateDebtUsd);
+    })();
+    collaterals = this.redistributeKaminoDebtUsd(collaterals, normalizedDebtUsd);
     const poolLossUsd = (() => {
       const pnl = this.lastStatus.positionPnlUsd ?? null;
       if (pnl != null && Number.isFinite(pnl) && pnl < 0) return Math.abs(pnl);
@@ -4695,6 +4757,10 @@ export class OrcaBot {
               )
             ]
           : []);
+      const recoveredDebtUsd = Number.isFinite(Number(position?.debtAmount ?? NaN))
+        ? Number(position?.debtAmount ?? 0)
+        : null;
+      const reconciledCollaterals = this.redistributeKaminoDebtUsd(recoveredCollaterals, recoveredDebtUsd);
 
       if (this.kaminoState?.active) {
         const recordedDebt = Number(this.kaminoState.debtAmount ?? 0);
@@ -4702,6 +4768,7 @@ export class OrcaBot {
         const onChainDebt = Number(position.debtAmount ?? 0);
         const onChainCollateral = Number(position.collateralAmount ?? 0);
         const epsilon = 1e-8;
+        const exposureTolerance = (expected: number) => Math.max(epsilon, Math.abs(expected) * 1e-6);
         const reservedDust = Number(this.kaminoState.reservedCollateralDust ?? 0);
         const dustAmount = Number.isFinite(reservedDust) ? reservedDust : 0;
 
@@ -4723,7 +4790,8 @@ export class OrcaBot {
                 debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
                 debtAmount: 0,
                 reservedCollateralDust: dustTotal,
-                collaterals: recoveredCollaterals,
+                debtUsd: null,
+                collaterals: reconciledCollaterals,
                 lastError: "Colateral residual abaixo do minimo; ciclo encerrado localmente.",
                 updatedAt: new Date().toISOString()
               });
@@ -4755,8 +4823,9 @@ export class OrcaBot {
                 : this.kaminoState.avgPriceUsdc ?? null,
               debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
               debtAmount: 0,
+              debtUsd: null,
               reservedCollateralDust: dustTotal,
-              collaterals: recoveredCollaterals,
+              collaterals: reconciledCollaterals,
               updatedAt: new Date().toISOString()
             });
             const retryAt = this.kaminoState?.repayRetryUntil
@@ -4797,8 +4866,9 @@ export class OrcaBot {
             avgPriceUsdc: this.kaminoState.avgPriceUsdc ?? null,
             debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
             debtAmount: 0,
+            debtUsd: null,
             reservedCollateralDust: null,
-            collaterals: recoveredCollaterals,
+            collaterals: reconciledCollaterals,
             lastError: "Divida Kamino zerada; ciclo pausado localmente.",
             updatedAt: new Date().toISOString()
           };
@@ -4809,7 +4879,12 @@ export class OrcaBot {
           return;
         }
 
-        if (onChainDebt + epsilon < recordedDebt || onChainCollateral + epsilon < recordedCollateral) {
+        const debtDrift = Math.abs(onChainDebt - recordedDebt);
+        const collateralDrift = Math.abs(onChainCollateral - recordedCollateral);
+        if (
+          debtDrift > exposureTolerance(recordedDebt)
+          || collateralDrift > exposureTolerance(recordedCollateral)
+        ) {
           let reconciledUsd: number | null = null;
           try {
             const mint = position.collateralMint ?? this.kaminoState.collateralMint ?? null;
@@ -4829,7 +4904,8 @@ export class OrcaBot {
               : this.kaminoState.avgPriceUsdc ?? null,
             debtMint: position.debtMint ?? this.kaminoState.debtMint ?? null,
             debtAmount: onChainDebt,
-            collaterals: recoveredCollaterals,
+            debtUsd: onChainDebt > epsilon ? onChainDebt : null,
+            collaterals: reconciledCollaterals,
             updatedAt: new Date().toISOString(),
             lastError: null,
             entrySource: this.kaminoState?.entrySource ?? null
@@ -4891,10 +4967,10 @@ export class OrcaBot {
       collateralUsd: reconstructedUsd,
       debtMint: position?.debtMint ?? null,
       debtAmount: position?.debtAmount ?? 0,
-      debtUsd: null,
+      debtUsd: (position?.debtAmount ?? 0) > 0 ? Number(position?.debtAmount ?? 0) : null,
       avgPriceUsdc: reconstructedAvg,
       targetPriceUsdc: null,
-      collaterals: recoveredCollaterals,
+      collaterals: reconciledCollaterals,
       cycleCount: Math.max(previous?.cycleCount ?? 0, 1),
       updatedAt: new Date().toISOString(),
       lastError: "Ciclo Kamino recuperado do market (sem historico).",
@@ -6458,9 +6534,11 @@ export class OrcaBot {
       state = {
         ...state,
         debtAmount: onChainDebtAmount,
-        collaterals
+        debtUsd: onChainDebtAmount > epsilon ? onChainDebtAmount : null,
+        collaterals: this.redistributeKaminoDebtUsd(collaterals, onChainDebtAmount)
       };
       this.setKaminoState(state);
+      collaterals = Array.isArray(this.kaminoState?.collaterals) ? this.kaminoState!.collaterals : collaterals;
     } else if (onChainDebtAmount - epsilon > recordedDebtAmount) {
       mismatchReasons.push("divida on-chain diferente do registrado");
     }
@@ -6492,7 +6570,11 @@ export class OrcaBot {
           collateralAmount: Number(position.collateralAmount ?? 0),
           debtMint: position.debtMint ?? state.debtMint ?? null,
           debtAmount: Number(position.debtAmount ?? 0),
-          collaterals: reconciledCollaterals,
+          debtUsd: Number(position.debtAmount ?? 0) > 0 ? Number(position.debtAmount ?? 0) : null,
+          collaterals: this.redistributeKaminoDebtUsd(
+            reconciledCollaterals,
+            Number.isFinite(Number(position.debtAmount ?? NaN)) ? Number(position.debtAmount ?? 0) : null
+          ),
           updatedAt: new Date().toISOString(),
           lastError: null
         };
@@ -6503,7 +6585,7 @@ export class OrcaBot {
           "warn"
         );
         state = this.kaminoState ?? updated;
-        collaterals = reconciledCollaterals;
+        collaterals = Array.isArray(state.collaterals) ? state.collaterals : reconciledCollaterals;
         debtMint = updated.debtMint ?? debtMint;
         recordedDebtAmount = Number(updated.debtAmount ?? recordedDebtAmount);
       } else {
