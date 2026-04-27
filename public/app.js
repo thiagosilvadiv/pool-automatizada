@@ -400,6 +400,31 @@ function formatNumber(value, digits = 6) {
   return formatter.format(num);
 }
 
+function toFiniteNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function getLoanClosePnlMetrics(item) {
+  const entryUsd = toFiniteNumber(item?.positionEntryUsd);
+  const collateralUsd = toFiniteNumber(item?.kaminoCollateralUsd);
+  const exitUsd = toFiniteNumber(item?.positionExitUsd);
+  const debtUsd = toFiniteNumber(item?.kaminoDebtUsd);
+  const txFeeUsd = toFiniteNumber(item?.txFeeUsd) ?? 0;
+  const storedNetPnl = toFiniteNumber(item?.kaminoLoanPnlUsd ?? item?.positionPnlUsd);
+  let grossPnl = null;
+  if (entryUsd != null && collateralUsd != null) {
+    grossPnl = collateralUsd - entryUsd;
+  } else if (entryUsd != null && exitUsd != null && (debtUsd == null || Math.abs(debtUsd) <= 1e-9)) {
+    grossPnl = exitUsd - entryUsd;
+  } else if (storedNetPnl != null) {
+    grossPnl = storedNetPnl + txFeeUsd;
+  }
+  const netPnl = grossPnl != null ? grossPnl - txFeeUsd : storedNetPnl;
+  return { grossPnl, netPnl };
+}
+
 function applyStatusTone(el, value) {
   if (!el) return;
   el.classList.remove("status-ok", "status-warn", "status-bad");
@@ -609,17 +634,13 @@ function buildHistoryCsv(items) {
     const actionLabel = actionLabels[item.action] ?? item.action ?? "-";
     const typeLabel = actionTypeLabels[item.actionType] ?? item.actionType ?? "-";
     const isLoanClose = item.actionType === "fechamento-emprestimo";
-    const pnlRaw = Number(isLoanClose ? item.kaminoLoanPnlUsd : item.positionPnlUsd);
-    const hasPnl = Number.isFinite(pnlRaw);
-    const feesRaw = Number(item.positionFeesUsd);
-    const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
-    const entryUsd = Number(item.positionEntryUsd);
-    const exitUsd = Number(item.positionExitUsd);
-    const hasEntryExit = Number.isFinite(entryUsd) && Number.isFinite(exitUsd);
+    const loanPnl = isLoanClose ? getLoanClosePnlMetrics(item) : null;
+    const pnlRaw = toFiniteNumber(isLoanClose ? loanPnl?.netPnl : item.positionPnlUsd);
+    const hasPnl = pnlRaw != null;
+    const fees = toFiniteNumber(item.positionFeesUsd) ?? 0;
     const poolPnl = hasPnl ? pnlRaw : 0;
-    const pnlFromEntry = hasEntryExit ? (exitUsd - entryUsd) : null;
-    const pnlTotal = isLoanClose ? (pnlFromEntry ?? (hasPnl ? poolPnl : null)) : (hasPnl ? poolPnl : null);
-    const pnlTotalNet = isLoanClose ? (pnlFromEntry ?? (hasPnl ? poolPnl : null)) : (hasPnl ? poolPnl - fees : null);
+    const pnlTotal = isLoanClose ? (loanPnl?.grossPnl ?? (hasPnl ? poolPnl : null)) : (hasPnl ? poolPnl : null);
+    const pnlTotalNet = isLoanClose ? (loanPnl?.grossPnl ?? (hasPnl ? poolPnl : null)) : (hasPnl ? poolPnl - fees : null);
     return [
       formatTimestamp(item.timestamp),
       formatTimestamp(item.positionOpenedAt),
@@ -633,7 +654,7 @@ function buildHistoryCsv(items) {
       formatNumber(item.positionFeesUsd, 2),
       formatNumber(item.txFeeUsd, 6),
       formatNumber(item.positionExitUsd, 2),
-      formatNumber(isLoanClose ? item.kaminoLoanPnlUsd : item.positionPnlUsd, 2),
+      formatNumber(isLoanClose ? loanPnl?.netPnl : item.positionPnlUsd, 2),
       formatNumber(pnlTotal, 2),
       formatNumber(pnlTotalNet, 2)
     ].map(toCsvValue).join(";");
@@ -1286,17 +1307,13 @@ function renderHistory(items) {
     currentIds.add(eventId);
     const checked = selectedHistoryIds.has(eventId) ? "checked" : "";
     const isLoanClose = item.actionType === "fechamento-emprestimo";
-    const pnlRaw = Number(isLoanClose ? item.kaminoLoanPnlUsd : item.positionPnlUsd);
-    const hasPnl = Number.isFinite(pnlRaw);
-    const feesRaw = Number(item.positionFeesUsd);
-    const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
-    const entryUsd = Number(item.positionEntryUsd);
-    const exitUsd = Number(item.positionExitUsd);
-    const hasEntryExit = Number.isFinite(entryUsd) && Number.isFinite(exitUsd);
+    const loanPnl = isLoanClose ? getLoanClosePnlMetrics(item) : null;
+    const pnlRaw = toFiniteNumber(isLoanClose ? loanPnl?.netPnl : item.positionPnlUsd);
+    const hasPnl = pnlRaw != null;
+    const fees = toFiniteNumber(item.positionFeesUsd) ?? 0;
     const poolPnl = hasPnl ? pnlRaw : 0;
-    const pnlFromEntry = hasEntryExit ? (exitUsd - entryUsd) : null;
-    const pnlTotal = isLoanClose ? (pnlFromEntry ?? (hasPnl ? poolPnl : null)) : (hasPnl ? poolPnl : null);
-    const pnlTotalNet = isLoanClose ? (pnlFromEntry ?? (hasPnl ? poolPnl : null)) : (hasPnl ? poolPnl - fees : null);
+    const pnlTotal = isLoanClose ? (loanPnl?.grossPnl ?? (hasPnl ? poolPnl : null)) : (hasPnl ? poolPnl : null);
+    const pnlTotalNet = isLoanClose ? (loanPnl?.grossPnl ?? (hasPnl ? poolPnl : null)) : (hasPnl ? poolPnl - fees : null);
     const priceCell = renderEditableNumberCell(
       item.price,
       "price",
@@ -1316,7 +1333,7 @@ function renderHistory(items) {
       ].join(" | ")
       : "";
     const pnlCell = isLoanClose
-      ? `<span class="history-loan-pnl" title="${escapeHtml(loanTooltip)}">${formatNumber(item.kaminoLoanPnlUsd, 2)}</span>`
+      ? `<span class="history-loan-pnl" title="${escapeHtml(loanTooltip)}">${formatNumber(loanPnl?.netPnl, 2)}</span>`
       : renderEditableNumberCell(item.positionPnlUsd, "positionPnlUsd", editId);
     return `
       <tr>

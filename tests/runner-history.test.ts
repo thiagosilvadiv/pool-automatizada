@@ -521,4 +521,50 @@ describe("runner history hedge close", () => {
     expect(closeEvents[0]?.positionEntryUsd).toBe(24.04);
     expect(closeEvents[0]?.positionExitUsd).toBe(24.49);
   });
+
+  it("computes kamino-close pnl from collateral delta instead of net exit", () => {
+    const { runner } = createRunner();
+
+    (runner as any).recordEvent(createStatus({
+      lastAction: "kamino-close",
+      kaminoCycleOpenedAt: "2026-04-09T11:22:00.000Z",
+      positionEntryUsd: 100,
+      positionExitUsd: 51.5,
+      kaminoCollateralUsd: 101.5,
+      kaminoDebtUsd: 50
+    }));
+
+    const [closeEvent] = runner.getHistory();
+    expect(closeEvent.positionPnlUsd).toBeCloseTo(1.5, 6);
+    expect(closeEvent.kaminoLoanPnlUsd).toBeCloseTo(1.5, 6);
+  });
+
+  it("backfills legacy kamino-close pnl from collateral delta when exit is net", async () => {
+    const { runner } = createRunner({
+      history: [
+        {
+          id: "kamino-close-1",
+          timestamp: "2026-04-09T12:35:30.000Z",
+          positionOpenedAt: "2026-04-09T11:22:00.000Z",
+          positionClosedAt: "2026-04-09T12:35:30.000Z",
+          actionType: "fechamento-emprestimo",
+          action: "kamino-close",
+          positionEntryUsd: 100,
+          positionExitUsd: 51.5,
+          positionPnlUsd: -48.5,
+          txFeeUsd: 0.1,
+          kaminoLoanPnlUsd: -48.5,
+          kaminoDebtUsd: 50,
+          kaminoCollateralUsd: 101.5,
+          kaminoCycleOpenedAt: "2026-04-09T11:22:00.000Z"
+        }
+      ]
+    });
+
+    await (runner as any).loadHistoryIfNeeded();
+
+    const [closeEvent] = runner.getHistory();
+    expect(closeEvent.positionPnlUsd).toBeCloseTo(1.4, 6);
+    expect(closeEvent.kaminoLoanPnlUsd).toBeCloseTo(1.4, 6);
+  });
 });

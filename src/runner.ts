@@ -781,6 +781,47 @@ export class BotRunner {
     return { value: null, source: entrySource ?? null };
   }
 
+  private computeKaminoCloseGrossPnl(input: {
+    entryUsd: unknown;
+    collateralUsd: unknown;
+    exitUsd: unknown;
+    debtUsd: unknown;
+    fallbackNetPnl: unknown;
+    txFeeUsd: unknown;
+  }): number | null {
+    const entryUsd = finiteOrNull(input.entryUsd);
+    const collateralUsd = finiteOrNull(input.collateralUsd);
+    if (entryUsd != null && collateralUsd != null) {
+      return collateralUsd - entryUsd;
+    }
+    const exitUsd = finiteOrNull(input.exitUsd);
+    const debtUsd = finiteOrNull(input.debtUsd);
+    if (entryUsd != null && exitUsd != null && (debtUsd == null || Math.abs(debtUsd) <= 1e-9)) {
+      return exitUsd - entryUsd;
+    }
+    const fallbackNetPnl = finiteOrNull(input.fallbackNetPnl);
+    if (fallbackNetPnl != null) {
+      return fallbackNetPnl + (finiteOrNull(input.txFeeUsd) ?? 0);
+    }
+    return null;
+  }
+
+  private computeKaminoCloseNetPnl(input: {
+    entryUsd: unknown;
+    collateralUsd: unknown;
+    exitUsd: unknown;
+    debtUsd: unknown;
+    fallbackNetPnl: unknown;
+    txFeeUsd: unknown;
+  }): number | null {
+    const grossPnl = this.computeKaminoCloseGrossPnl(input);
+    if (grossPnl == null) {
+      return finiteOrNull(input.fallbackNetPnl);
+    }
+    const txFeeUsd = finiteOrNull(input.txFeeUsd);
+    return txFeeUsd != null ? grossPnl - txFeeUsd : grossPnl;
+  }
+
   private backfillCloseEntries(items: HistoryEvent[]): { items: HistoryEvent[]; mutated: boolean } {
     let mutated = false;
     const nextItems = [...items];
@@ -824,6 +865,43 @@ export class BotRunner {
             positionPnlUsd: pnlUsd
           };
         }
+      }
+      if (nextItem !== item) {
+        nextItems[i] = nextItem;
+        mutated = true;
+      }
+    }
+    return { items: nextItems, mutated };
+  }
+
+  private backfillKaminoClosePnl(items: HistoryEvent[]): { items: HistoryEvent[]; mutated: boolean } {
+    let mutated = false;
+    const nextItems = [...items];
+    for (let i = 0; i < nextItems.length; i += 1) {
+      const item = nextItems[i];
+      if (!item || item.action !== "kamino-close") {
+        continue;
+      }
+      const nextPnlUsd = this.computeKaminoCloseNetPnl({
+        entryUsd: item.positionEntryUsd,
+        collateralUsd: item.kaminoCollateralUsd,
+        exitUsd: item.positionExitUsd,
+        debtUsd: item.kaminoDebtUsd,
+        fallbackNetPnl: item.kaminoLoanPnlUsd ?? item.positionPnlUsd,
+        txFeeUsd: item.txFeeUsd
+      });
+      let nextItem = item;
+      if (finiteOrNull(item.positionPnlUsd) !== nextPnlUsd) {
+        nextItem = {
+          ...nextItem,
+          positionPnlUsd: nextPnlUsd
+        };
+      }
+      if (finiteOrNull(nextItem.kaminoLoanPnlUsd) !== nextPnlUsd) {
+        nextItem = {
+          ...nextItem,
+          kaminoLoanPnlUsd: nextPnlUsd
+        };
       }
       if (nextItem !== item) {
         nextItems[i] = nextItem;
@@ -1325,6 +1403,10 @@ export class BotRunner {
     let mergedPositionFeesUsd = status.positionFeesUsd ?? null;
     let mergedPositionPnlUsd = status.positionPnlUsd ?? null;
     let mergedPositionExitUsd: number | null = null;
+    const txFeeLamports = status.lastActionFeeLamports ?? null;
+    const txFeeUsd = txFeeLamports != null && status.solUsdPrice != null
+      ? (txFeeLamports / LAMPORTS_PER_SOL) * status.solUsdPrice
+      : null;
 
     if (action === "kamino-reopen") {
       // Reabertura Kamino não representa nova entrada de capital,
@@ -1360,16 +1442,17 @@ export class BotRunner {
       mergedPositionEntrySource = status.positionEntrySource ?? mergedPositionEntrySource;
       mergedPositionFeesUsd = status.positionFeesUsd ?? mergedPositionFeesUsd;
       mergedPositionExitUsd = status.positionExitUsd ?? null;
-      if (mergedPositionExitUsd != null && mergedPositionEntryUsd != null) {
-        mergedPositionPnlUsd = mergedPositionExitUsd - mergedPositionEntryUsd;
-      }
+      mergedPositionPnlUsd = this.computeKaminoCloseGrossPnl({
+        entryUsd: mergedPositionEntryUsd,
+        collateralUsd: status.kaminoCollateralUsd,
+        exitUsd: mergedPositionExitUsd,
+        debtUsd: status.kaminoDebtUsd,
+        fallbackNetPnl: status.positionPnlUsd,
+        txFeeUsd
+      });
     } else if (action === "rebalanced" || action === "kamino-rebalanced") {
       mergedPositionExitUsd = eventPositionExitUsd ?? null;
     }
-    const txFeeLamports = status.lastActionFeeLamports ?? null;
-    const txFeeUsd = txFeeLamports != null && status.solUsdPrice != null
-      ? (txFeeLamports / LAMPORTS_PER_SOL) * status.solUsdPrice
-      : null;
     if (mergedPositionPnlUsd != null && txFeeUsd != null) {
       mergedPositionPnlUsd -= txFeeUsd;
     }
@@ -1641,19 +1724,16 @@ export class BotRunner {
     const eventTrend = this.resolveTrendForMint(mergedPositionMint, trendNow);
     const eventHedgeDecision = decisionForMint(mergedPositionMint);
     const isKaminoClose = action === "kamino-close";
-    let kaminoLoanPnlUsd: number | null = null;
-    if (isKaminoClose) {
-      if (mergedPositionExitUsd != null && mergedPositionEntryUsd != null) {
-        kaminoLoanPnlUsd = mergedPositionExitUsd - mergedPositionEntryUsd;
-      } else if (status.kaminoCollateralUsd != null && status.kaminoDebtUsd != null) {
-        kaminoLoanPnlUsd = status.kaminoCollateralUsd - status.kaminoDebtUsd;
-      } else {
-        kaminoLoanPnlUsd = status.positionPnlUsd ?? null;
-      }
-      if (kaminoLoanPnlUsd != null && txFeeUsd != null) {
-        kaminoLoanPnlUsd -= txFeeUsd;
-      }
-    }
+    const kaminoLoanPnlUsd = isKaminoClose
+      ? this.computeKaminoCloseNetPnl({
+        entryUsd: mergedPositionEntryUsd,
+        collateralUsd: status.kaminoCollateralUsd,
+        exitUsd: mergedPositionExitUsd,
+        debtUsd: status.kaminoDebtUsd,
+        fallbackNetPnl: mergedPositionPnlUsd,
+        txFeeUsd
+      })
+      : null;
     const kaminoCollateralAvgPriceUsdc = isKaminoClose
       ? (status.kaminoAvgPriceUsdc ?? null)
       : null;
@@ -2090,7 +2170,11 @@ export class BotRunner {
           if (backfilledCloseHistory.mutated) {
             mutated = true;
           }
-          const normalizedHistory = backfilledCloseHistory.items;
+          const backfilledKaminoClosePnl = this.backfillKaminoClosePnl(backfilledCloseHistory.items);
+          if (backfilledKaminoClosePnl.mutated) {
+            mutated = true;
+          }
+          const normalizedHistory = backfilledKaminoClosePnl.items;
           const openedByMint = new Map<string, string>();
           const trendByMint = new Map<string, "up" | "down">();
           let previousMint: string | null = null;
