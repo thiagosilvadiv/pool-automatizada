@@ -205,6 +205,7 @@
                 <button id="startBtn" class="primary">Iniciar</button>
                 <button id="stopBtn" class="ghost">Parar</button>
                 <button id="closeBtn" class="danger">Rebalancear agora</button>
+                <button id="closeStopBtn" class="ghost danger">Fechar e parar pool</button>
                 <button id="addLiquidityBtn" class="ghost">Adicionar liquidez</button>
                 <button id="kaminoCloseTopBtn" class="ghost">Fechar Kamino</button>
                 <button id="topupBtn" class="ghost">Top-up SOL</button>
@@ -284,14 +285,14 @@
                 <div class="field">
                   <label>Colateral</label>
                   <select id="kaminoTestToken">
+                    <option value="auto">Colateral da pool</option>
                     <option value="tokenA">Token A</option>
                     <option value="tokenB">Token B</option>
-                    <option value="manual">Mint manual</option>
                   </select>
                 </div>
                 <div class="field">
-                  <label>Mint manual</label>
-                  <input id="kaminoTestMint" placeholder="Mint SPL" />
+                  <label>Mint resolvido</label>
+                  <input id="kaminoTestMint" placeholder="Detectado pela pool" disabled />
                 </div>
                 <div class="field">
                   <label>Meta total do colateral</label>

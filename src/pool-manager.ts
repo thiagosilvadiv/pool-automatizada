@@ -457,6 +457,19 @@ export class PoolManager {
     await record.runner.rebalancePositionNow();
   }
 
+  async closeAndStopPool(id: string): Promise<ReturnType<BotRunner["getStatus"]>> {
+    const record = this.getRecord(id);
+    const status = await record.runner.closePositionAndStopNow();
+    if (!status.running) {
+      this.balanceCoordinator.clearPool(id);
+      this.clearResumeTracking(id);
+      if (this.activePoolIds.delete(id)) {
+        await this.savePools();
+      }
+    }
+    return status;
+  }
+
   getStatus(id: string): ReturnType<BotRunner["getStatus"]> | null {
     const record = this.pools.get(id);
     return record?.runner.getStatus() ?? null;
@@ -519,6 +532,13 @@ export class PoolManager {
       throw new Error("No pool selected");
     }
     await this.rebalancePool(this.selectedPoolId);
+  }
+
+  async closeAndStopSelected(): Promise<ReturnType<BotRunner["getStatus"]>> {
+    if (!this.selectedPoolId) {
+      throw new Error("No pool selected");
+    }
+    return this.closeAndStopPool(this.selectedPoolId);
   }
 
   async resetSelectedKaminoCycle(clearPools = false): Promise<void> {

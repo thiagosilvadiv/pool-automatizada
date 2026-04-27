@@ -253,6 +253,15 @@ export async function startServer(config: Config): Promise<void> {
     }
   });
 
+  app.post("/api/close-and-stop", async (_req: Request, res: Response) => {
+    try {
+      const status = await poolManager.closeAndStopSelected();
+      res.json({ ok: true, status });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
   app.post("/api/add-liquidity", async (_req: Request, res: Response) => {
     try {
       const result = await poolManager.addLiquiditySelected();
@@ -614,6 +623,15 @@ export async function startServer(config: Config): Promise<void> {
     try {
       await poolManager.rebalancePool(req.params.id);
       res.json({ ok: true });
+    } catch (err) {
+      res.status(404).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post("/api/pools/:id/close-and-stop", async (req: Request, res: Response) => {
+    try {
+      const status = await poolManager.closeAndStopPool(req.params.id);
+      res.json({ ok: true, status });
     } catch (err) {
       res.status(404).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
     }

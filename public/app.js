@@ -243,6 +243,7 @@ function applyStatusSnapshot(status) {
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const closeBtn = document.getElementById("closeBtn");
+const closeStopBtn = document.getElementById("closeStopBtn");
 const addLiquidityBtn = document.getElementById("addLiquidityBtn");
 const topupBtn = document.getElementById("topupBtn");
 const closeEmptyAccountsBtn = document.getElementById("closeEmptyAccountsBtn");
@@ -505,25 +506,94 @@ function formatKaminoCollateralModeLabel(mode, info) {
 
 function updateKaminoTestTokenHints(info) {
   if (!(kaminoTestTokenSelect instanceof HTMLSelectElement)) return;
+  const optionAuto = kaminoTestTokenSelect.querySelector("option[value=\"auto\"]");
   const optionA = kaminoTestTokenSelect.querySelector("option[value=\"tokenA\"]");
   const optionB = kaminoTestTokenSelect.querySelector("option[value=\"tokenB\"]");
+  if (optionAuto) {
+    const mode = getEffectiveKaminoCollateralMode();
+    optionAuto.textContent = `Colateral da pool (${formatKaminoCollateralModeLabel(mode, info)})`;
+  }
   if (optionA) optionA.textContent = describeToken("tokenA", info);
   if (optionB) optionB.textContent = describeToken("tokenB", info);
 }
 
-function syncKaminoTestMint(info) {
-  if (!(kaminoTestMintInput instanceof HTMLInputElement)) return;
+function getSelectedCachedPool() {
+  const selectedId = cachedConfig?.selectedPoolId
+    ?? cachedPoolsResponse?.selectedPoolId
+    ?? null;
+  const pools = normalizePoolsResponse(cachedPoolsResponse)?.pools
+    ?? (Array.isArray(cachedPools) ? cachedPools : []);
+  if (selectedId) {
+    return pools.find((pool) => pool.id === selectedId) ?? null;
+  }
+  return pools.find((pool) => pool.selected) ?? null;
+}
+
+function getEffectiveKaminoCollateralMode() {
+  const selectedPool = getSelectedCachedPool();
+  return selectedPool?.overrides?.kaminoCollateralMode
+    ?? cachedConfig?.kaminoCollateralMode
+    ?? "max-value";
+}
+
+function resolveKaminoTestCollateral(info) {
   const choice = kaminoTestTokenSelect instanceof HTMLSelectElement
     ? kaminoTestTokenSelect.value
-    : "manual";
-  const mint =
-    choice === "tokenA" ? info?.tokenAMint
-      : choice === "tokenB" ? info?.tokenBMint
-        : null;
-  const manual = choice === "manual";
-  kaminoTestMintInput.disabled = !manual;
-  if (!manual) {
-    kaminoTestMintInput.value = mint ?? "";
+    : "auto";
+  if (choice === "tokenA") {
+    return { mint: info?.tokenAMint ?? null, label: describeToken("tokenA", info) };
+  }
+  if (choice === "tokenB") {
+    return { mint: info?.tokenBMint ?? null, label: describeToken("tokenB", info) };
+  }
+
+  const activeCollaterals = Array.isArray(cachedStatus?.kaminoCollaterals)
+    ? cachedStatus.kaminoCollaterals.filter((entry) => entry?.mint)
+    : [];
+  if (activeCollaterals.length === 1) {
+    const mint = activeCollaterals[0].mint;
+    return { mint, label: formatMintLabel(mint) };
+  }
+
+  const mode = getEffectiveKaminoCollateralMode();
+  if (mode === "tokenA") {
+    return { mint: info?.tokenAMint ?? null, label: describeToken("tokenA", info) };
+  }
+  if (mode === "tokenB") {
+    return { mint: info?.tokenBMint ?? null, label: describeToken("tokenB", info) };
+  }
+
+  const effectiveSide = cachedStatus?.effectiveExitToken ?? cachedStatus?.effectiveValueToken ?? null;
+  if (effectiveSide === "tokenA") {
+    return { mint: info?.tokenAMint ?? null, label: describeToken("tokenA", info) };
+  }
+  if (effectiveSide === "tokenB") {
+    return { mint: info?.tokenBMint ?? null, label: describeToken("tokenB", info) };
+  }
+
+  if (mode === "both" || activeCollaterals.length > 1) {
+    return {
+      mint: null,
+      label: "",
+      error: "A pool esta em colateral dual; selecione Token A ou Token B."
+    };
+  }
+
+  return {
+    mint: null,
+    label: "",
+    error: "Nao consegui inferir o colateral da pool. Selecione Token A ou Token B."
+  };
+}
+
+function syncKaminoTestMint(info) {
+  if (!(kaminoTestMintInput instanceof HTMLInputElement)) return;
+  const resolved = resolveKaminoTestCollateral(info);
+  kaminoTestMintInput.disabled = true;
+  if (resolved.mint) {
+    kaminoTestMintInput.value = `${resolved.label || "Colateral"} - ${resolved.mint}`;
+  } else {
+    kaminoTestMintInput.value = "";
   }
 }
 
@@ -566,6 +636,18 @@ function getTokenInfo(source) {
     tokenBMint: source.tokenBMint ?? null,
     isTokenASol: source.isTokenASol ?? null,
     isTokenBSol: source.isTokenBSol ?? null
+  };
+}
+
+function getCurrentTokenInfo() {
+  const statusInfo = getTokenInfo(cachedStatus);
+  const configInfo = getTokenInfo(cachedConfig);
+  if (!statusInfo && !configInfo) return null;
+  return {
+    tokenAMint: statusInfo?.tokenAMint ?? configInfo?.tokenAMint ?? null,
+    tokenBMint: statusInfo?.tokenBMint ?? configInfo?.tokenBMint ?? null,
+    isTokenASol: statusInfo?.isTokenASol ?? configInfo?.isTokenASol ?? null,
+    isTokenBSol: statusInfo?.isTokenBSol ?? configInfo?.isTokenBSol ?? null
   };
 }
 
@@ -1536,6 +1618,7 @@ function renderPools(data, config) {
               <button class="ghost" data-action="edit" data-id="${pool.id}">Editar</button>
               ${startStopAction}
               <button class="danger" data-action="close" data-id="${pool.id}">Rebalancear</button>
+              <button class="ghost danger" data-action="close-stop" data-id="${pool.id}">Fechar e parar</button>
               <button class="ghost danger" data-action="remove" data-id="${pool.id}">Remover</button>
             </div>
           </details>
@@ -1676,8 +1759,9 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
   if (kaminoCloseTopBtn) {
     kaminoCloseTopBtn.disabled = !status.kaminoActive;
   }
-  updateKaminoTestTokenHints(tokenInfo);
-  syncKaminoTestMint(tokenInfo);
+  const kaminoTestInfo = getCurrentTokenInfo() ?? tokenInfo;
+  updateKaminoTestTokenHints(kaminoTestInfo);
+  syncKaminoTestMint(kaminoTestInfo);
 
   statusBadge.textContent = status.running ? "Rodando" : "Parado";
   statusBadge.classList.toggle("running", status.running);
@@ -1827,9 +1911,30 @@ stopBtn.addEventListener("click", async () => {
 closeBtn.addEventListener("click", async () => {
   const ok = window.confirm("Rebalancear a posicao agora? O bot vai fechar a pool atual e seguir o fluxo normal de reabertura/Kamino, sem parar o processo.");
   if (!ok) return;
-  await fetch("/api/rebalance-position", { method: "POST" });
+  const res = await fetch("/api/rebalance-position", { method: "POST" });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) {
+    window.alert(data?.error ?? data?.reason ?? "Falha ao rebalancear a pool.");
+  } else if (data?.status) {
+    applyStatusSnapshot(data.status);
+  }
   updateUI();
 });
+
+if (closeStopBtn) {
+  closeStopBtn.addEventListener("click", async () => {
+    const ok = window.confirm("Fechar a posicao atual e parar essa pool? O bot nao vai reabrir automaticamente depois do fechamento.");
+    if (!ok) return;
+    const res = await fetch("/api/close-and-stop", { method: "POST" });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) {
+      window.alert(data?.error ?? data?.reason ?? "Falha ao fechar e parar a pool.");
+    } else if (data?.status) {
+      applyStatusSnapshot(data.status);
+    }
+    updateUI();
+  });
+}
 
 if (addLiquidityBtn) {
   addLiquidityBtn.addEventListener("click", async () => {
@@ -1873,25 +1978,20 @@ if (kaminoCloseTopBtn) {
 
 if (kaminoTestTokenSelect) {
   kaminoTestTokenSelect.addEventListener("change", () => {
-    syncKaminoTestMint(getTokenInfo(cachedConfig));
+    syncKaminoTestMint(getCurrentTokenInfo());
   });
 }
 
 if (kaminoTestBtn) {
   kaminoTestBtn.addEventListener("click", async () => {
-    const info = getTokenInfo(cachedConfig);
-    const choice = kaminoTestTokenSelect instanceof HTMLSelectElement
-      ? kaminoTestTokenSelect.value
-      : "manual";
-    const mint =
-      choice === "tokenA" ? info?.tokenAMint
-        : choice === "tokenB" ? info?.tokenBMint
-          : (kaminoTestMintInput?.value ?? "").trim();
+    const info = getCurrentTokenInfo();
+    const resolved = resolveKaminoTestCollateral(info);
+    const mint = resolved.mint;
     const amountRaw = kaminoTestAmountInput?.value ?? "";
     const amount = Number(amountRaw);
 
     if (!mint) {
-      setKaminoTestResult("Selecione um token ou informe o mint.", true);
+      setKaminoTestResult(resolved.error ?? "Selecione um colateral valido.", true);
       return;
     }
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -2482,7 +2582,28 @@ async function handlePoolAction(action, id) {
   if (action === "close") {
     const ok = window.confirm("Rebalancear a posicao dessa pool? O bot vai fechar a pool atual e seguir o fluxo normal de reabertura/Kamino, sem parar o processo.");
     if (!ok) return;
-    await fetch(`/api/pools/${id}/rebalance`, { method: "POST" });
+    const res = await fetch(`/api/pools/${id}/rebalance`, { method: "POST" });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) {
+      window.alert(data?.error ?? "Falha ao rebalancear a pool.");
+    }
+    updateUI();
+    return;
+  }
+
+  if (action === "close-stop") {
+    const ok = window.confirm("Fechar a posicao dessa pool e parar o bot nela? Ela nao sera reaberta automaticamente depois do fechamento.");
+    if (!ok) return;
+    const res = await fetch(`/api/pools/${id}/close-and-stop`, { method: "POST" });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) {
+      window.alert(data?.error ?? "Falha ao fechar e parar a pool.");
+    } else if (data?.status) {
+      updateCachedPoolRunning(id, Boolean(data.status.running));
+      if (cachedConfig?.selectedPoolId === id && cachedStatus) {
+        cachedStatus = { ...cachedStatus, running: Boolean(data.status.running) };
+      }
+    }
     updateUI();
     return;
   }

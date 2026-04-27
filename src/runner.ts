@@ -224,6 +224,7 @@ export class BotRunner {
   private pendingCloseMode: "manual" = "manual";
   private pendingKaminoClose = false;
   private pendingManualRebalance = false;
+  private pendingStopAfterClose = false;
   private rateLimitUntil: number | null = null;
   private pendingCloseRequestedAt: string | null = null;
   private pendingManualRebalanceRequestedAt: string | null = null;
@@ -266,6 +267,7 @@ export class BotRunner {
 
   stop(): void {
     this.running = false;
+    this.pendingStopAfterClose = false;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -284,6 +286,19 @@ export class BotRunner {
       return this.getStatus();
     }
     return this.performClose("manual");
+  }
+
+  async closePositionAndStopNow(): Promise<RunnerStatus> {
+    this.bot.suppressKaminoAutoClose();
+    this.pendingStopAfterClose = true;
+    if (this.inFlight) {
+      this.pendingClose = true;
+      this.pendingCloseMode = "manual";
+      this.pendingCloseRequestedAt = new Date().toISOString();
+      logger.info({ pendingCloseRequestedAt: this.pendingCloseRequestedAt }, "close-and-stop requested during tick; pending");
+      return this.getStatus();
+    }
+    return this.performClose("manual", { stopAfterClose: true });
   }
 
   async rebalancePositionNow(): Promise<RunnerStatus> {
@@ -509,7 +524,7 @@ export class BotRunner {
   }
 
   isBusy(): boolean {
-    return this.inFlight || this.pendingClose || this.pendingManualRebalance;
+    return this.inFlight || this.pendingClose || this.pendingManualRebalance || this.pendingStopAfterClose;
   }
 
   isAutoAddEnabled(): boolean {
@@ -1326,19 +1341,20 @@ export class BotRunner {
     return this.getStatus();
   }
 
-  private async performClose(mode: "manual"): Promise<RunnerStatus> {
+  private async performClose(mode: "manual", options?: { stopAfterClose?: boolean }): Promise<RunnerStatus> {
     if (this.inFlight) {
       return this.getStatus();
     }
     this.inFlight = true;
     const wasRunning = this.running;
-    let closed = false;
+    const stopAfterClose = Boolean(options?.stopAfterClose || this.pendingStopAfterClose);
+    let closeFinished = false;
     let status: BotStatus | null = null;
     let hedgeClose: HedgeCloseResult | null = null;
     try {
       status = await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
-      closed = status.lastAction === "close-position";
-      if (closed) {
+      closeFinished = status.lastAction === "close-position" || status.lastAction === "close-no-position";
+      if (status.lastAction === "close-position") {
         const expectedMint = status.eventPositionMint ?? status.positionMint ?? null;
         hedgeClose = await this.closeHedgeForPosition(expectedMint, status, "Hedge fechado junto da pool");
         this.lastHedgeClose = hedgeClose;
@@ -1351,9 +1367,15 @@ export class BotRunner {
     } finally {
       this.inFlight = false;
     }
-    if (closed) {
+    if (stopAfterClose && closeFinished) {
       this.pendingClose = false;
       this.pendingCloseRequestedAt = null;
+      this.pendingStopAfterClose = false;
+      this.stop();
+    } else if (closeFinished) {
+      this.pendingClose = false;
+      this.pendingCloseRequestedAt = null;
+      this.pendingStopAfterClose = false;
     } else if (wasRunning) {
       this.pendingClose = true;
       this.pendingCloseMode = mode;
@@ -1363,6 +1385,7 @@ export class BotRunner {
     } else {
       this.pendingClose = false;
       this.pendingCloseRequestedAt = null;
+      this.pendingStopAfterClose = false;
     }
     return this.getStatus();
   }

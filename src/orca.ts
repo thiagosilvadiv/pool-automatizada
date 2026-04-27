@@ -6823,6 +6823,7 @@ export class OrcaBot {
         }
         if (repayAttempt.error && !repayAttempt.retryable) {
           const msgLower = repayAttempt.error.toLowerCase();
+          let handledRepayAttemptError = false;
           if (this.isKaminoQuoteError(repayAttempt.error) || msgLower.includes("jupiter")) {
             logger.warn(
               { err: repayAttempt.error },
@@ -6844,12 +6845,14 @@ export class OrcaBot {
               );
               debtAmount = Math.max(0, debtAmount - repayAmount);
               stableBalance = await this.getWalletTokenBalance(stable.mint);
+              handledRepayAttemptError = true;
             } else {
               throw new Error(repayAttempt.error);
             }
           }
           // Se for tx muito grande, seguimos para fallback manual (withdraw+swap) em vez de abortar.
           if (
+            !handledRepayAttemptError &&
             !msgLower.includes("too large") &&
             !msgLower.includes("-32602") &&
             !msgLower.includes("error #-32602")

@@ -169,4 +169,30 @@ describe("runner auto-add after kamino close", () => {
     expect(status.running).toBe(true);
     expect((runner as any).running).toBe(true);
   });
+
+  it("closes the liquidity position and stops the runner on close-and-stop", async () => {
+    const { runner, bot } = createRunner();
+    (runner as any).running = true;
+
+    const status = await runner.closePositionAndStopNow();
+
+    expect(bot.suppressKaminoAutoClose).toHaveBeenCalled();
+    expect(bot.closeActivePosition).toHaveBeenCalled();
+    expect(status.running).toBe(false);
+    expect((runner as any).running).toBe(false);
+  });
+
+  it("stops on close-and-stop when there is no active position", async () => {
+    const { runner, bot } = createRunner();
+    (runner as any).running = true;
+    bot.closeActivePosition.mockResolvedValueOnce(createStatus({
+      lastAction: "close-no-position",
+      positionMint: null
+    }));
+
+    const status = await runner.closePositionAndStopNow();
+
+    expect(status.running).toBe(false);
+    expect((runner as any).pendingClose).toBe(false);
+  });
 });
