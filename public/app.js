@@ -611,6 +611,23 @@ function setKaminoTestResult(message, isError) {
   }
 }
 
+function normalizeKaminoTestMessage(message) {
+  const text = String(message ?? "").trim();
+  if (!text) return "";
+  const lower = text.toLowerCase();
+  const looksLikeSolanaDecode = lower.includes("decode this error by running")
+    || lower.includes("error #-32002")
+    || lower.includes("transaction simulation failed");
+  const looksLikeLowSol = lower.includes("insufficient lamports")
+    || lower.includes("insufficient%20lamports")
+    || lower.includes("custom program error: 0x1")
+    || lower.includes("insufficient funds");
+  if (looksLikeSolanaDecode && looksLikeLowSol) {
+    return "Saldo SOL insuficiente para concluir a conversao final. Adicione SOL de rede e tente novamente.";
+  }
+  return text;
+}
+
 function formatExitToken(value, info) {
   if (value === "tokenA") return describeToken("tokenA", info);
   if (value === "tokenB") return describeToken("tokenB", info);
@@ -1927,7 +1944,7 @@ closeBtn.addEventListener("click", async () => {
 
 if (closeStopBtn) {
   closeStopBtn.addEventListener("click", async () => {
-    const ok = window.confirm("Fechar a posicao atual e parar essa pool? O bot nao vai reabrir automaticamente depois do fechamento.");
+    const ok = window.confirm("Fechar e parar a pool selecionada? Isso fecha apenas a posicao da pool, sem mexer no hedge e sem fechar o emprestimo Kamino.");
     if (!ok) return;
     const res = await fetch("/api/close-and-stop", { method: "POST" });
     const data = await res.json().catch(() => null);
@@ -2017,16 +2034,17 @@ if (kaminoTestBtn) {
         })
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.ok) {
-        const msg = data?.error ?? data?.reason ?? "Falha ao executar teste Kamino.";
-        setKaminoTestResult(msg, true);
-      } else {
-        const parts = [];
-        if (data.summary) parts.push(String(data.summary));
-        if (data.depositSig) parts.push(`Ultimo deposito: ${data.depositSig}`);
-        if (data.borrowSig) parts.push(`Ultimo emprestimo: ${data.borrowSig}`);
-        setKaminoTestResult(parts.length ? parts.join(" | ") : "Reconstrucao enviada.", false);
+      const isError = !res.ok || !data?.ok;
+      const parts = [];
+      const msg = normalizeKaminoTestMessage(data?.error ?? data?.reason ?? "");
+      if (msg) parts.push(msg);
+      if (data?.summary) parts.push(String(data.summary));
+      if (data?.depositSig) parts.push(`Ultimo deposito: ${data.depositSig}`);
+      if (data?.borrowSig) parts.push(`Ultimo emprestimo: ${data.borrowSig}`);
+      if (!parts.length) {
+        parts.push(isError ? "Falha ao executar teste Kamino." : "Reconstrucao enviada.");
       }
+      setKaminoTestResult(parts.join(" | "), isError);
     } catch (err) {
       setKaminoTestResult(err instanceof Error ? err.message : String(err), true);
     } finally {
@@ -2601,7 +2619,7 @@ async function handlePoolAction(action, id) {
   }
 
   if (action === "close-stop") {
-    const ok = window.confirm("Fechar a posicao dessa pool e parar o bot nela? Ela nao sera reaberta automaticamente depois do fechamento.");
+    const ok = window.confirm("Fechar e parar essa pool? Isso fecha apenas a posicao da pool, sem mexer no hedge e sem fechar o emprestimo Kamino.");
     if (!ok) return;
     const res = await fetch(`/api/pools/${id}/close-and-stop`, { method: "POST" });
     const data = await res.json().catch(() => null);

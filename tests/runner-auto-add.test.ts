@@ -173,11 +173,13 @@ describe("runner auto-add after kamino close", () => {
   it("closes the liquidity position and stops the runner on close-and-stop", async () => {
     const { runner, bot } = createRunner();
     (runner as any).running = true;
+    const closeHedgeSpy = vi.spyOn(runner as any, "closeHedgeForPosition").mockResolvedValue(null);
 
     const status = await runner.closePositionAndStopNow();
 
     expect(bot.suppressKaminoAutoClose).toHaveBeenCalled();
     expect(bot.closeActivePosition).toHaveBeenCalled();
+    expect(closeHedgeSpy).not.toHaveBeenCalled();
     expect(status.running).toBe(false);
     expect((runner as any).running).toBe(false);
   });

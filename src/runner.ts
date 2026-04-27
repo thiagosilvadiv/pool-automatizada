@@ -222,6 +222,7 @@ export class BotRunner {
   private hedgeDecisionByMint = new Map<string, { status: "opened" | "skipped" | "failed"; reason: string | null }>();
   private pendingClose = false;
   private pendingCloseMode: "manual" = "manual";
+  private pendingCloseSkipHedge = false;
   private pendingKaminoClose = false;
   private pendingManualRebalance = false;
   private pendingStopAfterClose = false;
@@ -267,6 +268,7 @@ export class BotRunner {
 
   stop(): void {
     this.running = false;
+    this.pendingCloseSkipHedge = false;
     this.pendingStopAfterClose = false;
     if (this.timer) {
       clearTimeout(this.timer);
@@ -281,11 +283,12 @@ export class BotRunner {
     if (this.inFlight) {
       this.pendingClose = true;
       this.pendingCloseMode = "manual";
+      this.pendingCloseSkipHedge = false;
       this.pendingCloseRequestedAt = new Date().toISOString();
       logger.info({ pendingCloseRequestedAt: this.pendingCloseRequestedAt }, "close requested during tick; pending");
       return this.getStatus();
     }
-    return this.performClose("manual");
+    return this.performClose("manual", { skipHedgeClose: false });
   }
 
   async closePositionAndStopNow(): Promise<RunnerStatus> {
@@ -294,11 +297,12 @@ export class BotRunner {
     if (this.inFlight) {
       this.pendingClose = true;
       this.pendingCloseMode = "manual";
+      this.pendingCloseSkipHedge = true;
       this.pendingCloseRequestedAt = new Date().toISOString();
       logger.info({ pendingCloseRequestedAt: this.pendingCloseRequestedAt }, "close-and-stop requested during tick; pending");
       return this.getStatus();
     }
-    return this.performClose("manual", { stopAfterClose: true });
+    return this.performClose("manual", { stopAfterClose: true, skipHedgeClose: true });
   }
 
   async ensureTokenInfoNow(): Promise<RunnerStatus> {
@@ -1033,7 +1037,7 @@ export class BotRunner {
       return;
     }
     if (this.pendingClose) {
-      await this.performClose(this.pendingCloseMode);
+      await this.performClose(this.pendingCloseMode, { skipHedgeClose: this.pendingCloseSkipHedge });
       return;
     }
     this.inFlight = true;
@@ -1213,7 +1217,7 @@ export class BotRunner {
       if (this.pendingManualRebalance) {
         await this.performManualRebalance();
       } else if (this.pendingClose) {
-        await this.performClose(this.pendingCloseMode);
+        await this.performClose(this.pendingCloseMode, { skipHedgeClose: this.pendingCloseSkipHedge });
       }
     }
   }
@@ -1358,20 +1362,24 @@ export class BotRunner {
     return this.getStatus();
   }
 
-  private async performClose(mode: "manual", options?: { stopAfterClose?: boolean }): Promise<RunnerStatus> {
+  private async performClose(
+    mode: "manual",
+    options?: { stopAfterClose?: boolean; skipHedgeClose?: boolean }
+  ): Promise<RunnerStatus> {
     if (this.inFlight) {
       return this.getStatus();
     }
     this.inFlight = true;
     const wasRunning = this.running;
     const stopAfterClose = Boolean(options?.stopAfterClose || this.pendingStopAfterClose);
+    const skipHedgeClose = Boolean(options?.skipHedgeClose || this.pendingCloseSkipHedge);
     let closeFinished = false;
     let status: BotStatus | null = null;
     let hedgeClose: HedgeCloseResult | null = null;
     try {
       status = await withRetry(() => this.bot.closeActivePosition(), { retries: 2, baseDelayMs: 1000 });
       closeFinished = status.lastAction === "close-position" || status.lastAction === "close-no-position";
-      if (status.lastAction === "close-position") {
+      if (status.lastAction === "close-position" && !skipHedgeClose) {
         const expectedMint = status.eventPositionMint ?? status.positionMint ?? null;
         hedgeClose = await this.closeHedgeForPosition(expectedMint, status, "Hedge fechado junto da pool");
         this.lastHedgeClose = hedgeClose;
@@ -1387,21 +1395,25 @@ export class BotRunner {
     if (stopAfterClose && closeFinished) {
       this.pendingClose = false;
       this.pendingCloseRequestedAt = null;
+      this.pendingCloseSkipHedge = false;
       this.pendingStopAfterClose = false;
       this.stop();
     } else if (closeFinished) {
       this.pendingClose = false;
       this.pendingCloseRequestedAt = null;
+      this.pendingCloseSkipHedge = false;
       this.pendingStopAfterClose = false;
     } else if (wasRunning) {
       this.pendingClose = true;
       this.pendingCloseMode = mode;
+      this.pendingCloseSkipHedge = skipHedgeClose;
       if (!this.pendingCloseRequestedAt) {
         this.pendingCloseRequestedAt = new Date().toISOString();
       }
     } else {
       this.pendingClose = false;
       this.pendingCloseRequestedAt = null;
+      this.pendingCloseSkipHedge = false;
       this.pendingStopAfterClose = false;
     }
     return this.getStatus();

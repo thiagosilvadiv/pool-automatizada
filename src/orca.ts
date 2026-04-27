@@ -1972,6 +1972,8 @@ export class OrcaBot {
                 message.includes("insufficient lamports")
                 || message.includes("custom program error: 0x1")
                 || message.includes("insufficient funds")
+                || message.includes("error #-32002")
+                || message.includes("transaction simulation failed")
               );
             if (!isNativeLamportsError) {
               throw err;
@@ -2024,14 +2026,32 @@ export class OrcaBot {
         if (!isValidU64(amountStableRaw) || amountStableRaw <= 0n) {
           throw new Error("Borrow calculado fora do range suportado.");
         }
-        await this.swapStableToToken({
-          stableMint: stableInfo.mint,
-          stableDecimals: stableInfo.decimals,
-          outputMint: mint,
-          outputDecimals: targetDecimals,
-          amountStableRaw,
-          label: "kamino-manual-target"
-        });
+        try {
+          await this.swapStableToToken({
+            stableMint: stableInfo.mint,
+            stableDecimals: stableInfo.decimals,
+            outputMint: mint,
+            outputDecimals: targetDecimals,
+            amountStableRaw,
+            label: "kamino-manual-target"
+          });
+        } catch (err) {
+          const message = stringifyError(err).toLowerCase();
+          const isNativeSwapLamportsError = mint === NATIVE_MINT.toBase58()
+            && (
+              message.includes("insufficient lamports")
+              || message.includes("custom program error: 0x1")
+              || message.includes("insufficient funds")
+              || message.includes("error #-32002")
+              || message.includes("transaction simulation failed")
+            );
+          if (!isNativeSwapLamportsError) {
+            throw err;
+          }
+          throw new Error(
+            "Saldo SOL insuficiente para converter o ultimo borrow em colateral. Adicione SOL de rede e tente novamente."
+          );
+        }
         swapCount += 1;
       }
 
