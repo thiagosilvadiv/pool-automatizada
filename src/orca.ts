@@ -38,7 +38,11 @@ import {
 } from "./kamino-close-policy.js";
 import type { KaminoCloseMode, KaminoCloseTrigger } from "./kamino-close-policy.js";
 import { decideRecoveredKaminoResume } from "./kamino-reopen-policy.js";
-import { shouldBootstrapAutoAddFromWallet } from "./auto-add-policy.js";
+import {
+  getAutoAddMinUsdTolerance,
+  isAutoAddBelowMinUsd,
+  shouldBootstrapAutoAddFromWallet
+} from "./auto-add-policy.js";
 import { computeKaminoTargetToleranceAmount, computeRiskAwareRepayChunk } from "./kamino-math.js";
 
 const whirlpools = whirlpoolsSdk as any;
@@ -2268,15 +2272,22 @@ export class OrcaBot {
         );
         if (currentPositionUsd != null) {
           const remainingBudgetUsd = Math.max(0, this.config.budgetUsd - currentPositionUsd);
-          if (remainingBudgetUsd < autoAddMinUsd) {
+          if (isAutoAddBelowMinUsd({ plannedAddUsd: remainingBudgetUsd, autoAddMinUsd })) {
+            const autoAddMinUsdTolerance = getAutoAddMinUsdTolerance(autoAddMinUsd);
             const message = `auto-add ignorado: restante abaixo do minimo configurado (${remainingBudgetUsd.toFixed(2)} USD < ${autoAddMinUsd.toFixed(2)} USD)`;
             logger.info(
-              { remainingBudgetUsd, autoAddMinUsd, budgetUsd: this.config.budgetUsd, currentPositionUsd },
+              { remainingBudgetUsd, autoAddMinUsd, autoAddMinUsdTolerance, budgetUsd: this.config.budgetUsd, currentPositionUsd },
               message
             );
             this.lastStatus.lastError = null;
             this.lastStatus.lastAction = "no-action";
             return { ok: false, reason: message };
+          }
+          if (remainingBudgetUsd < autoAddMinUsd) {
+            logger.info(
+              { remainingBudgetUsd, autoAddMinUsd, autoAddMinUsdTolerance: getAutoAddMinUsdTolerance(autoAddMinUsd) },
+              "auto-add: restante abaixo do minimo configurado, seguindo por tolerancia"
+            );
           }
         }
       } catch (err) {
@@ -2360,12 +2371,19 @@ export class OrcaBot {
     }
 
     if (autoAddMinUsd > 0) {
-      if (plannedAddUsd != null && plannedAddUsd < autoAddMinUsd) {
+      if (plannedAddUsd != null && isAutoAddBelowMinUsd({ plannedAddUsd, autoAddMinUsd })) {
+        const autoAddMinUsdTolerance = getAutoAddMinUsdTolerance(autoAddMinUsd);
         const message = `auto-add ignorado: aporte abaixo do minimo configurado (${plannedAddUsd.toFixed(2)} USD < ${autoAddMinUsd.toFixed(2)} USD)`;
-        logger.info({ plannedAddUsd, autoAddMinUsd, usableA, usableB }, message);
+        logger.info({ plannedAddUsd, autoAddMinUsd, autoAddMinUsdTolerance, usableA, usableB }, message);
         this.lastStatus.lastError = null;
         this.lastStatus.lastAction = "no-action";
         return { ok: false, reason: message };
+      }
+      if (plannedAddUsd != null && plannedAddUsd < autoAddMinUsd) {
+        logger.info(
+          { plannedAddUsd, autoAddMinUsd, autoAddMinUsdTolerance: getAutoAddMinUsdTolerance(autoAddMinUsd), usableA, usableB },
+          "auto-add: aporte abaixo do minimo configurado, seguindo por tolerancia"
+        );
       }
       if (plannedAddUsd == null) {
         logger.warn(
