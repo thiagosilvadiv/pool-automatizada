@@ -4,7 +4,6 @@ import { PublicKey, Transaction } from "@solana/web3.js";
 import { createCloseAccountInstruction, TOKEN_PROGRAM_ID, NATIVE_MINT } from "@solana/spl-token";
 
 import { Config } from "./config.js";
-import { createKaminoClient } from "./kamino-client.js";
 import { OrcaBot } from "./orca.js";
 import { BotRunner } from "./runner.js";
 import type { HistoryEvent } from "./runner.js";
@@ -1014,6 +1013,14 @@ export class PoolManager {
     };
   }
 
+  private async createKaminoClient(marketAddress: string) {
+    const { createKaminoClient } = await import("./kamino-client.js");
+    return createKaminoClient(
+      { connection: this.connection, wallet: this.wallet, config: this.baseConfig },
+      marketAddress
+    );
+  }
+
   private async scanKaminoLoans(): Promise<void> {
     if (this.kaminoScanInFlight) {
       return;
@@ -1042,10 +1049,7 @@ export class PoolManager {
       for (const marketAddress of markets) {
         const existing = existingByMarket.get(marketAddress);
         try {
-          const kamino = await createKaminoClient(
-            { connection: this.connection, wallet: this.wallet, config: this.baseConfig },
-            marketAddress
-          );
+          const kamino = await this.createKaminoClient(marketAddress);
           const position = await kamino.getPositionState();
           const hasDebt = (position?.debtAmount ?? 0) > 0;
           const hasCollateral = (position?.collateralAmount ?? 0) > 0;

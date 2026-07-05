@@ -1,4 +1,4 @@
-﻿import { Connection, LAMPORTS_PER_SOL, PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
+import { Connection, LAMPORTS_PER_SOL, PublicKey, Transaction, VersionedTransaction } from "@solana/web3.js";
 import {
   getAssociatedTokenAddressSync,
   getMint,
@@ -14,7 +14,6 @@ import * as whirlpoolsSdk from "@orca-so/whirlpools-sdk";
 import * as commonSdk from "@orca-so/common-sdk";
 
 import { Config } from "./config.js";
-import { createKaminoClient } from "./kamino-client.js";
 import type { KaminoClient } from "./kamino-client.js";
 import { releaseKaminoLock, tryAcquireKaminoLock } from "./kamino-lock.js";
 import { logger, stringifyError } from "./logger.js";
@@ -28,7 +27,9 @@ import type { KaminoCollateralEntry, KaminoCycleState } from "./kamino-types.js"
 import { KaminoHealthMonitor } from "./kamino-health.js";
 import { notifyKaminoFundsNeeded } from "./evolution-notify.js";
 import type { KaminoPositionState, KaminoWithdrawResult } from "./kamino-client.js";
-import { isObligationBorrowsEmptyError, isObligationDepositsEmptyError } from "./kamino-client.js";
+import { isObligationBorrowsEmptyError, isObligationDepositsEmptyError } from "./kamino-utils.js";
+import { performSplitRepayWithCollateralHelper } from "./kamino-split-repay.js";
+export { performSplitRepayWithCollateralHelper } from "./kamino-split-repay.js";
 import { BalanceCoordinator } from "./balance-coordinator.js";
 import {
   computeKaminoPnlNoFeesUsd,
@@ -141,177 +142,6 @@ export function clampNativeFundingBalances(input: {
     clampedA: input.isTokenASol && nextTokenA + 1e-12 < tokenA,
     clampedB: input.isTokenBSol && nextTokenB + 1e-12 < tokenB
   };
-}
-
-export async function performSplitRepayWithCollateralHelper(params: {
-  kamino: {
-    withdraw(input: { mint: string; amount: number }): Promise<KaminoWithdrawResult>;
-    repay(input: { mint: string; amount: number }): Promise<string>;
-  };
-  swapTokenToStable: (input: {
-    inputMint: string;
-    inputDecimals: number;
-    amountUi: number;
-    stableMint: string;
-    stableDecimals: number;
-    label?: string;
-  }) => Promise<number | null>;
-  collMint: string;
-  collDecimals: number;
-  debtMint: string;
-  debtDecimals: number;
-  repayUi: number;
-  capacityUi: number;
-  priceCollToDebt: number;
-  minWithdraw: number;
-  logger: (payload: any, msg: string, level?: "info" | "warn" | "error") => void;
-  isRetryable: (msg: string) => boolean;
-  onWithdrawSuccess?: (result: KaminoWithdrawResult) => void;
-  onRepaySuccess?: (signature: string, amount: number, mint: string) => void;
-}): Promise<{ performed: boolean; retryable?: boolean; error?: string; debtRemaining?: number }> {
-  const {
-    kamino,
-    swapTokenToStable,
-    collMint,
-    collDecimals,
-    debtMint,
-    debtDecimals,
-    repayUi,
-    capacityUi,
-    priceCollToDebt,
-    minWithdraw,
-    logger,
-    isRetryable,
-    onWithdrawSuccess,
-    onRepaySuccess
-  } = params;
-  const runWithRetry = async <T>(fn: () => Promise<T>): Promise<T> => {
-    let lastErr: any;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        return await fn();
-      } catch (err) {
-        lastErr = err;
-        const msg = stringifyError(err);
-        if (isRetryable(msg) && attempt === 0) {
-          // Blockhash expirado precisa de ~15s; rate-limit precisa de ~3s.
-          const waitMs = msg.includes("-32002") ? 15000 : 3000;
-          await sleep(waitMs);
-          continue;
-        }
-        throw err;
-      }
-    }
-    throw lastErr;
-  };
-  if (!Number.isFinite(priceCollToDebt) || priceCollToDebt <= 0) {
-    const error = "preco do colateral indisponivel para split repay";
-    return { performed: false, error };
-  }
-  let collNeeded = Math.max(minWithdraw, Math.min(capacityUi, repayUi / priceCollToDebt * 1.02));
-  let withdrawAttempts = 0;
-  const maxWithdrawAttempts = 3;
-  while (withdrawAttempts < maxWithdrawAttempts) {
-    if (collNeeded < minWithdraw || collNeeded > capacityUi + 1e-9) {
-      const error = `capacidade insuficiente para split (need ${collNeeded.toFixed(8)}, cap ${capacityUi.toFixed(8)})`;
-      return { performed: false, error };
-    }
-    try {
-      const withdrawResult = await runWithRetry(() => kamino.withdraw({ mint: collMint, amount: collNeeded }));
-      const actualAmount = Number(withdrawResult.actualAmount ?? collNeeded);
-      logger(
-        { sig: withdrawResult.signature, amount: actualAmount, mint: collMint },
-        "split-repay withdraw",
-        "info"
-      );
-      if (onWithdrawSuccess) {
-        onWithdrawSuccess(withdrawResult);
-      }
-      collNeeded = actualAmount;
-      break;
-    } catch (err) {
-      withdrawAttempts += 1;
-      const message = stringifyError(err);
-      const lower = message.toLowerCase();
-      if (
-        lower.includes("withdrawtoolarge") ||
-        lower.includes("withdraw too large") ||
-        lower.includes("6011") ||
-        lower.includes("0x177b")
-      ) {
-        let maxWithdrawFromError: number | null = null;
-        try {
-          const decoded = decodeURIComponent(message);
-          const matchMax = decoded.match(/max_withdraw_value[=\s:]+([0-9]+(?:\.[0-9]+)?)/i);
-          if (matchMax) {
-            const parsed = parseFloat(matchMax[1]);
-            if (Number.isFinite(parsed) && parsed > 0) {
-              maxWithdrawFromError = parsed;
-            }
-          }
-        } catch {
-          // ignore
-        }
-        if (maxWithdrawFromError != null) {
-          const priceFactor = priceCollToDebt > 0 ? priceCollToDebt : 1;
-          collNeeded = Math.max(minWithdraw, (maxWithdrawFromError * 0.85) / priceFactor);
-        } else {
-          collNeeded = Math.max(minWithdraw, collNeeded / 2);
-        }
-        if (withdrawAttempts >= maxWithdrawAttempts) {
-          return { performed: false, error: message };
-        }
-        continue;
-      }
-      if (isRetryable(message)) {
-        return { performed: false, retryable: true, error: message };
-      }
-      return { performed: false, error: message };
-    }
-  }
-  let stableOut = 0;
-  try {
-    const swapped = await runWithRetry(() =>
-      swapTokenToStable({
-        inputMint: collMint,
-        inputDecimals: collDecimals,
-        amountUi: collNeeded,
-        stableMint: debtMint,
-        stableDecimals: debtDecimals,
-        label: "split-repay-coll->stable"
-      })
-    );
-    stableOut = swapped ?? 0;
-    if (stableOut <= 0) {
-      return { performed: false, error: "swap retornou valor zero" };
-    }
-    logger({ in: collNeeded, out: stableOut, collMint, debtMint }, "split-repay swap", "info");
-  } catch (err) {
-    const message = stringifyError(err);
-    if (isRetryable(message)) {
-      return { performed: false, retryable: true, error: message };
-    }
-    return { performed: false, error: message };
-  }
-  const repayAmount = Math.min(repayUi, stableOut);
-  if (repayAmount <= 0) {
-    return { performed: false, error: "valor de repay <= 0 apos swap" };
-  }
-  try {
-    const repaySig = await runWithRetry(() => kamino.repay({ mint: debtMint, amount: repayAmount }));
-    logger({ sig: repaySig, amount: repayAmount, mint: debtMint }, "split-repay repay", "info");
-    if (onRepaySuccess) {
-      onRepaySuccess(repaySig, repayAmount, debtMint);
-    }
-    const remaining = Math.max(0, repayUi - repayAmount);
-    return { performed: true, debtRemaining: remaining };
-  } catch (err) {
-    const message = stringifyError(err);
-    if (isRetryable(message)) {
-      return { performed: false, retryable: true, error: message };
-    }
-    return { performed: false, error: message };
-  }
 }
 
 export type BotContext = {
@@ -4502,15 +4332,7 @@ export class OrcaBot {
 
     for (const market of seeds) {
       try {
-        const client = await createKaminoClient(
-          {
-            connection: this.connection,
-            wallet: this.wallet,
-            config: this.config,
-            onRateLimit: (source, err) => this.noteRateLimit(source, undefined)
-          },
-          market
-        );
+        const client = await this.createKaminoClient(market);
         const compatibility = await this.isMarketCompatible(client, tokenMints, debtMint);
         if (compatibility.ok) {
           result.set(market, client);
@@ -4528,15 +4350,7 @@ export class OrcaBot {
 
     if (!result.size && !result.has(DEFAULT_KAMINO_MARKET)) {
       try {
-        const client = await createKaminoClient(
-          {
-            connection: this.connection,
-            wallet: this.wallet,
-            config: this.config,
-            onRateLimit: (source, err) => this.noteRateLimit(source, undefined)
-          },
-          DEFAULT_KAMINO_MARKET
-        );
+        const client = await this.createKaminoClient(DEFAULT_KAMINO_MARKET);
         result.set(DEFAULT_KAMINO_MARKET, client);
       } catch (err) {
         logger.warn({ err }, "falha ao criar fallback Kamino client");
@@ -5134,6 +4948,19 @@ export class OrcaBot {
     );
   }
 
+  private async createKaminoClient(marketAddressOverride?: string | null): Promise<KaminoClient> {
+    const { createKaminoClient } = await import("./kamino-client.js");
+    return createKaminoClient(
+      {
+        connection: this.connection,
+        wallet: this.wallet,
+        config: this.config,
+        onRateLimit: (source, err) => this.noteRateLimit(source, undefined)
+      },
+      marketAddressOverride
+    );
+  }
+
   private async ensureKaminoClient(marketAddressOverride?: string | null): Promise<KaminoClient> {
     const override = typeof marketAddressOverride === "string" && marketAddressOverride.trim()
       ? marketAddressOverride.trim()
@@ -5141,15 +4968,7 @@ export class OrcaBot {
     const desiredMarket = (override ?? this.getConfiguredKaminoMarketAddress())?.trim() ?? null;
     const currentMarket = this.kaminoClientMarket?.trim() ?? null;
     if (!this.kaminoClient || (desiredMarket && currentMarket !== desiredMarket)) {
-      this.kaminoClient = await createKaminoClient(
-        {
-          connection: this.connection,
-          wallet: this.wallet,
-          config: this.config,
-          onRateLimit: (source, err) => this.noteRateLimit(source, undefined)
-        },
-        desiredMarket
-      );
+      this.kaminoClient = await this.createKaminoClient(desiredMarket);
       this.kaminoClientMarket = desiredMarket ?? null;
     }
     return this.kaminoClient;

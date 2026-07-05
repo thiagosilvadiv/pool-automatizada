@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { performSplitRepayWithCollateralHelper } from "../src/orca.js";
+import { performSplitRepayWithCollateralHelper } from "../src/kamino-split-repay.js";
 
 const mkLogger = () => vi.fn();
 const mkKamino = () => {

@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import Decimal from "decimal.js";
 
-import { applyWithdrawBuffer, lamportsToUi, isBlockhashError } from "../src/kamino-client.js";
-import { computeRiskAwareRepayChunk } from "../src/orca.js";
+import { applyWithdrawBuffer, lamportsToUi, isBlockhashError } from "../src/kamino-utils.js";
+import { computeRiskAwareRepayChunk } from "../src/kamino-math.js";
 
 describe("kamino withdraw capacity helpers", () => {
   it("drops capacity to zero when at borrow limit", () => {

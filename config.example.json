@@ -1,0 +1,23 @@
+{
+  "network": "mainnet-beta",
+  "rpcUrl": "https://seu-rpc-dedicado",
+  "whirlpoolAddress": "HktfL7iwGKT5QHjywQkcDnZXScoh811k7akrMZJkCcEF",
+  "rangeWidthPct": 1,
+  "rangeExitBiasPct": 0,
+  "preferredExitToken": null,
+  "preferredExitDirection": "down",
+  "slippageBps": 50,
+  "pollIntervalMs": 30000,
+  "outOfRangeConfirmSec": 0,
+  "rebalanceCooldownSec": 300,
+  "dryRun": true,
+  "minSolBalance": 0.02,
+  "maxTokenA": null,
+  "maxTokenB": null,
+  "rebalanceSwapPct": 1,
+  "budgetUsd": null,
+  "kaminoRebalanceEnabled": false,
+  "autoAddLiquidityEnabled": false,
+  "hedgeEnabled": false,
+  "trendEnabled": false
+}

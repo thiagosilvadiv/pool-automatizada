@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRpcUrlList } from "../src/kamino-client.js";
+import { buildRpcUrlList } from "../src/kamino-utils.js";
 
 describe("buildRpcUrlList", () => {
   it("deduplicates and preserves order", () => {
