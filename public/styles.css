@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   --bg: #0f1419;
   --panel: #151b22;
   --card: #1b2430;
@@ -393,6 +393,24 @@ button.danger:not(.ghost):hover {
 }
 
 .chart-empty.hidden {
+  display: none;
+}
+.chart-notice {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(246, 195, 67, 0.35);
+  border-radius: 10px;
+  background: rgba(15, 20, 25, 0.88);
+  color: #f6c343;
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.chart-notice.hidden {
   display: none;
 }
 
@@ -1351,4 +1369,3 @@ tbody tr:nth-child(even) {
     height: 420px;
   }
 }
-

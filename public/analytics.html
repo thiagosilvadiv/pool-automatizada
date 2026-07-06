@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="pt-br">
   <head>
     <meta charset="UTF-8" />
@@ -48,9 +48,9 @@
           <label><input type="checkbox" data-col="feesUsd" checked /> Taxas (USD)</label>
           <label><input type="checkbox" data-col="txFeeUsd" checked /> Taxa TX (USD)</label>
           <label><input type="checkbox" data-col="exitUsd" checked /> Saída (USD)</label>
-          <label><input type="checkbox" data-col="pnlUsd" checked /> PnL líquido (USD)</label>
-          <label><input type="checkbox" data-col="pnlTotal" checked /> PnL total (USD)</label>
-          <label><input type="checkbox" data-col="pnlTotalNet" checked /> PnL total sem taxas (USD)</label>
+          <label><input type="checkbox" data-col="pnlUsd" checked /> PnL realizado (USD)</label>
+          <label><input type="checkbox" data-col="pnlTotal" checked /> PnL realizado total (USD)</label>
+          <label><input type="checkbox" data-col="pnlTotalNet" checked /> PnL total sem taxas coletadas (USD)</label>
           <div class="history-limit">
             <label for="analyticsRowLimit">Linhas</label>
             <select id="analyticsRowLimit">
@@ -86,7 +86,7 @@
             <div class="kv"><span>Δ PnL (SOL)</span><span id="summaryPnlSol">-</span></div>
             <div class="kv"><span>Δ PnL (USD)</span><span id="summaryPnlUsd">-</span></div>
             <div class="kv"><span>PnL líquido (SOL)</span><span id="summaryNetSol">-</span></div>
-            <div class="kv"><span>PnL líquido (USD)</span><span id="summaryNetUsd">-</span></div>
+            <div class="kv"><span>PnL realizado (USD)</span><span id="summaryNetUsd">-</span></div>
           </div>
           <div class="card">
             <h3>Entradas/Saídas</h3>
@@ -128,33 +128,33 @@
               <input type="checkbox" data-series="feesCum" checked />
               <span>Taxas acumuladas</span>
             </label>
-            <label class="metric-toggle is-checked">
-              <input type="checkbox" data-series="feeYieldPct" checked />
+            <label class="metric-toggle">
+              <input type="checkbox" data-series="feeYieldPct" />
               <span>Rendimento da taxa (%)</span>
             </label>
             <label class="metric-toggle is-checked">
               <input type="checkbox" data-series="pnl" checked />
-              <span>PnL</span>
+              <span>PnL realizado</span>
             </label>
             <label class="metric-toggle is-checked">
               <input type="checkbox" data-series="pnlNet" checked />
-              <span>PnL sem taxas</span>
+              <span>PnL sem taxas coletadas</span>
             </label>
-            <label class="metric-toggle is-checked">
-              <input type="checkbox" data-series="pnlTotal" checked />
-              <span>PnL total (USD)</span>
+            <label class="metric-toggle">
+              <input type="checkbox" data-series="pnlTotal" />
+              <span>PnL realizado total</span>
             </label>
-            <label class="metric-toggle is-checked">
-              <input type="checkbox" data-series="pnlTotalNet" checked />
-              <span>PnL total sem taxas (USD)</span>
+            <label class="metric-toggle">
+              <input type="checkbox" data-series="pnlTotalNet" />
+              <span>PnL total sem taxas coletadas</span>
             </label>
             <label class="metric-toggle is-checked">
               <input type="checkbox" data-series="pnlCum" checked />
-              <span>PnL acumulado</span>
+              <span>PnL realizado acumulado</span>
             </label>
             <label class="metric-toggle is-checked">
               <input type="checkbox" data-series="pnlNetCum" checked />
-              <span>PnL sem taxas acumulado</span>
+              <span>PnL sem taxas coletadas acum.</span>
             </label>
           </div>
           <details class="metric-help">
@@ -162,13 +162,13 @@
             <div class="metric-help-list">
               <p><strong>Taxas:</strong> taxas coletadas no período.</p>
               <p><strong>Taxas acumuladas:</strong> soma das taxas ao longo do período.</p>
-              <p><strong>Rendimento da taxa (%):</strong> taxa média diária sobre o capital de entrada.</p>
-              <p><strong>PnL:</strong> PnL da pool considerando taxas e TX.</p>
-              <p><strong>PnL sem taxas:</strong> PnL da pool sem descontar taxas.</p>
-              <p><strong>PnL total (USD):</strong> PnL da pool (com taxas) no período.</p>
-              <p><strong>PnL total sem taxas (USD):</strong> PnL da pool sem taxas no período.</p>
-              <p><strong>PnL acumulado:</strong> soma do PnL da pool ao longo do período.</p>
-              <p><strong>PnL sem taxas acumulado:</strong> soma do PnL da pool sem taxas no período.</p>
+              <p><strong>Rendimento da taxa (%):</strong> taxas coletadas divididas pela soma das entradas no periodo.</p>
+              <p><strong>PnL realizado:</strong> resultado gravado no fechamento da pool ou do emprestimo.</p>
+              <p><strong>PnL sem taxas coletadas:</strong> PnL realizado descontando as taxas coletadas da posicao.</p>
+              <p><strong>PnL realizado total:</strong> mesma base de PnL realizado, mantida para comparacao historica.</p>
+              <p><strong>PnL total sem taxas coletadas:</strong> PnL realizado total descontando taxas coletadas.</p>
+              <p><strong>PnL realizado acumulado:</strong> soma do PnL realizado ao longo do periodo.</p>
+              <p><strong>PnL sem taxas coletadas acumulado:</strong> soma do PnL realizado sem taxas coletadas.</p>
             </div>
           </details>
         </div>
@@ -176,17 +176,18 @@
           <canvas id="perfCanvas" class="performance-canvas"></canvas>
           <div id="perfEmpty" class="chart-empty hidden">Sem dados no periodo</div>
           <div id="perfTooltip" class="performance-tooltip hidden"></div>
+          <div id="perfChartNotice" class="chart-notice hidden"></div>
         </div>
         <div class="performance-legend">
           <span><i class="legend-swatch fees"></i> Taxas</span>
           <span><i class="legend-swatch feesCum"></i> Taxas acumuladas</span>
           <span><i class="legend-swatch feeYieldPct"></i> Rendimento da taxa (%)</span>
-          <span><i class="legend-swatch pnl"></i> PnL</span>
-          <span><i class="legend-swatch pnlNet"></i> PnL sem taxas</span>
-          <span><i class="legend-swatch pnlTotal"></i> PnL total (USD)</span>
-          <span><i class="legend-swatch pnlTotalNet"></i> PnL total sem taxas (USD)</span>
-          <span><i class="legend-swatch pnlCum"></i> PnL acumulado</span>
-          <span><i class="legend-swatch pnlNetCum"></i> PnL sem taxas acumulado</span>
+          <span><i class="legend-swatch pnl"></i> PnL realizado</span>
+          <span><i class="legend-swatch pnlNet"></i> PnL sem taxas coletadas</span>
+          <span><i class="legend-swatch pnlTotal"></i> PnL realizado total (USD)</span>
+          <span><i class="legend-swatch pnlTotalNet"></i> PnL total sem taxas coletadas (USD)</span>
+          <span><i class="legend-swatch pnlCum"></i> PnL realizado acumulado</span>
+          <span><i class="legend-swatch pnlNetCum"></i> PnL sem taxas coletadas acum.</span>
         </div>
         <div class="performance-stats">
           <div class="stat-card">
@@ -218,7 +219,7 @@
             </div>
           </div>
         </div>
-        <p class="hint">Grafico usa eventos de fechamento da pool e do emprestimo (PnL realizado).</p>
+        <p class="hint">Grafico usa PnL realizado em eventos de fechamento da pool e do emprestimo. Metricas em % usam escala propria e aparecem sozinhas.</p>
       </section>
 
       <section class="panel">
@@ -240,9 +241,9 @@
                 <th data-col="feesUsd">Taxas (USD)</th>
                 <th data-col="txFeeUsd">Taxa TX (USD)</th>
                 <th data-col="exitUsd">Saída (USD)</th>
-                <th data-col="pnlUsd">PnL líquido (USD)</th>
-          <th data-col="pnlTotal">PnL total (USD)</th>
-          <th data-col="pnlTotalNet">PnL total sem taxas (USD)</th>
+                <th data-col="pnlUsd">PnL realizado (USD)</th>
+          <th data-col="pnlTotal">PnL realizado total (USD)</th>
+          <th data-col="pnlTotalNet">PnL total sem taxas coletadas (USD)</th>
               </tr>
             </thead>
             <tbody id="historyBody">
@@ -253,6 +254,6 @@
         </div>
       </section>
     </main>
-    <script src="analytics.js"></script>
+    <script type="module" src="analytics.js"></script>
   </body>
 </html>

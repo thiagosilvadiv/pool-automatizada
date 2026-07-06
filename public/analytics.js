@@ -1,3 +1,11 @@
+import {
+  aggregatePerformance,
+  getHistoryEventMetrics,
+  isPerformanceCloseEvent,
+  isPercentMetric,
+  selectDrawableMetrics,
+  summarizePerformance
+} from "./analytics-metrics.js";
 const poolSelect = document.getElementById("poolSelect");
 const startInput = document.getElementById("startDate");
 const endInput = document.getElementById("endDate");
@@ -11,6 +19,7 @@ const perfGroupSelect = document.getElementById("perfGroup");
 const perfCanvas = document.getElementById("perfCanvas");
 const perfEmpty = document.getElementById("perfEmpty");
 const perfTooltip = document.getElementById("perfTooltip");
+const perfChartNotice = document.getElementById("perfChartNotice");
 const perfMetrics = document.querySelector(".performance-metrics");
 const perfFeesCumStat = document.getElementById("perfFeesCumStat");
 const perfFeeYieldStat = document.getElementById("perfFeeYieldStat");
@@ -102,11 +111,11 @@ let analyticsRowLimit = loadAnalyticsRowLimit();
 const perfMetricDefaults = {
   fees: true,
   feesCum: true,
-  feeYieldPct: true,
+  feeYieldPct: false,
   pnl: true,
   pnlNet: true,
-  pnlTotal: true,
-  pnlTotalNet: true,
+  pnlTotal: false,
+  pnlTotalNet: false,
   pnlCum: true,
   pnlNetCum: true
 };
@@ -127,11 +136,11 @@ const perfMetricLabels = {
   fees: "Taxas",
   feesCum: "Taxas acumuladas",
   feeYieldPct: "Rendimento da taxa (%)",
-  pnl: "PnL",
-  pnlNet: "PnL sem taxas",
-  pnlTotal: "PnL total (USD)",
-  pnlTotalNet: "PnL total sem taxas (USD)",
-  pnlCum: "PnL acumulado",
+  pnl: "PnL realizado (USD)",
+  pnlNet: "PnL sem taxas coletadas (USD)",
+  pnlTotal: "PnL realizado total (USD)",
+  pnlTotalNet: "PnL total sem taxas coletadas (USD)",
+  pnlCum: "PnL realizado acumulado",
   pnlNetCum: "PnL sem taxas acumulado"
 };
 
@@ -139,12 +148,12 @@ const perfMetricTooltipLabels = {
   fees: "Taxas",
   feesCum: "Taxas acum.",
   feeYieldPct: "Rend. taxa (%)",
-  pnl: "PnL",
-  pnlNet: "PnL s/ taxas",
+  pnl: "PnL realizado (USD)",
+  pnlNet: "PnL s/ taxas coletadas",
   pnlTotal: "PnL total",
-  pnlTotalNet: "PnL total s/ taxas",
+  pnlTotalNet: "PnL total s/ taxas coletadas",
   pnlCum: "PnL acum.",
-  pnlNetCum: "PnL s/ taxas acum."
+  pnlNetCum: "PnL s/ taxas coletadas acum."
 };
 
 const perfMetricColors = {
@@ -217,77 +226,9 @@ function formatCloseTimestamp(item) {
   return formatTimestamp(item.positionClosedAt);
 }
 
-function isLoanCloseEvent(item) {
-  return item?.actionType === "fechamento-emprestimo";
-}
-
-function isPerformanceCloseEvent(item) {
-  return item?.action === "close-position" || isLoanCloseEvent(item);
-}
-
-function getHistoryEventMetrics(item) {
-  const isLoanClose = isLoanCloseEvent(item);
-  const feesRaw = Number(item?.positionFeesUsd);
-  const fees = Number.isFinite(feesRaw) ? feesRaw : 0;
-  const pnlRaw = Number(isLoanClose ? item?.kaminoLoanPnlUsd : item?.positionPnlUsd);
-  const hasPnl = Number.isFinite(pnlRaw);
-  const entryUsdRaw = Number(item?.positionEntryUsd);
-  const exitUsdRaw = Number(item?.positionExitUsd);
-  const entryUsd = Number.isFinite(entryUsdRaw) ? entryUsdRaw : null;
-  const exitUsd = Number.isFinite(exitUsdRaw) ? exitUsdRaw : null;
-  const pnl = hasPnl ? pnlRaw : null;
-  const pnlFromEntry = entryUsd != null && exitUsd != null ? (exitUsd - entryUsd) : null;
-  const pnlNet = isLoanClose
-    ? (pnlFromEntry ?? pnl)
-    : (pnl != null ? pnl - fees : null);
-  const pnlTotal = isLoanClose ? (pnlFromEntry ?? pnl) : pnl;
-  const pnlTotalNet = isLoanClose ? (pnlFromEntry ?? pnl) : (pnl != null ? pnl - fees : null);
-  return {
-    isLoanClose,
-    fees,
-    entryUsd,
-    exitUsd,
-    pnl,
-    pnlNet,
-    pnlTotal,
-    pnlTotalNet
-  };
-}
-
 function sumNumeric(items, key) {
   if (!Array.isArray(items)) return 0;
   return items.reduce((acc, item) => acc + (Number(item?.[key]) || 0), 0);
-}
-
-function averageNumeric(items, key) {
-  if (!Array.isArray(items)) return null;
-  let sum = 0;
-  let count = 0;
-  items.forEach((item) => {
-    const value = Number(item?.[key]);
-    if (Number.isFinite(value) && value > 0) {
-      sum += value;
-      count += 1;
-    }
-  });
-  return count > 0 ? sum / count : null;
-}
-
-function getPerfPeriodDays(items) {
-  const start = startInput?.value ? new Date(startInput.value) : null;
-  const end = endInput?.value ? new Date(endInput.value) : null;
-  let diffMs = null;
-  if (start && end && !Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
-    diffMs = end.getTime() - start.getTime();
-  }
-  if (!(diffMs > 0)) {
-    const times = (items || []).map((item) => Date.parse(item?.timestamp ?? "")).filter(Number.isFinite);
-    if (times.length >= 2) {
-      diffMs = Math.max(...times) - Math.min(...times);
-    }
-  }
-  if (!Number.isFinite(diffMs) || diffMs <= 0) return 1;
-  return Math.max(1, diffMs / (24 * 60 * 60 * 1000));
 }
 
 function setMetricToggleState(input) {
@@ -317,10 +258,6 @@ function updatePerfCalculator() {
   perfCalcRoi.textContent = `${formatNumber(roi, 2)}%`;
 }
 
-function isPercentMetric(key) {
-  return key === "feeYieldPct";
-}
-
 function formatMetricValue(key, value) {
   if (value === null || value === undefined) return "-";
   const num = Number(value);
@@ -334,35 +271,6 @@ function toDateInputValue(date) {
   const tzOffset = date.getTimezoneOffset() * 60000;
   const local = new Date(date.getTime() - tzOffset);
   return local.toISOString().slice(0, 16);
-}
-
-function startOfDay(date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function startOfWeek(date) {
-  const day = date.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  d.setDate(d.getDate() + diff);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
-
-function startOfMonth(date) {
-  return new Date(date.getFullYear(), date.getMonth(), 1);
-}
-
-function labelForBucket(date, group) {
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = String(date.getFullYear());
-  if (group === "week") {
-    return `Sem ${day}/${month}`;
-  }
-  if (group === "month") {
-    return `${month}/${year}`;
-  }
-  return `${day}/${month}`;
 }
 
 async function fetchPools() {
@@ -424,8 +332,10 @@ function updateSummary(items, options = {}) {
   const outA = sum(items, "closeTokenA");
   const outB = sum(items, "closeTokenB");
 
-  const pnlSolDelta = sum(items, "pnlDelta");
-  const pnlUsdDelta = sum(items, "pnlDeltaUsd");
+  const performance = summarizePerformance(items, {
+    start: startInput?.value,
+    end: endInput?.value
+  });
 
   let netSol = null;
   let netUsd = null;
@@ -444,8 +354,8 @@ function updateSummary(items, options = {}) {
   summaryOpens.textContent = String(opens);
   summaryRebalances.textContent = String(rebalances);
   summaryCloses.textContent = String(closes);
-  summaryPnlSol.textContent = formatNumber(pnlSolDelta, 6);
-  summaryPnlUsd.textContent = formatNumber(pnlUsdDelta, 2);
+  summaryPnlSol.textContent = performance.pnlSol != null ? formatNumber(performance.pnlSol, 6) : "-";
+  summaryPnlUsd.textContent = performance.pnlUsd != null ? formatNumber(performance.pnlUsd, 2) : "-";
   summaryNetSol.textContent = formatNumber(netSol, 6);
   summaryNetUsd.textContent = formatNumber(netUsd, 2);
   summaryInA.textContent = formatNumber(inA, 6);
@@ -617,76 +527,6 @@ async function selectPoolOnServer(poolId) {
   return res.json();
 }
 
-function getPerfBucketKey(date, group) {
-  const d = group === "month" ? startOfMonth(date)
-    : group === "week" ? startOfWeek(date)
-      : startOfDay(date);
-  return d.toISOString();
-}
-
-function aggregatePerformance(items, group) {
-  const buckets = new Map();
-  items.forEach((item) => {
-    if (!isPerformanceCloseEvent(item)) return;
-    if (!item?.timestamp) return;
-    const date = new Date(item.timestamp);
-    if (Number.isNaN(date.getTime())) return;
-    const key = getPerfBucketKey(date, group);
-    const bucket = buckets.get(key) ?? {
-      date: group === "month" ? startOfMonth(date)
-        : group === "week" ? startOfWeek(date)
-          : startOfDay(date),
-      entrySum: 0,
-      entryCount: 0,
-      fees: 0,
-      pnl: 0,
-      pnlNet: 0,
-      pnlTotal: 0,
-      pnlTotalNet: 0
-    };
-    const metrics = getHistoryEventMetrics(item);
-    const hasAnyMetric = metrics.pnl != null
-      || metrics.pnlNet != null
-      || metrics.pnlTotal != null
-      || metrics.pnlTotalNet != null
-      || metrics.fees !== 0;
-    if (!hasAnyMetric) {
-      return;
-    }
-    bucket.fees += metrics.fees;
-    if (metrics.entryUsd != null && metrics.entryUsd > 0) {
-      bucket.entrySum += metrics.entryUsd;
-      bucket.entryCount += 1;
-    }
-    bucket.pnl += metrics.pnl ?? 0;
-    bucket.pnlNet += metrics.pnlNet ?? 0;
-    bucket.pnlTotal += metrics.pnlTotal ?? 0;
-    bucket.pnlTotalNet += metrics.pnlTotalNet ?? 0;
-    buckets.set(key, bucket);
-  });
-  const series = Array.from(buckets.values()).sort((a, b) => a.date - b.date);
-  let runningPnl = 0;
-  let runningNet = 0;
-  let runningFees = 0;
-  return series.map((entry) => {
-    runningPnl += entry.pnl;
-    runningNet += entry.pnlNet;
-    runningFees += entry.fees;
-    return {
-      label: labelForBucket(entry.date, group),
-      fees: entry.fees,
-      feeYieldPct: entry.entryCount > 0 ? (entry.fees / (entry.entrySum / entry.entryCount)) * 100 : null,
-      pnl: entry.pnl,
-      pnlNet: entry.pnlNet,
-      pnlTotal: entry.pnlTotal,
-      pnlTotalNet: entry.pnlTotalNet,
-      feesCum: runningFees,
-      pnlCum: runningPnl,
-      pnlNetCum: runningNet
-    };
-  });
-}
-
 function resizeCanvas(canvas) {
   if (!canvas) return null;
   const rect = canvas.getBoundingClientRect();
@@ -714,16 +554,19 @@ function drawPerformanceChart(canvas, series) {
   }
 
   const activeMetrics = perfMetricOrder.filter((key) => perfMetricVisibility[key] !== false);
-  if (!activeMetrics.length) {
+  const metricSelection = selectDrawableMetrics(activeMetrics);
+  const drawableMetrics = metricSelection.metrics;
+  setPerfChartNotice(metricSelection);
+  if (!drawableMetrics.length) {
     perfChartPoints = [];
     perfChartMetrics = [];
     return;
   }
-  const percentOnly = activeMetrics.length === 1 && isPercentMetric(activeMetrics[0]);
+  const percentOnly = drawableMetrics.length === 1 && isPercentMetric(drawableMetrics[0]);
 
   const values = [];
   series.forEach((point) => {
-    activeMetrics.forEach((key) => {
+    drawableMetrics.forEach((key) => {
       const raw = point[key];
       const val = raw === null || raw === undefined ? NaN : Number(raw);
       if (Number.isFinite(val)) values.push(val);
@@ -776,13 +619,13 @@ function drawPerformanceChart(canvas, series) {
     values: point
   }));
   perfChartPoints = points;
-  perfChartMetrics = activeMetrics;
+  perfChartMetrics = drawableMetrics;
 
   ctx.lineWidth = 2;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
 
-  activeMetrics.forEach((key) => {
+  drawableMetrics.forEach((key) => {
     if (key === "pnlCum" || key === "pnlNetCum" || key === "feesCum") {
       ctx.setLineDash([6, 4]);
     } else {
@@ -861,21 +704,31 @@ function hidePerfTooltip() {
   perfTooltip.classList.add("hidden");
 }
 
+function setPerfChartNotice(selection) {
+  if (!perfChartNotice) return;
+  if (selection?.reason === "mixed-units" && selection.skipped?.length) {
+    const labels = selection.skipped
+      .map((key) => perfMetricLabels[key] ?? key)
+      .join(", ");
+    perfChartNotice.textContent = `${labels} oculto no grafico porque usa escala percentual. Selecione apenas essa metrica para ver o eixo em %.`;
+    perfChartNotice.classList.remove("hidden");
+    return;
+  }
+  perfChartNotice.textContent = "";
+  perfChartNotice.classList.add("hidden");
+}
 function updatePerformanceStats(items) {
-  const closeItems = Array.isArray(items)
-    ? items.filter((item) => isPerformanceCloseEvent(item))
-    : [];
-  const totalFeesUsd = closeItems.reduce((acc, item) => acc + getHistoryEventMetrics(item).fees, 0);
-  const avgEntryUsd = averageNumeric(closeItems, "positionEntryUsd");
-  const feeYieldPct = avgEntryUsd != null ? (totalFeesUsd / avgEntryUsd) * 100 : null;
-  const periodDays = getPerfPeriodDays(closeItems);
-  perfDailyYieldPct = feeYieldPct != null ? feeYieldPct / periodDays : null;
+  const stats = summarizePerformance(items, {
+    start: startInput?.value,
+    end: endInput?.value
+  });
+  perfDailyYieldPct = stats.dailyFeeYieldPct;
 
   if (perfFeesCumStat) {
-    perfFeesCumStat.textContent = closeItems.length ? formatNumber(totalFeesUsd, 2) : "-";
+    perfFeesCumStat.textContent = stats.closeCount ? formatNumber(stats.totalFeesUsd, 2) : "-";
   }
   if (perfFeeYieldStat) {
-    perfFeeYieldStat.textContent = feeYieldPct != null ? `${formatNumber(feeYieldPct, 2)}%` : "-";
+    perfFeeYieldStat.textContent = stats.feeYieldPct != null ? `${formatNumber(stats.feeYieldPct, 2)}%` : "-";
   }
 
   updatePerfCalculator();
@@ -955,6 +808,7 @@ function updatePerformance(items) {
     if (ctx) ctx.clearRect(0, 0, perfCanvas.width, perfCanvas.height);
     perfChartPoints = [];
     perfChartMetrics = [];
+    setPerfChartNotice(null);
     hidePerfTooltip();
     return;
   }
@@ -967,6 +821,7 @@ function updatePerformance(items) {
     if (ctx) ctx.clearRect(0, 0, perfCanvas.width, perfCanvas.height);
     perfChartPoints = [];
     perfChartMetrics = [];
+    setPerfChartNotice(null);
     hidePerfTooltip();
     return;
   }
