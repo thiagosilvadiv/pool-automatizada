@@ -24,22 +24,68 @@ describe("analytics report metrics", () => {
     expect(metrics.pnlSol).toBeCloseTo(0.119, 6);
   });
 
-  it("uses kaminoLoanPnlUsd for loan close instead of net exit minus entry", () => {
-    const metrics = getHistoryEventMetrics({
+  it("does not count Pago Emprestimo as realized pnl or fee yield", () => {
+    const loanClose = {
+      timestamp: "2026-04-05T12:00:00.000Z",
       action: "kamino-close",
       actionType: "fechamento-emprestimo",
-      positionEntryUsd: 100,
-      positionExitUsd: 51.5,
-      positionFeesUsd: 0,
-      positionPnlUsd: 1.4,
-      kaminoLoanPnlUsd: 1.4,
-      kaminoDebtUsd: 50,
-      kaminoCollateralUsd: 101.5
-    });
+      positionEntryUsd: 1000,
+      positionExitUsd: 260,
+      positionFeesUsd: 20,
+      positionPnlUsd: 264,
+      kaminoLoanPnlUsd: 264
+    };
 
-    expect(metrics.pnl).toBeCloseTo(1.4, 6);
-    expect(metrics.pnlTotal).toBeCloseTo(1.4, 6);
-    expect(metrics.pnl).not.toBeCloseTo(-48.5, 6);
+    const metrics = getHistoryEventMetrics(loanClose);
+    expect(metrics.rawPnl).toBe(264);
+    expect(metrics.pnl).toBeNull();
+    expect(metrics.pnlTotal).toBeNull();
+    expect(metrics.pnlTotalNet).toBeNull();
+    expect(metrics.pnlOutlier).toBeNull();
+    expect(metrics.fees).toBe(0);
+    expect(metrics.entryUsd).toBeNull();
+
+    const stats = summarizePerformance([loanClose]);
+    expect(stats.closeCount).toBe(1);
+    expect(stats.pnlUsd).toBeNull();
+    expect(stats.totalFeesUsd).toBe(0);
+    expect(stats.totalEntryUsd).toBe(0);
+    expect(stats.feeYieldPct).toBeNull();
+    expect(aggregatePerformance([loanClose], "day")).toEqual([]);
+  });
+
+  it("keeps Pago Emprestimo from inflating total pnl series when mixed with pool closes", () => {
+    const items = [
+      {
+        timestamp: "2026-04-05T10:00:00.000Z",
+        action: "close-position",
+        positionEntryUsd: 100,
+        positionExitUsd: 106,
+        positionFeesUsd: 1,
+        positionPnlUsd: 5
+      },
+      {
+        timestamp: "2026-04-05T12:00:00.000Z",
+        action: "kamino-close",
+        actionType: "fechamento-emprestimo",
+        positionEntryUsd: 1000,
+        positionExitUsd: 260,
+        positionFeesUsd: 20,
+        positionPnlUsd: 264,
+        kaminoLoanPnlUsd: 264
+      }
+    ];
+
+    const stats = summarizePerformance(items);
+    const [bucket] = aggregatePerformance(items, "day");
+
+    expect(stats.closeCount).toBe(2);
+    expect(stats.pnlUsd).toBe(5);
+    expect(stats.totalFeesUsd).toBe(1);
+    expect(stats.totalEntryUsd).toBe(100);
+    expect(bucket.pnlTotal).toBe(5);
+    expect(bucket.pnlTotalNet).toBe(4);
+    expect(bucket.pnlCum).toBe(5);
   });
 
   it("computes fee yield from total fees divided by total valid entry", () => {
@@ -82,6 +128,33 @@ describe("analytics report metrics", () => {
     expect(stats.pnlUsd).toBeNull();
     expect(stats.feeYieldPct).toBeNull();
     expect(aggregatePerformance([], "day")).toEqual([]);
+  });
+
+  it("ignores realized pnl outliers above the position reference", () => {
+    const item = {
+      timestamp: "2026-04-05T12:00:00.000Z",
+      action: "close-position",
+      budgetUsd: 1.5,
+      positionEntryUsd: 1.5,
+      positionExitUsd: 1.6,
+      positionFeesUsd: 0.01,
+      positionPnlUsd: 264
+    };
+
+    const metrics = getHistoryEventMetrics(item);
+    expect(metrics.rawPnl).toBe(264);
+    expect(metrics.pnlOutlier).toBe(264);
+    expect(metrics.pnl).toBeNull();
+
+    const stats = summarizePerformance([item]);
+    expect(stats.outlierCount).toBe(1);
+    expect(stats.pnlUsd).toBeNull();
+
+    const [bucket] = aggregatePerformance([item], "day");
+    expect(bucket.fees).toBeCloseTo(0.01, 6);
+    expect(bucket.pnl).toBeNull();
+    expect(bucket.pnlTotal).toBeNull();
+    expect(bucket.pnlCum).toBeNull();
   });
 
   it("keeps percent metrics separate from USD chart metrics", () => {

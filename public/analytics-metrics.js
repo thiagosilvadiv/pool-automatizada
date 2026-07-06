@@ -1,6 +1,27 @@
+const MAX_USD_SANITY = 1_000_000_000;
+const PNL_MAX_FACTOR = 3;
+const PNL_MAX_FALLBACK = 1_000_000;
+
 export function finiteOrNull(value) {
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
+}
+
+function getPnlReferenceUsd(item, entryUsd, exitUsd) {
+  const budgetUsd = finiteOrNull(item?.budgetUsd);
+  return Math.max(entryUsd ?? 0, exitUsd ?? 0, budgetUsd ?? 0) || null;
+}
+
+function isPnlMagnitudeSane(value, item, entryUsd, exitUsd) {
+  if (!Number.isFinite(value) || Math.abs(value) > MAX_USD_SANITY) {
+    return false;
+  }
+  const reference = getPnlReferenceUsd(item, entryUsd, exitUsd);
+  const abs = Math.abs(value);
+  if (reference != null && reference > 0) {
+    return abs <= reference * PNL_MAX_FACTOR;
+  }
+  return abs <= PNL_MAX_FALLBACK;
 }
 
 export function isLoanCloseEvent(item) {
@@ -13,12 +34,15 @@ export function isPerformanceCloseEvent(item) {
 
 export function getHistoryEventMetrics(item) {
   const isLoanClose = isLoanCloseEvent(item);
-  const fees = finiteOrNull(item?.positionFeesUsd) ?? 0;
-  const entryUsd = finiteOrNull(item?.positionEntryUsd);
-  const exitUsd = finiteOrNull(item?.positionExitUsd);
-  const realizedPnlUsd = isLoanClose
+  const fees = isLoanClose ? 0 : finiteOrNull(item?.positionFeesUsd) ?? 0;
+  const entryUsd = isLoanClose ? null : finiteOrNull(item?.positionEntryUsd);
+  const exitUsd = isLoanClose ? null : finiteOrNull(item?.positionExitUsd);
+  const rawPnlUsd = isLoanClose
     ? (finiteOrNull(item?.kaminoLoanPnlUsd) ?? finiteOrNull(item?.positionPnlUsd))
     : finiteOrNull(item?.positionPnlUsd);
+  const realizedPnlUsd = !isLoanClose && rawPnlUsd != null && isPnlMagnitudeSane(rawPnlUsd, item, entryUsd, exitUsd)
+    ? rawPnlUsd
+    : null;
   const solUsdPrice = finiteOrNull(item?.solUsdPrice);
   const pnlSol = realizedPnlUsd != null && solUsdPrice != null && solUsdPrice > 0
     ? realizedPnlUsd / solUsdPrice
@@ -30,6 +54,8 @@ export function getHistoryEventMetrics(item) {
     fees,
     entryUsd,
     exitUsd,
+    rawPnl: rawPnlUsd,
+    pnlOutlier: !isLoanClose && rawPnlUsd != null && realizedPnlUsd == null ? rawPnlUsd : null,
     pnl: realizedPnlUsd,
     pnlSol,
     pnlNet,
@@ -65,12 +91,16 @@ export function summarizePerformance(items, range = {}) {
   let pnlUsdCount = 0;
   let pnlSol = 0;
   let pnlSolCount = 0;
+  let outlierCount = 0;
 
   closeItems.forEach((item) => {
     const metrics = getHistoryEventMetrics(item);
     totalFeesUsd += metrics.fees;
     if (metrics.entryUsd != null && metrics.entryUsd > 0) {
       totalEntryUsd += metrics.entryUsd;
+    }
+    if (metrics.pnlOutlier != null) {
+      outlierCount += 1;
     }
     if (metrics.pnl != null) {
       pnlUsd += metrics.pnl;
@@ -88,6 +118,7 @@ export function summarizePerformance(items, range = {}) {
   return {
     closeItems,
     closeCount: closeItems.length,
+    outlierCount,
     totalFeesUsd,
     totalEntryUsd,
     feeYieldPct,
@@ -148,9 +179,13 @@ export function aggregatePerformance(items, group) {
       entrySum: 0,
       fees: 0,
       pnl: 0,
+      pnlCount: 0,
       pnlNet: 0,
+      pnlNetCount: 0,
       pnlTotal: 0,
-      pnlTotalNet: 0
+      pnlTotalCount: 0,
+      pnlTotalNet: 0,
+      pnlTotalNetCount: 0
     };
     const metrics = getHistoryEventMetrics(item);
     const hasAnyMetric = metrics.pnl != null
@@ -165,31 +200,51 @@ export function aggregatePerformance(items, group) {
     if (metrics.entryUsd != null && metrics.entryUsd > 0) {
       bucket.entrySum += metrics.entryUsd;
     }
-    bucket.pnl += metrics.pnl ?? 0;
-    bucket.pnlNet += metrics.pnlNet ?? 0;
-    bucket.pnlTotal += metrics.pnlTotal ?? 0;
-    bucket.pnlTotalNet += metrics.pnlTotalNet ?? 0;
+    if (metrics.pnl != null) {
+      bucket.pnl += metrics.pnl;
+      bucket.pnlCount += 1;
+    }
+    if (metrics.pnlNet != null) {
+      bucket.pnlNet += metrics.pnlNet;
+      bucket.pnlNetCount += 1;
+    }
+    if (metrics.pnlTotal != null) {
+      bucket.pnlTotal += metrics.pnlTotal;
+      bucket.pnlTotalCount += 1;
+    }
+    if (metrics.pnlTotalNet != null) {
+      bucket.pnlTotalNet += metrics.pnlTotalNet;
+      bucket.pnlTotalNetCount += 1;
+    }
     buckets.set(key, bucket);
   });
   const series = Array.from(buckets.values()).sort((a, b) => a.date - b.date);
   let runningPnl = 0;
+  let hasRunningPnl = false;
   let runningNet = 0;
+  let hasRunningNet = false;
   let runningFees = 0;
   return series.map((entry) => {
-    runningPnl += entry.pnl;
-    runningNet += entry.pnlNet;
+    if (entry.pnlCount > 0) {
+      runningPnl += entry.pnl;
+      hasRunningPnl = true;
+    }
+    if (entry.pnlNetCount > 0) {
+      runningNet += entry.pnlNet;
+      hasRunningNet = true;
+    }
     runningFees += entry.fees;
     return {
       label: labelForBucket(entry.date, group),
       fees: entry.fees,
       feeYieldPct: entry.entrySum > 0 ? (entry.fees / entry.entrySum) * 100 : null,
-      pnl: entry.pnl,
-      pnlNet: entry.pnlNet,
-      pnlTotal: entry.pnlTotal,
-      pnlTotalNet: entry.pnlTotalNet,
+      pnl: entry.pnlCount > 0 ? entry.pnl : null,
+      pnlNet: entry.pnlNetCount > 0 ? entry.pnlNet : null,
+      pnlTotal: entry.pnlTotalCount > 0 ? entry.pnlTotal : null,
+      pnlTotalNet: entry.pnlTotalNetCount > 0 ? entry.pnlTotalNet : null,
       feesCum: runningFees,
-      pnlCum: runningPnl,
-      pnlNetCum: runningNet
+      pnlCum: hasRunningPnl ? runningPnl : null,
+      pnlNetCum: hasRunningNet ? runningNet : null
     };
   });
 }

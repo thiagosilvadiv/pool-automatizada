@@ -120,6 +120,8 @@ const perfMetricDefaults = {
   pnlNetCum: true
 };
 
+const PERF_METRIC_VISIBILITY_VERSION = "2";
+
 const perfMetricOrder = [
   "fees",
   "feesCum",
@@ -174,6 +176,7 @@ let perfChartPoints = [];
 let perfChartMetrics = [];
 let analyticsPoolSelection = loadAnalyticsPoolSelection();
 let perfDailyYieldPct = null;
+let perfOutlierCount = 0;
 
 function formatRange(range) {
   if (!range) return "-";
@@ -310,7 +313,7 @@ function renderHistory(items) {
         <td data-col="feesUsd">${formatNumber(item.positionFeesUsd, 2)}</td>
         <td data-col="txFeeUsd">${formatNumber(item.txFeeUsd, 6)}</td>
         <td data-col="exitUsd">${formatNumber(item.positionExitUsd, 2)}</td>
-        <td data-col="pnlUsd">${formatNumber(metrics.isLoanClose ? item.kaminoLoanPnlUsd : item.positionPnlUsd, 2)}</td>
+        <td data-col="pnlUsd">${formatNumber(metrics.pnl, 2)}</td>
         <td data-col="pnlTotal">${formatNumber(metrics.pnlTotal, 2)}</td>
         <td data-col="pnlTotalNet">${formatNumber(metrics.pnlTotalNet, 2)}</td>
       </tr>
@@ -490,7 +493,13 @@ function savePerfGroup() {
 
 function loadPerfMetricVisibility() {
   const raw = localStorage.getItem("perfMetricVisibility");
-  if (!raw) return { ...perfMetricDefaults };
+  const version = localStorage.getItem("perfMetricVisibilityVersion");
+  if (!raw || version !== PERF_METRIC_VISIBILITY_VERSION) {
+    const defaults = { ...perfMetricDefaults };
+    localStorage.setItem("perfMetricVisibility", JSON.stringify(defaults));
+    localStorage.setItem("perfMetricVisibilityVersion", PERF_METRIC_VISIBILITY_VERSION);
+    return defaults;
+  }
   try {
     const parsed = JSON.parse(raw);
     return { ...perfMetricDefaults, ...parsed };
@@ -501,6 +510,7 @@ function loadPerfMetricVisibility() {
 
 function savePerfMetricVisibility() {
   localStorage.setItem("perfMetricVisibility", JSON.stringify(perfMetricVisibility));
+  localStorage.setItem("perfMetricVisibilityVersion", PERF_METRIC_VISIBILITY_VERSION);
 }
 
 function syncPerfControls() {
@@ -706,24 +716,32 @@ function hidePerfTooltip() {
 
 function setPerfChartNotice(selection) {
   if (!perfChartNotice) return;
+  const messages = [];
   if (selection?.reason === "mixed-units" && selection.skipped?.length) {
     const labels = selection.skipped
       .map((key) => perfMetricLabels[key] ?? key)
       .join(", ");
-    perfChartNotice.textContent = `${labels} oculto no grafico porque usa escala percentual. Selecione apenas essa metrica para ver o eixo em %.`;
+    messages.push(`${labels} oculto no grafico porque usa escala percentual. Selecione apenas essa metrica para ver o eixo em %.`);
+  }
+  if (perfOutlierCount > 0) {
+    messages.push(`${perfOutlierCount} evento(s) com PnL fora da faixa esperada foram ignorados no grafico/resumo. Confira a tabela para ajustar entrada, saida ou PnL se necessario.`);
+  }
+  if (messages.length) {
+    perfChartNotice.textContent = messages.join(" ");
     perfChartNotice.classList.remove("hidden");
     return;
   }
   perfChartNotice.textContent = "";
   perfChartNotice.classList.add("hidden");
 }
+
 function updatePerformanceStats(items) {
   const stats = summarizePerformance(items, {
     start: startInput?.value,
     end: endInput?.value
   });
   perfDailyYieldPct = stats.dailyFeeYieldPct;
-
+  perfOutlierCount = stats.outlierCount ?? 0;
   if (perfFeesCumStat) {
     perfFeesCumStat.textContent = stats.closeCount ? formatNumber(stats.totalFeesUsd, 2) : "-";
   }
