@@ -122,6 +122,8 @@ REDIS_PREFIX=orca-bot
 - `rebalanceSwapPct`: fração do excesso a swapar quando falta um dos tokens (1.0 = ajuste completo)
 - `positionMint`: se você já tem uma posição criada, pode informar o mint aqui para pular a varredura
 - `budgetUsd`: orçamento em USD para limitar o valor alocado na posição (ou `null`)
+- `KAMINO_SCAN_INTERVAL_SEC`: intervalo das leituras on-chain do Kamino (padrao: 300 segundos)
+- `KAMINO_USE_WALLET_BALANCE_ON_REOPEN`: inclui o saldo livre da wallet ao reabrir a pool; respeita `budgetUsd`, reservas de outras pools e o SOL minimo (padrao: `true`)
 - `pythSolUsdFeedId`: feed ID hex da Pyth (ex.: `0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d`)
 - `priceStaleMaxSec`: idade máxima (segundos) para o preço da Pyth
 - `trendEnabled`: ativa leitura de tendência via GeckoTerminal (true/false)

@@ -54,6 +54,7 @@ export type Config = {
   kaminoCollateralMode: "exit" | "max-value" | "tokenA" | "tokenB" | "both";
   kaminoAutoCloseOnTokenChange: boolean;
   kaminoConvertToCollateral: boolean;
+  kaminoUseWalletBalanceOnReopen: boolean;
   kaminoAvgPriceBasis: "deposit" | "debt";
   kaminoAvgMode: "cumulative" | "reset";
   kaminoRepayRetrySec: number;
@@ -509,6 +510,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     ?? Boolean((data as any).kaminoAutoCloseOnTokenChange ?? false);
   const kaminoConvertToCollateral = parseEnvBool(process.env.KAMINO_CONVERT_TO_COLLATERAL)
     ?? Boolean((data as any).kaminoConvertToCollateral ?? false);
+  const kaminoUseWalletBalanceOnReopen = parseEnvBool(process.env.KAMINO_USE_WALLET_BALANCE_ON_REOPEN)
+    ?? Boolean((data as any).kaminoUseWalletBalanceOnReopen ?? true);
   const envNetwork = parseEnvString(process.env.NETWORK);
   const envRpcUrl = parseEnvString(process.env.RPC_URL);
   const envWhirlpoolAddress = parseEnvString(process.env.WHIRLPOOL_ADDRESS);
@@ -576,7 +579,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     autoSolCooldownSec: parseEnvNumber(process.env.AUTO_SOL_COOLDOWN_SEC) ?? Number(data.autoSolCooldownSec ?? 60),
     autoSolTargetBufferPct: parseEnvNumber(process.env.AUTO_SOL_TARGET_BUFFER_PCT)
       ?? (data.autoSolTargetBufferPct == null ? 0 : Number(data.autoSolTargetBufferPct)),
-    kaminoScanIntervalSec: envKaminoScanIntervalSec ?? Number((data as any).kaminoScanIntervalSec ?? 30),
+    kaminoScanIntervalSec: envKaminoScanIntervalSec ?? Number((data as any).kaminoScanIntervalSec ?? 300),
     autoCloseEmptyAccountsEnabled: parseEnvBool(process.env.AUTO_CLOSE_EMPTY_ACCOUNTS_ENABLED)
       ?? Boolean(data.autoCloseEmptyAccountsEnabled ?? false),
     autoCloseEmptyAccountsIntervalSec: parseEnvNumber(process.env.AUTO_CLOSE_EMPTY_ACCOUNTS_INTERVAL_SEC)
@@ -639,6 +642,7 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
       ?? "max-value",
     kaminoAutoCloseOnTokenChange,
     kaminoConvertToCollateral,
+    kaminoUseWalletBalanceOnReopen,
     kaminoAvgPriceBasis: envKaminoAvgPriceBasis
       ?? dataKaminoAvgPriceBasis
       ?? "deposit",
@@ -855,6 +859,9 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (typeof config.kaminoConvertToCollateral !== "boolean") {
     throw new Error("kaminoConvertToCollateral must be boolean");
+  }
+  if (typeof config.kaminoUseWalletBalanceOnReopen !== "boolean") {
+    throw new Error("kaminoUseWalletBalanceOnReopen must be boolean");
   }
   if (!parseKaminoAvgPriceBasis(config.kaminoAvgPriceBasis)) {
     throw new Error("kaminoAvgPriceBasis must be deposit or debt");

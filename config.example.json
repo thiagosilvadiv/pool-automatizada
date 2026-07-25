@@ -17,6 +17,8 @@
   "rebalanceSwapPct": 1,
   "budgetUsd": null,
   "kaminoRebalanceEnabled": false,
+  "kaminoScanIntervalSec": 300,
+  "kaminoUseWalletBalanceOnReopen": true,
   "autoAddLiquidityEnabled": false,
   "hedgeEnabled": false,
   "trendEnabled": false

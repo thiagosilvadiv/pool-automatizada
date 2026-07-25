@@ -189,6 +189,18 @@ describe("config", () => {
     expect(config.kaminoAutoCloseOnTokenChange).toBe(false);
   });
 
+  it("defaults Kamino scans to five minutes and includes free wallet balance on reopen", () => {
+    const config = loadWith({});
+    expect(config.kaminoScanIntervalSec).toBe(300);
+    expect(config.kaminoUseWalletBalanceOnReopen).toBe(true);
+  });
+
+  it("allows disabling free wallet balance use through env", () => {
+    process.env.KAMINO_USE_WALLET_BALANCE_ON_REOPEN = "false";
+    const config = loadWith({});
+    expect(config.kaminoUseWalletBalanceOnReopen).toBe(false);
+  });
+
   it("allows explicit env override to re-enable legacy token-change close", () => {
     process.env.KAMINO_AUTO_CLOSE_ON_TOKEN_CHANGE = "true";
     const config = loadWith({});
