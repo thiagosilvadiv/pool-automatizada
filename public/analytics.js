@@ -3,9 +3,15 @@ import {
   getHistoryEventMetrics,
   isPerformanceCloseEvent,
   isPercentMetric,
-  selectDrawableMetrics,
   summarizePerformance
 } from "./analytics-metrics.js";
+import {
+  createCategoryChart,
+  createTimeChart,
+  seriesColor,
+  snapshotColumns,
+  splitOnPositionChange
+} from "./charts.js";
 const poolSelect = document.getElementById("poolSelect");
 const startInput = document.getElementById("startDate");
 const endInput = document.getElementById("endDate");
@@ -27,6 +33,18 @@ const perfCalcCapital = document.getElementById("perfCalcCapital");
 const perfCalcDays = document.getElementById("perfCalcDays");
 const perfCalcFees = document.getElementById("perfCalcFees");
 const perfCalcRoi = document.getElementById("perfCalcRoi");
+const snapshotBucketSelect = document.getElementById("snapshotBucket");
+const snapshotMeta = document.getElementById("snapshotMeta");
+const equityChartEl = document.getElementById("equityChart");
+const equityEmpty = document.getElementById("equityEmpty");
+const equityTooltip = document.getElementById("equityTooltip");
+const rangeChartEl = document.getElementById("rangeChart");
+const rangeEmpty = document.getElementById("rangeEmpty");
+const rangeTooltip = document.getElementById("rangeTooltip");
+const ltvChartEl = document.getElementById("ltvChart");
+const ltvEmpty = document.getElementById("ltvEmpty");
+const ltvTooltip = document.getElementById("ltvTooltip");
+const ltvBlock = document.getElementById("ltvBlock");
 
 const ALL_POOLS_ID = "__all__";
 
@@ -53,20 +71,20 @@ const actionLabels = {
   "add-liquidity": "adicionar liquidez",
   "add-liquidity-failed": "falha adicionar liquidez",
   "close-failed": "fechamento falhou",
-  "resume-position": "monitorando posicao existente",
-  "reload-position": "recarregar posicao",
-  "out-of-range-wait": "aguardando confirmacao fora da faixa",
+  "resume-position": "monitorando posição existente",
+  "reload-position": "recarregar posição",
+  "out-of-range-wait": "aguardando confirmação fora da faixa",
   "skip-low-sol": "SOL baixo",
-  "skip-low-sol-position": "posicao existente (SOL baixo)",
+  "skip-low-sol-position": "posição existente (SOL baixo)",
   "swap": "swap",
   "kamino-rebalanced": "re-range (Kamino)",
   "kamino-rebalance-failed": "falha Kamino",
   "kamino-deposit": "Kamino: depositar colateral",
-  "kamino-borrow": "Kamino: emprestimo",
+  "kamino-borrow": "Kamino: empréstimo",
   "kamino-reopen": "Kamino: reabrir pool",
-  "kamino-repay": "Kamino: pagar divida",
+  "kamino-repay": "Kamino: pagar dívida",
   "kamino-withdraw": "Kamino: retirar colateral",
-  "kamino-close": "Pago Emprestimo",
+  "kamino-close": "Pago Empréstimo",
   "kamino-wait-funds": "Kamino: aguardando saldo"
 };
 
@@ -158,7 +176,11 @@ const perfMetricTooltipLabels = {
   pnlNetCum: "PnL s/ taxas coletadas acum."
 };
 
-const perfMetricColors = {
+/**
+ * Cores das series. Os valores aqui sao apenas fallback: a cor efetiva vem do
+ * token CSS --series-<metrica>, o mesmo consumido pelos quadradinhos da legenda.
+ */
+const perfMetricFallbackColors = {
   fees: "#f6c343",
   feesCum: "rgba(246, 195, 67, 0.65)",
   feeYieldPct: "#f97316",
@@ -169,6 +191,13 @@ const perfMetricColors = {
   pnlCum: "#36d399",
   pnlNetCum: "#4ea1ff"
 };
+
+function perfMetricColor(key) {
+  return seriesColor(key, perfMetricFallbackColors[key] || "#888");
+}
+
+/** Series acumuladas sao tracejadas, para distinguir do valor do periodo. */
+const PERF_DASHED_METRICS = new Set(["pnlCum", "pnlNetCum", "feesCum"]);
 
 let perfGroup = loadPerfGroup();
 let perfMetricVisibility = loadPerfMetricVisibility();
@@ -537,176 +566,83 @@ async function selectPoolOnServer(poolId) {
   return res.json();
 }
 
-function resizeCanvas(canvas) {
-  if (!canvas) return null;
-  const rect = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.floor(rect.width * dpr));
-  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  return ctx;
+let perfChart = null;
+
+function ensurePerfChart() {
+  if (perfChart || !perfCanvas) {
+    return perfChart;
+  }
+  perfChart = createCategoryChart(perfCanvas, {
+    height: 300,
+    tooltipEl: perfTooltip,
+    formatValue: (value) => formatNumber(value, 2),
+    renderTooltip: (idx, label, seriesDefs) => {
+      const point = perfChartPoints[idx];
+      if (!point) return "";
+      const lines = seriesDefs
+        .map((def) => {
+          const value = point[def.key];
+          const text = perfMetricTooltipLabels[def.key] ?? perfMetricLabels[def.key] ?? def.key;
+          return `<div class="line"><span>${text}</span><span>${formatMetricValue(def.key, value)}</span></div>`;
+        })
+        .join("");
+      return `<div class="title">${label}</div>${lines}`;
+    }
+  });
+  return perfChart;
 }
 
-function drawPerformanceChart(canvas, series) {
-  if (!canvas) return;
-  const ctx = resizeCanvas(canvas);
-  if (!ctx) return;
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
-  ctx.clearRect(0, 0, width, height);
+function clearPerformanceChart() {
+  perfChartPoints = [];
+  perfChartMetrics = [];
+  if (perfChart) {
+    perfChart.destroy();
+  }
+  hidePerfTooltip();
+}
 
+/**
+ * Desenha as metricas selecionadas.
+ *
+ * Metricas em % passaram a usar um eixo proprio a direita, entao convivem no
+ * mesmo grafico com as metricas em USD — antes uma excluia a outra.
+ */
+function drawPerformanceChart(series) {
+  const chart = ensurePerfChart();
+  if (!chart) return;
   if (!series.length) {
-    perfChartPoints = [];
-    perfChartMetrics = [];
+    clearPerformanceChart();
     return;
   }
 
-  const activeMetrics = perfMetricOrder.filter((key) => perfMetricVisibility[key] !== false);
-  const metricSelection = selectDrawableMetrics(activeMetrics);
-  const drawableMetrics = metricSelection.metrics;
-  setPerfChartNotice(metricSelection);
+  const drawableMetrics = perfMetricOrder.filter((key) => perfMetricVisibility[key] !== false);
   if (!drawableMetrics.length) {
-    perfChartPoints = [];
-    perfChartMetrics = [];
+    clearPerformanceChart();
+    setPerfChartNotice(null);
     return;
   }
-  const percentOnly = drawableMetrics.length === 1 && isPercentMetric(drawableMetrics[0]);
 
-  const values = [];
-  series.forEach((point) => {
-    drawableMetrics.forEach((key) => {
-      const raw = point[key];
-      const val = raw === null || raw === undefined ? NaN : Number(raw);
-      if (Number.isFinite(val)) values.push(val);
-    });
-  });
-  if (!values.length) return;
-
-  const max = Math.max(...values, 0);
-  const min = Math.min(...values, 0);
-  const range = max - min || 1;
-  const pad = range * 0.1;
-  const minY = min - pad;
-  const maxY = max + pad;
-  const plotW = width - 80;
-  const plotH = height - 48;
-  const left = 56;
-  const top = 16;
-
-  const zeroY = top + (1 - (0 - minY) / (maxY - minY)) * plotH;
-
-  const ticks = 5;
-  ctx.strokeStyle = "rgba(255,255,255,0.08)";
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= ticks; i += 1) {
-    const y = top + (i / ticks) * plotH;
-    ctx.beginPath();
-    ctx.moveTo(left, y);
-    ctx.lineTo(left + plotW, y);
-    ctx.stroke();
-    const value = maxY - (i / ticks) * (maxY - minY);
-    ctx.fillStyle = "rgba(255,255,255,0.6)";
-    ctx.font = "11px IBM Plex Sans, Segoe UI, sans-serif";
-    ctx.textAlign = "right";
-    const label = percentOnly ? `${formatNumber(value, 2)}%` : formatNumber(value, 2);
-    ctx.fillText(label, left - 8, y + 4);
-  }
-
-  ctx.strokeStyle = "rgba(255,255,255,0.2)";
-  ctx.beginPath();
-  ctx.moveTo(left, zeroY);
-  ctx.lineTo(left + plotW, zeroY);
-  ctx.stroke();
-
-  const pointCount = series.length;
-  const stepX = plotW / Math.max(1, pointCount - 1);
-
-  const points = series.map((point, idx) => ({
-    x: left + idx * stepX,
-    label: point.label,
-    values: point
-  }));
-  perfChartPoints = points;
+  perfChartPoints = series;
   perfChartMetrics = drawableMetrics;
+  setPerfChartNotice({ percentMetrics: drawableMetrics.filter((key) => isPercentMetric(key)) });
 
-  ctx.lineWidth = 2;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-
-  drawableMetrics.forEach((key) => {
-    if (key === "pnlCum" || key === "pnlNetCum" || key === "feesCum") {
-      ctx.setLineDash([6, 4]);
-    } else {
-      ctx.setLineDash([]);
-    }
-    ctx.beginPath();
-    let started = false;
-    points.forEach((pt) => {
-      const raw = pt.values[key];
-      const val = raw === null || raw === undefined ? NaN : Number(raw);
-      if (!Number.isFinite(val)) {
-        started = false;
-        return;
-      }
-      const y = top + (1 - (val - minY) / (maxY - minY)) * plotH;
-      if (!started) {
-        ctx.moveTo(pt.x, y);
-        started = true;
-      } else {
-        ctx.lineTo(pt.x, y);
-      }
+  const labels = series.map((point) => point.label);
+  const seriesDefs = drawableMetrics.map((key) => ({
+    key,
+    label: perfMetricLabels[key] ?? key,
+    color: perfMetricColor(key),
+    dash: PERF_DASHED_METRICS.has(key),
+    scale: isPercentMetric(key) ? "pct" : "val"
+  }));
+  const columns = {};
+  for (const key of drawableMetrics) {
+    columns[key] = series.map((point) => {
+      const raw = point[key];
+      const value = raw === null || raw === undefined ? Number.NaN : Number(raw);
+      return Number.isFinite(value) ? value : null;
     });
-    ctx.strokeStyle = perfMetricColors[key] || "#888";
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    points.forEach((pt) => {
-      const raw = pt.values[key];
-      const val = raw === null || raw === undefined ? NaN : Number(raw);
-      if (!Number.isFinite(val)) return;
-      const y = top + (1 - (val - minY) / (maxY - minY)) * plotH;
-      ctx.fillStyle = perfMetricColors[key] || "#888";
-      ctx.beginPath();
-      ctx.arc(pt.x, y, 3, 0, Math.PI * 2);
-      ctx.fill();
-    });
-  });
-
-  points.forEach((pt, idx) => {
-    if (pointCount <= 12 || idx % Math.ceil(pointCount / 12) === 0) {
-      ctx.fillStyle = "rgba(255,255,255,0.6)";
-      ctx.font = "11px IBM Plex Sans, Segoe UI, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(pt.label, pt.x, height - 12);
-    }
-  });
-}
-
-function showPerfTooltip(point, x, y) {
-  if (!perfTooltip) return;
-  const lines = perfChartMetrics.map((key) => {
-    const val = point.values[key];
-    const label = perfMetricTooltipLabels[key] ?? perfMetricLabels[key] ?? key;
-    const formatted = formatMetricValue(key, val);
-    return `<div class="line"><span>${label}</span><span>${formatted}</span></div>`;
-  }).join("");
-  perfTooltip.innerHTML = `<div class="title">${point.label}</div>${lines}`;
-  perfTooltip.classList.remove("hidden");
-  const canvasRect = perfCanvas?.getBoundingClientRect();
-  if (canvasRect) {
-    const tooltipRect = perfTooltip.getBoundingClientRect();
-    const maxLeft = canvasRect.width - tooltipRect.width - 8;
-    const maxTop = canvasRect.height - tooltipRect.height - 8;
-    const clampedLeft = Math.min(maxLeft, Math.max(8, x));
-    const clampedTop = Math.min(maxTop, Math.max(8, y));
-    perfTooltip.style.left = `${clampedLeft}px`;
-    perfTooltip.style.top = `${clampedTop}px`;
-  } else {
-    perfTooltip.style.left = `${x}px`;
-    perfTooltip.style.top = `${y}px`;
   }
+  chart.update(labels, seriesDefs, columns);
 }
 
 function hidePerfTooltip() {
@@ -717,14 +653,16 @@ function hidePerfTooltip() {
 function setPerfChartNotice(selection) {
   if (!perfChartNotice) return;
   const messages = [];
-  if (selection?.reason === "mixed-units" && selection.skipped?.length) {
-    const labels = selection.skipped
+  // Metricas em % agora convivem com as em USD usando o eixo da direita, entao
+  // nao ha mais metrica "oculta" — so precisamos avisar onde ler o valor.
+  if (selection?.percentMetrics?.length) {
+    const labels = selection.percentMetrics
       .map((key) => perfMetricLabels[key] ?? key)
       .join(", ");
-    messages.push(`${labels} oculto no grafico porque usa escala percentual. Selecione apenas essa metrica para ver o eixo em %.`);
+    messages.push(`${labels} usa o eixo percentual à direita.`);
   }
   if (perfOutlierCount > 0) {
-    messages.push(`${perfOutlierCount} evento(s) com PnL fora da faixa esperada foram ignorados no grafico/resumo. Confira a tabela para ajustar entrada, saida ou PnL se necessario.`);
+    messages.push(`${perfOutlierCount} evento(s) com PnL fora da faixa esperada foram ignorados no gráfico/resumo. Confira a tabela para ajustar entrada, saída ou PnL se necessário.`);
   }
   if (messages.length) {
     perfChartNotice.textContent = messages.join(" ");
@@ -752,6 +690,194 @@ function updatePerformanceStats(items) {
   updatePerfCalculator();
 }
 
+/* ==========================================================================
+   Graficos de serie temporal (/api/snapshots)
+   ========================================================================== */
+
+let equityChart = null;
+let rangeChart = null;
+let ltvChart = null;
+let snapshotPoints = [];
+
+function formatSnapshotTime(seconds) {
+  return new Date(seconds * 1000).toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function snapshotTooltip(idx, xSeconds, defs, columns) {
+  const lines = defs
+    .map((def) => {
+      const value = columns[def.key]?.[idx];
+      const text =
+        value == null
+          ? "-"
+          : def.scale === "pct"
+            ? `${Number(value).toFixed(2)}%`
+            : formatNumber(value, def.digits ?? 4);
+      return `<div class="line"><span>${def.label}</span><span>${text}</span></div>`;
+    })
+    .join("");
+  return `<div class="title">${formatSnapshotTime(xSeconds)}</div>${lines}`;
+}
+
+function toggleChartEmpty(el, empty, message) {
+  if (!el) return;
+  if (message) {
+    el.textContent = message;
+  }
+  el.classList.toggle("hidden", !empty);
+}
+
+async function fetchSnapshots(poolId, bucket) {
+  const params = new URLSearchParams();
+  if (startInput.value) params.set("from", new Date(startInput.value).getTime());
+  if (endInput.value) params.set("to", new Date(endInput.value).getTime());
+  if (bucket) params.set("bucket", bucket);
+  const res = await fetch(`/api/snapshots/${poolId}?${params.toString()}`);
+  if (!res.ok) {
+    return { points: [] };
+  }
+  return res.json();
+}
+
+function renderEquityChart(points) {
+  if (!equityChartEl) return;
+  const keys = ["posValueUsd", "posPnlUsd", "posFeesUsd"];
+  const { xs, columns } = snapshotColumns(points, [...keys, "portfolioUsd"]);
+  // Taxas e valor zeram quando a posicao troca: quebrar a linha evita
+  // desenhar uma queda que parece prejuizo.
+  const split = splitOnPositionChange(points, columns, keys);
+  const defs = [
+    { key: "posValueUsd", label: "Valor da posição", color: seriesColor("equity", "#36d399"), digits: 2 },
+    { key: "posPnlUsd", label: "PnL da posição", color: seriesColor("pnlNet", "#4ea1ff"), digits: 4 },
+    { key: "posFeesUsd", label: "Taxas acumuladas", color: seriesColor("feesCum", "#f6c343"), digits: 4 }
+  ];
+  const hasData = defs.some((def) => split[def.key].some((v) => v != null));
+  toggleChartEmpty(equityEmpty, !hasData);
+  if (!hasData) {
+    equityChart?.destroy();
+    return;
+  }
+  if (!equityChart) {
+    equityChart = createTimeChart(equityChartEl, {
+      height: 260,
+      tooltipEl: equityTooltip,
+      formatValue: (v) => formatNumber(v, 2),
+      renderTooltip: (idx, x, defsIn) => snapshotTooltip(idx, x, defsIn, split)
+    });
+  }
+  equityChart.update(xs, defs, split);
+}
+
+function renderRangeChart(points) {
+  if (!rangeChartEl) return;
+  const keys = ["price", "posLower", "posUpper", "rangeLower", "rangeUpper"];
+  const { xs, columns } = snapshotColumns(points, keys);
+  const bandColor = seriesColor("equity", "#36d399");
+  const defs = [
+    {
+      key: "posUpper",
+      label: "Topo da posição",
+      color: "rgba(54, 211, 153, 0.35)",
+      width: 1,
+      dash: true,
+      bandWith: "posLower",
+      bandFill: "rgba(54, 211, 153, 0.10)"
+    },
+    { key: "posLower", label: "Base da posição", color: "rgba(54, 211, 153, 0.35)", width: 1, dash: true },
+    { key: "price", label: "Preço", color: seriesColor("price", "#4ea1ff"), width: 2, digits: 6 }
+  ];
+  const hasData = columns.price.some((v) => v != null);
+  toggleChartEmpty(rangeEmpty, !hasData);
+  if (!hasData) {
+    rangeChart?.destroy();
+    return;
+  }
+  if (!rangeChart) {
+    rangeChart = createTimeChart(rangeChartEl, {
+      height: 240,
+      axisSize: 92,
+      tooltipEl: rangeTooltip,
+      formatValue: (v) => formatNumber(v, 6),
+      renderTooltip: (idx, x, defsIn) => snapshotTooltip(idx, x, defsIn, columns)
+    });
+  }
+  rangeChart.update(xs, defs, columns);
+  void bandColor;
+}
+
+function renderLtvChart(points) {
+  if (!ltvChartEl) return;
+  const { xs, columns } = snapshotColumns(points, ["kLtv", "kDebtUsd", "kCollatUsd"]);
+  const hasLoan = columns.kDebtUsd.some((v) => v != null) || columns.kLtv.some((v) => v != null);
+  if (ltvBlock) {
+    // Sem emprestimo no periodo o bloco inteiro sai da pagina, em vez de
+    // ocupar espaco com um grafico vazio.
+    ltvBlock.classList.toggle("hidden", !hasLoan);
+  }
+  toggleChartEmpty(ltvEmpty, !hasLoan);
+  if (!hasLoan) {
+    ltvChart?.destroy();
+    return;
+  }
+  // O LTV vem em fracao (0-1) e e mostrado em %, no eixo da direita.
+  const pctColumns = { ...columns, kLtv: columns.kLtv.map((v) => (v == null ? null : v * 100)) };
+  const defs = [
+    { key: "kCollatUsd", label: "Colateral (USD)", color: seriesColor("equity", "#36d399"), digits: 2 },
+    { key: "kDebtUsd", label: "Dívida (USD)", color: seriesColor("pnlTotal", "#f472b6"), digits: 2 },
+    { key: "kLtv", label: "LTV", color: seriesColor("ltv", "#f6c343"), scale: "pct", digits: 2 }
+  ];
+  if (!ltvChart) {
+    ltvChart = createTimeChart(ltvChartEl, {
+      height: 240,
+      tooltipEl: ltvTooltip,
+      formatValue: (v) => formatNumber(v, 2),
+      renderTooltip: (idx, x, defsIn) => snapshotTooltip(idx, x, defsIn, pctColumns)
+    });
+  }
+  ltvChart.update(xs, defs, pctColumns);
+}
+
+function renderSnapshotCharts(points) {
+  snapshotPoints = points;
+  if (snapshotMeta) {
+    snapshotMeta.textContent = points.length
+      ? `${points.length} amostra(s) no período.`
+      : "Nenhuma amostra registrada no período. As amostras começam a ser gravadas quando a pool roda.";
+  }
+  renderEquityChart(points);
+  renderRangeChart(points);
+  renderLtvChart(points);
+}
+
+async function updateSnapshotCharts(poolId) {
+  if (!equityChartEl) return;
+  // "Todas as pools" nao faz sentido aqui: as series sao por pool.
+  if (!poolId || poolId === ALL_POOLS_ID) {
+    renderSnapshotCharts([]);
+    if (snapshotMeta) {
+      snapshotMeta.textContent = "Selecione uma pool específica para ver a evolução no tempo.";
+    }
+    return;
+  }
+  try {
+    const data = await fetchSnapshots(poolId, snapshotBucketSelect?.value ?? "15m");
+    renderSnapshotCharts(Array.isArray(data?.points) ? data.points : []);
+  } catch {
+    renderSnapshotCharts([]);
+  }
+}
+
+if (snapshotBucketSelect) {
+  snapshotBucketSelect.addEventListener("change", () => {
+    void updateSnapshotCharts(poolSelect.value);
+  });
+}
+
 async function refresh() {
   try {
     errorBox.classList.add("hidden");
@@ -765,6 +891,7 @@ async function refresh() {
     if (!pools.length) {
       renderHistory([]);
       updateSummary([], { aggregate: false });
+      renderSnapshotCharts([]);
       return;
     }
 
@@ -808,10 +935,19 @@ async function refresh() {
     renderHistory(typeFiltered);
     updateSummary(typeFiltered, { aggregate: selectedId === ALL_POOLS_ID });
     updatePerformance(typeFiltered);
+    await updateSnapshotCharts(selectedId);
   } catch (err) {
     errorBox.textContent = err instanceof Error ? err.message : String(err);
     errorBox.classList.remove("hidden");
   }
+}
+
+function showPerfEmpty(message) {
+  perfEmpty.textContent = message;
+  perfEmpty.classList.remove("hidden");
+  perfEmpty.style.display = "flex";
+  clearPerformanceChart();
+  setPerfChartNotice(null);
 }
 
 function updatePerformance(items) {
@@ -819,33 +955,17 @@ function updatePerformance(items) {
   updatePerformanceStats(items);
   const activeMetrics = perfMetricOrder.filter((key) => perfMetricVisibility[key] !== false);
   if (!activeMetrics.length) {
-    perfEmpty.textContent = "Selecione ao menos uma metrica";
-    perfEmpty.classList.remove("hidden");
-    perfEmpty.style.display = "flex";
-    const ctx = perfCanvas.getContext("2d");
-    if (ctx) ctx.clearRect(0, 0, perfCanvas.width, perfCanvas.height);
-    perfChartPoints = [];
-    perfChartMetrics = [];
-    setPerfChartNotice(null);
-    hidePerfTooltip();
+    showPerfEmpty("Selecione ao menos uma métrica");
     return;
   }
   const series = aggregatePerformance(items, perfGroup);
   if (!series.length) {
-    perfEmpty.textContent = "Sem dados no periodo";
-    perfEmpty.classList.remove("hidden");
-    perfEmpty.style.display = "flex";
-    const ctx = perfCanvas.getContext("2d");
-    if (ctx) ctx.clearRect(0, 0, perfCanvas.width, perfCanvas.height);
-    perfChartPoints = [];
-    perfChartMetrics = [];
-    setPerfChartNotice(null);
-    hidePerfTooltip();
+    showPerfEmpty("Sem dados no período");
     return;
   }
   perfEmpty.classList.add("hidden");
   perfEmpty.style.display = "none";
-  drawPerformanceChart(perfCanvas, series);
+  drawPerformanceChart(series);
 }
 
 applyBtn.addEventListener("click", () => {
@@ -931,38 +1051,6 @@ if (perfCalcCapital) {
 if (perfCalcDays) {
   perfCalcDays.addEventListener("input", () => {
     updatePerfCalculator();
-  });
-}
-
-if (perfCanvas) {
-  perfCanvas.addEventListener("mousemove", (event) => {
-    if (!perfChartPoints.length || !perfChartMetrics.length) {
-      hidePerfTooltip();
-      return;
-    }
-    const rect = perfCanvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    let nearest = perfChartPoints[0];
-    let bestDist = Math.abs(x - nearest.x);
-    for (let i = 1; i < perfChartPoints.length; i += 1) {
-      const dist = Math.abs(x - perfChartPoints[i].x);
-      if (dist < bestDist) {
-        bestDist = dist;
-        nearest = perfChartPoints[i];
-      }
-    }
-    if (bestDist > 40) {
-      hidePerfTooltip();
-      return;
-    }
-    const tooltipX = nearest.x + 12;
-    const tooltipY = y - 40;
-    showPerfTooltip(nearest, tooltipX, tooltipY);
-  });
-
-  perfCanvas.addEventListener("mouseleave", () => {
-    hidePerfTooltip();
   });
 }
 

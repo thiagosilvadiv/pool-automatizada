@@ -1,4 +1,4 @@
-﻿import { HermesClient } from "@pythnetwork/hermes-client";
+import { HermesClient } from "@pythnetwork/hermes-client";
 
 export type PythPrice = {
   price: number;

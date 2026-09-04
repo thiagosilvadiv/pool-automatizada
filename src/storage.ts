@@ -3,6 +3,7 @@ import { fileURLToPath } from "url";
 import { promises as fs } from "fs";
 import { logger } from "./logger.js";
 import { getRedisClient, getRedisKey } from "./redis.js";
+import { compactSnapshots, normalizeSnapshots, type PoolSnapshot } from "./snapshots.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,14 +26,60 @@ export function defaultHistoryFile(name = "history.json"): string {
   return path.join(__dirname, "..", "data", name);
 }
 
+/** Nomes de pool viram nome de arquivo: remove qualquer coisa fora de [A-Za-z0-9_-]. */
+export function sanitizeStoreName(name: string): string {
+  return name.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
+/** Arquivo de historico de uma pool: data/history-<poolId>.json */
+export function historyFileFor(poolId: string): string {
+  return defaultHistoryFile(`history-${sanitizeStoreName(poolId)}.json`);
+}
+
+/**
+ * Caminho legado: versoes antigas gravavam em data/<poolId>, sem prefixo nem
+ * extensao. Mantido apenas para migrar o arquivo na primeira leitura.
+ */
+export function legacyHistoryFileFor(poolId: string): string {
+  return defaultHistoryFile(sanitizeStoreName(poolId));
+}
+
 class FileHistoryStore implements HistoryStore {
   private filePath: string;
+  private legacyPath: string | null;
+  private migrated = false;
 
-  constructor(filePath: string) {
+  constructor(filePath: string, legacyPath: string | null = null) {
     this.filePath = filePath;
+    this.legacyPath = legacyPath;
+  }
+
+  /** Renomeia o arquivo legado para o nome novo, uma unica vez. */
+  private async migrateLegacyFile(): Promise<void> {
+    if (this.migrated || !this.legacyPath || this.legacyPath === this.filePath) {
+      this.migrated = true;
+      return;
+    }
+    this.migrated = true;
+    try {
+      await fs.access(this.filePath);
+      return;
+    } catch {}
+    try {
+      await fs.access(this.legacyPath);
+    } catch {
+      return;
+    }
+    try {
+      await fs.rename(this.legacyPath, this.filePath);
+      logger.info({ from: this.legacyPath, to: this.filePath }, "migrated legacy history file");
+    } catch (err) {
+      logger.warn({ err }, "failed to migrate legacy history file");
+    }
   }
 
   async load(): Promise<HistoryState | null> {
+    await this.migrateLegacyFile();
     try {
       const raw = await fs.readFile(this.filePath, "utf8");
       return JSON.parse(raw) as HistoryState;
@@ -92,7 +139,201 @@ export async function createHistoryStore(name: string): Promise<HistoryStore> {
   if (client) {
     return new RedisHistoryStore(getRedisKey(`history:${name}`));
   }
-  return new FileHistoryStore(defaultHistoryFile(name));
+  return new FileHistoryStore(historyFileFor(name), legacyHistoryFileFor(name));
+}
+
+export type SnapshotState = {
+  points: PoolSnapshot[];
+  updatedAt: string | null;
+};
+
+export type SnapshotAppendOptions = {
+  maxPoints: number;
+  downsample: boolean;
+};
+
+export type SnapshotStore = {
+  load(): Promise<SnapshotState | null>;
+  append(point: PoolSnapshot, options: SnapshotAppendOptions): Promise<void>;
+  flush(): Promise<void>;
+  clear(): Promise<void>;
+};
+
+export function snapshotFileFor(poolId: string): string {
+  return defaultHistoryFile(`snapshots-${sanitizeStoreName(poolId)}.json`);
+}
+
+/**
+ * Backend em arquivo. Diferente dos outros stores deste modulo:
+ *
+ * - mantem os pontos em memoria (a serie inteira e reescrita a cada flush, entao
+ *   reler do disco a cada amostra seria desperdicio);
+ * - grava JSON compacto, sem indentacao — sao milhares de pontos numericos;
+ * - grava em arquivo temporario e renomeia, porque este arquivo e escrito com
+ *   frequencia muito maior que os demais e uma queda no meio da escrita
+ *   corromperia a serie inteira.
+ */
+class FileSnapshotStore implements SnapshotStore {
+  private filePath: string;
+  private points: PoolSnapshot[] | null = null;
+  private dirty = false;
+  private flushTimer: NodeJS.Timeout | null = null;
+  private debounceMs: number;
+  private writing: Promise<void> | null = null;
+
+  constructor(filePath: string, debounceMs = 0) {
+    this.filePath = filePath;
+    this.debounceMs = Math.max(0, debounceMs);
+  }
+
+  private async ensureLoaded(): Promise<PoolSnapshot[]> {
+    if (this.points) {
+      return this.points;
+    }
+    try {
+      const raw = await fs.readFile(this.filePath, "utf8");
+      const parsed = JSON.parse(raw) as SnapshotState;
+      this.points = normalizeSnapshots(parsed?.points);
+    } catch {
+      this.points = [];
+    }
+    return this.points;
+  }
+
+  async load(): Promise<SnapshotState | null> {
+    const points = await this.ensureLoaded();
+    return { points, updatedAt: points.length ? new Date(points[points.length - 1].t).toISOString() : null };
+  }
+
+  async append(point: PoolSnapshot, options: SnapshotAppendOptions): Promise<void> {
+    const points = await this.ensureLoaded();
+    points.push(point);
+    this.points = compactSnapshots(points, options.maxPoints, options.downsample);
+    this.dirty = true;
+    if (this.debounceMs === 0) {
+      await this.flush();
+      return;
+    }
+    if (!this.flushTimer) {
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = null;
+        void this.flush();
+      }, this.debounceMs);
+      // Nao segura o processo aberto so por causa do flush pendente.
+      this.flushTimer.unref?.();
+    }
+  }
+
+  async flush(): Promise<void> {
+    if (!this.dirty || !this.points) {
+      return;
+    }
+    if (this.writing) {
+      await this.writing;
+    }
+    if (!this.dirty || !this.points) {
+      return;
+    }
+    this.dirty = false;
+    const state: SnapshotState = {
+      points: this.points,
+      updatedAt: new Date().toISOString()
+    };
+    const tmpPath = `${this.filePath}.tmp`;
+    this.writing = (async () => {
+      await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+      await fs.writeFile(tmpPath, JSON.stringify(state), "utf8");
+      await fs.rename(tmpPath, this.filePath);
+    })();
+    try {
+      await this.writing;
+    } catch (err) {
+      this.dirty = true;
+      logger.warn({ err }, "failed to save snapshots");
+    } finally {
+      this.writing = null;
+    }
+  }
+
+  async clear(): Promise<void> {
+    this.points = [];
+    this.dirty = false;
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    try {
+      await fs.rm(this.filePath);
+    } catch {}
+  }
+}
+
+/**
+ * Backend Redis. Usa uma lista em vez de um blob JSON: `RPUSH` + `LTRIM` custa
+ * O(1) por amostra, enquanto reescrever a serie inteira a cada amostra ficaria
+ * mais caro a cada ponto adicionado. O `LTRIM` ja implementa a retencao, entao
+ * aqui nao ha downsampling — a cauda antiga e descartada.
+ */
+class RedisSnapshotStore implements SnapshotStore {
+  private key: string;
+
+  constructor(key: string) {
+    this.key = key;
+  }
+
+  async load(): Promise<SnapshotState | null> {
+    const client = await getRedisClient();
+    if (!client) {
+      return null;
+    }
+    const raw = await client.lRange(this.key, 0, -1);
+    const points = normalizeSnapshots(
+      raw
+        .map((line) => {
+          try {
+            return JSON.parse(line) as PoolSnapshot;
+          } catch {
+            return null;
+          }
+        })
+        .filter((p): p is PoolSnapshot => p != null)
+    );
+    return { points, updatedAt: points.length ? new Date(points[points.length - 1].t).toISOString() : null };
+  }
+
+  async append(point: PoolSnapshot, options: SnapshotAppendOptions): Promise<void> {
+    const client = await getRedisClient();
+    if (!client) {
+      throw new Error("Redis not configured");
+    }
+    await client.rPush(this.key, JSON.stringify(point));
+    if (options.maxPoints > 0) {
+      await client.lTrim(this.key, -options.maxPoints, -1);
+    }
+  }
+
+  async flush(): Promise<void> {
+    // RPUSH ja persistiu.
+  }
+
+  async clear(): Promise<void> {
+    const client = await getRedisClient();
+    if (!client) {
+      throw new Error("Redis not configured");
+    }
+    await client.del(this.key);
+  }
+}
+
+export async function createSnapshotStore(
+  name: string,
+  options: { flushDebounceMs?: number } = {}
+): Promise<SnapshotStore> {
+  const client = await getRedisClient();
+  if (client) {
+    return new RedisSnapshotStore(getRedisKey(`snapshots:${sanitizeStoreName(name)}`));
+  }
+  return new FileSnapshotStore(snapshotFileFor(name), options.flushDebounceMs ?? 0);
 }
 
 export type PoolsState<T> = {

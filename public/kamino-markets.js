@@ -95,8 +95,8 @@ async function loadDefaultMarket() {
   const config = await fetchConfig().catch(() => null);
   const addr = config?.kaminoMarketAddress ?? "";
   marketDefaultEl.textContent = addr
-    ? `Padrao do env: ${addr}`
-    : "Padrao do env: (nao configurado)";
+    ? `Padrão do env: ${addr}`
+    : "Padrão do env: (não configurado)";
 }
 
 if (marketSaveBtn) {
@@ -106,7 +106,7 @@ if (marketSaveBtn) {
     const address = marketAddressInput?.value?.trim();
     setStatus("", false);
     if (!name || !address) {
-      setStatus("Nome e endereco sao obrigatorios.", true);
+      setStatus("Nome e endereço são obrigatórios.", true);
       return;
     }
     const payload = { name, marketAddress: address };

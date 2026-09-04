@@ -6,12 +6,14 @@ import { createCloseAccountInstruction, TOKEN_PROGRAM_ID, NATIVE_MINT } from "@s
 import { Config } from "./config.js";
 import { OrcaBot } from "./orca.js";
 import { BotRunner } from "./runner.js";
-import type { HistoryEvent } from "./runner.js";
+import type { HistoryEvent, RunnerStatus } from "./runner.js";
 import { logger, stringifyError } from "./logger.js";
 import { BalanceCoordinator } from "./balance-coordinator.js";
 import {
   createHistoryStore,
   createPoolsStore,
+  createSnapshotStore,
+  SnapshotStore,
   createKaminoLoansStore,
   createSwapAllowlistStore,
   KaminoLoanEntry,
@@ -23,11 +25,26 @@ import {
   SwapAllowlistStore
 } from "./storage.js";
 import { getTrendSnapshot } from "./trend.js";
+import {
+  bucketSnapshots,
+  filterSnapshots,
+  type PoolSnapshot,
+  type SnapshotBucket
+} from "./snapshots.js";
 import { getSolUsdPrice } from "./pyth.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+
+/** Converte para numero finito ou null (status pode trazer NaN/undefined). */
+function finiteOrNullValue(value: unknown): number | null {
+  if (value == null) {
+    return null;
+  }
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
 const DEFAULT_USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB";
 
 function isRateLimitError(err: unknown): boolean {
@@ -174,6 +191,10 @@ export class PoolManager {
   private kaminoLoansState: KaminoLoansState = { loans: [], updatedAt: null };
   private kaminoMarkets: KaminoMarketEntry[] = [];
   private kaminoScanTimer: NodeJS.Timeout | null = null;
+  private snapshotTimer: NodeJS.Timeout | null = null;
+  private snapshotStores = new Map<string, SnapshotStore>();
+  private snapshotInFlight = false;
+  private lastSnapshotTick = new Map<string, string | null>();
   private kaminoScanInFlight = false;
   private kaminoScanCooldownUntil: number | null = null;
   private balanceCoordinator = new BalanceCoordinator();
@@ -196,6 +217,7 @@ export class PoolManager {
     }
     this.startKaminoLoansScan();
     this.startAutoAddLiquidityChecks();
+    this.startSnapshotSampling();
   }
 
   getSwapAllowlist(): { mints: string[]; updatedAt: string | null } {
@@ -398,6 +420,16 @@ export class PoolManager {
     if (record) {
       record.runner.stop();
       this.pools.delete(id);
+    }
+    const snapshotStore = this.snapshotStores.get(id);
+    if (snapshotStore) {
+      this.snapshotStores.delete(id);
+      this.lastSnapshotTick.delete(id);
+      try {
+        await snapshotStore.clear();
+      } catch (err) {
+        logger.warn({ err, poolId: id }, "failed to clear snapshots for removed pool");
+      }
     }
     this.balanceCoordinator.clearPool(id);
     this.clearResumeTracking(id);
@@ -898,6 +930,151 @@ export class PoolManager {
       throw new Error("No pool selected");
     }
     await this.updateHistoryEvent(this.selectedPoolId, eventId, field, value);
+  }
+
+  /**
+   * Amostragem periodica do estado das pools.
+   *
+   * De proposito nao usa `listSummaries()` nem faz qualquer chamada on-chain:
+   * le apenas o ultimo status ja calculado pelo tick do runner. Uma amostra
+   * custa uma leitura de memoria e um append no store.
+   */
+  private startSnapshotSampling(): void {
+    if (this.snapshotTimer) {
+      clearInterval(this.snapshotTimer);
+      this.snapshotTimer = null;
+    }
+    if (!this.baseConfig.snapshotEnabled) {
+      return;
+    }
+    const intervalMs = Math.max(30_000, Number(this.baseConfig.snapshotIntervalSec ?? 300) * 1000);
+    this.snapshotTimer = setInterval(() => {
+      void this.sampleSnapshots();
+    }, intervalMs);
+    this.snapshotTimer.unref?.();
+  }
+
+  stopSnapshotSampling(): void {
+    if (this.snapshotTimer) {
+      clearInterval(this.snapshotTimer);
+      this.snapshotTimer = null;
+    }
+  }
+
+  /** Descarrega o que estiver pendente em memoria (encerramento do processo). */
+  async flushSnapshots(): Promise<void> {
+    await Promise.all(
+      [...this.snapshotStores.values()].map(async (store) => {
+        try {
+          await store.flush();
+        } catch (err) {
+          logger.warn({ err }, "failed to flush snapshots");
+        }
+      })
+    );
+  }
+
+  private async getSnapshotStore(poolId: string): Promise<SnapshotStore> {
+    const existing = this.snapshotStores.get(poolId);
+    if (existing) {
+      return existing;
+    }
+    const store = await createSnapshotStore(poolId, {
+      flushDebounceMs: Number(this.baseConfig.snapshotFlushDebounceMs ?? 0)
+    });
+    this.snapshotStores.set(poolId, store);
+    return store;
+  }
+
+  private buildSnapshot(status: RunnerStatus): PoolSnapshot {
+    const price = finiteOrNullValue(status.lastPrice);
+    const posLower = finiteOrNullValue(status.positionRange?.lower ?? null);
+    const posUpper = finiteOrNullValue(status.positionRange?.upper ?? null);
+    const inRange =
+      price != null && posLower != null && posUpper != null
+        ? ((price >= posLower && price <= posUpper ? 1 : 0) as 0 | 1)
+        : null;
+    return {
+      t: Date.now(),
+      price,
+      solUsd: finiteOrNullValue(status.solUsdPrice),
+      posValueUsd: finiteOrNullValue(status.positionValueUsd),
+      posPnlUsd: finiteOrNullValue(status.positionPnlUsd),
+      posEntryUsd: finiteOrNullValue(status.positionEntryUsd),
+      posFeesUsd: finiteOrNullValue(status.positionFeesUsd),
+      portfolioUsd: finiteOrNullValue(status.portfolioUsd),
+      pnlUsd: finiteOrNullValue(status.pnlUsd),
+      posValueSol: finiteOrNullValue(status.positionValue),
+      posPnlSol: finiteOrNullValue(status.positionPnl),
+      rangeLower: finiteOrNullValue(status.targetRange?.lower ?? null),
+      rangeUpper: finiteOrNullValue(status.targetRange?.upper ?? null),
+      posLower,
+      posUpper,
+      kCollatUsd: finiteOrNullValue(status.kaminoCollateralUsd),
+      kDebtUsd: finiteOrNullValue(status.kaminoDebtUsd),
+      kLtv: finiteOrNullValue(status.kaminoLtv),
+      running: status.running ? 1 : 0,
+      inRange,
+      posMint: status.positionMint ?? null
+    };
+  }
+
+  private async sampleSnapshots(): Promise<void> {
+    if (this.snapshotInFlight) {
+      return;
+    }
+    this.snapshotInFlight = true;
+    const maxPoints = Number(this.baseConfig.snapshotMaxPoints ?? 2880);
+    const downsample = Boolean(this.baseConfig.snapshotDownsampleEnabled ?? true);
+    try {
+      for (const [poolId, record] of this.pools) {
+        try {
+          const status = record.runner.getStatus();
+          if (!status) {
+            continue;
+          }
+          // Pool parada e sem tick novo desde a ultima amostra: nao adianta
+          // repetir o mesmo ponto indefinidamente. Ainda assim gravamos a
+          // primeira amostra apos parar, para a curva terminar no lugar certo.
+          const lastTick = this.lastSnapshotTick.get(poolId);
+          if (!status.running && lastTick !== undefined && lastTick === status.lastTickAt) {
+            continue;
+          }
+          this.lastSnapshotTick.set(poolId, status.lastTickAt ?? null);
+          const store = await this.getSnapshotStore(poolId);
+          await store.append(this.buildSnapshot(status), { maxPoints, downsample });
+        } catch (err) {
+          logger.warn({ err, poolId }, "failed to record snapshot");
+        }
+      }
+    } finally {
+      this.snapshotInFlight = false;
+    }
+  }
+
+  /**
+   * Le a serie de uma pool. Vai direto ao store em vez de exigir um runner vivo:
+   * depois de reiniciar o processo, as pools ainda nao instanciadas precisam
+   * aparecer no grafico.
+   */
+  async getSnapshots(
+    poolId: string,
+    options: { from?: number | null; to?: number | null; bucket?: SnapshotBucket } = {}
+  ): Promise<{ points: PoolSnapshot[]; updatedAt: string | null }> {
+    const store = await this.getSnapshotStore(poolId);
+    const state = await store.load();
+    const all = state?.points ?? [];
+    const filtered = filterSnapshots(all, options.from ?? null, options.to ?? null);
+    return {
+      points: bucketSnapshots(filtered, options.bucket ?? "raw"),
+      updatedAt: state?.updatedAt ?? null
+    };
+  }
+
+  async clearSnapshots(poolId: string): Promise<void> {
+    const store = await this.getSnapshotStore(poolId);
+    await store.clear();
+    this.lastSnapshotTick.delete(poolId);
   }
 
   private startKaminoLoansScan(): void {

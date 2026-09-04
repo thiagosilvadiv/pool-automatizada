@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Orca Liquidity Bot - Análises</title>
+    <link rel="stylesheet" href="/vendor/uplot/uPlot.min.css" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -11,11 +12,7 @@
       <header>
         <h1>Análises</h1>
         <p class="subtitle">Resumo de performance e histórico filtrado por data.</p>
-        <nav class="nav">
-          <a href="/">Painel</a>
-          <a href="/allowlist.html">Tokens Permitidos</a>
-          <a href="/kamino-markets.html">Kamino Markets</a>
-        </nav>
+        <nav class="nav" id="appNav"></nav>
       </header>
 
       <section class="panel">
@@ -106,7 +103,7 @@
 
       <section class="panel">
         <div class="row row-between">
-          <h2>Performance por periodo</h2>
+          <h2>Performance por período</h2>
           <span class="badge">Fechamentos da pool</span>
         </div>
         <div class="row wrap">
@@ -115,11 +112,11 @@
             <select id="perfGroup">
               <option value="day">Dia</option>
               <option value="week">Semana</option>
-              <option value="month">Mes</option>
+              <option value="month">Mês</option>
             </select>
           </div>
           <div class="performance-metrics">
-            <span class="label">Metricas:</span>
+            <span class="label">Métricas:</span>
             <label class="metric-toggle is-checked">
               <input type="checkbox" data-series="fees" checked />
               <span>Taxas</span>
@@ -162,19 +159,19 @@
             <div class="metric-help-list">
               <p><strong>Taxas:</strong> taxas coletadas no período.</p>
               <p><strong>Taxas acumuladas:</strong> soma das taxas ao longo do período.</p>
-              <p><strong>Rendimento da taxa (%):</strong> taxas coletadas divididas pela soma das entradas validas dos fechamentos da pool.</p>
-              <p><strong>PnL realizado:</strong> resultado gravado no fechamento da pool. Eventos Pago Emprestimo nao entram no PnL.</p>
-              <p><strong>PnL sem taxas coletadas:</strong> PnL realizado descontando as taxas coletadas da posicao.</p>
-              <p><strong>PnL realizado total:</strong> mesma base de PnL realizado, mantida para comparacao historica.</p>
+              <p><strong>Rendimento da taxa (%):</strong> taxas coletadas divididas pela soma das entradas válidas dos fechamentos da pool.</p>
+              <p><strong>PnL realizado:</strong> resultado gravado no fechamento da pool. Eventos Pago Empréstimo não entram no PnL.</p>
+              <p><strong>PnL sem taxas coletadas:</strong> PnL realizado descontando as taxas coletadas da posição.</p>
+              <p><strong>PnL realizado total:</strong> mesma base de PnL realizado, mantida para comparação histórica.</p>
               <p><strong>PnL total sem taxas coletadas:</strong> PnL realizado total descontando taxas coletadas.</p>
-              <p><strong>PnL realizado acumulado:</strong> soma do PnL realizado ao longo do periodo.</p>
+              <p><strong>PnL realizado acumulado:</strong> soma do PnL realizado ao longo do período.</p>
               <p><strong>PnL sem taxas coletadas acumulado:</strong> soma do PnL realizado sem taxas coletadas.</p>
             </div>
           </details>
         </div>
         <div class="performance-wrap">
-          <canvas id="perfCanvas" class="performance-canvas"></canvas>
-          <div id="perfEmpty" class="chart-empty hidden">Sem dados no periodo</div>
+          <div id="perfCanvas" class="performance-canvas"></div>
+          <div id="perfEmpty" class="chart-empty hidden">Sem dados no período</div>
           <div id="perfTooltip" class="performance-tooltip hidden"></div>
           <div id="perfChartNotice" class="chart-notice hidden"></div>
         </div>
@@ -201,8 +198,8 @@
         </div>
         <div class="performance-calculator">
           <div class="calc-header">
-            <h3>Calculadora de projecao</h3>
-            <span class="calc-meta">Base: media diaria de taxas no periodo filtrado.</span>
+            <h3>Calculadora de projeção</h3>
+            <span class="calc-meta">Base: média diária de taxas no período filtrado.</span>
           </div>
           <div class="calc-grid">
             <div class="field">
@@ -219,7 +216,68 @@
             </div>
           </div>
         </div>
-        <p class="hint">Grafico usa PnL realizado em fechamentos da pool. Pago Emprestimo nao entra no PnL; metricas em % usam escala propria e aparecem sozinhas.</p>
+        <p class="hint">Gráfico usa PnL realizado em fechamentos da pool. Pago Empréstimo não entra no PnL; métricas em % usam o eixo da direita.</p>
+      </section>
+
+      <section class="panel" id="snapshotPanel">
+        <div class="row row-between">
+          <h2>Evolução no tempo</h2>
+          <span class="badge">Amostras periódicas</span>
+        </div>
+        <p class="subtitle">
+          Série contínua registrada pelo bot entre os eventos, no intervalo de datas filtrado acima.
+        </p>
+        <div class="row wrap">
+          <div class="field">
+            <label for="snapshotBucket">Agregação</label>
+            <select id="snapshotBucket">
+              <option value="raw">Bruto</option>
+              <option value="5m">5 minutos</option>
+              <option value="15m" selected>15 minutos</option>
+              <option value="1h">1 hora</option>
+              <option value="1d">1 dia</option>
+            </select>
+          </div>
+          <span id="snapshotMeta" class="calc-meta"></span>
+        </div>
+
+        <h3>Patrimônio e PnL (USD)</h3>
+        <div class="performance-wrap">
+          <div id="equityChart" class="performance-canvas"></div>
+          <div id="equityEmpty" class="chart-empty hidden">Sem amostras no período</div>
+          <div id="equityTooltip" class="performance-tooltip hidden"></div>
+        </div>
+        <div class="performance-legend">
+          <span><i class="legend-swatch equity"></i> Valor da posição</span>
+          <span><i class="legend-swatch pnlNet"></i> PnL da posição</span>
+          <span><i class="legend-swatch feesCum"></i> Taxas acumuladas</span>
+        </div>
+
+        <h3>Preço e faixa da posição</h3>
+        <div class="performance-wrap">
+          <div id="rangeChart" class="performance-canvas"></div>
+          <div id="rangeEmpty" class="chart-empty hidden">Sem amostras no período</div>
+          <div id="rangeTooltip" class="performance-tooltip hidden"></div>
+        </div>
+        <div class="performance-legend">
+          <span><i class="legend-swatch price"></i> Preço</span>
+          <span><i class="legend-swatch equity"></i> Faixa da posição</span>
+        </div>
+        <p class="hint">A faixa sombreada é o intervalo da posição aberta; fora dela a pool não gera taxas.</p>
+
+        <div id="ltvBlock">
+          <h3>LTV do Kamino</h3>
+          <div class="performance-wrap">
+            <div id="ltvChart" class="performance-canvas"></div>
+            <div id="ltvEmpty" class="chart-empty hidden">Sem empréstimo no período</div>
+            <div id="ltvTooltip" class="performance-tooltip hidden"></div>
+          </div>
+          <div class="performance-legend">
+            <span><i class="legend-swatch ltv"></i> LTV (%)</span>
+            <span><i class="legend-swatch pnlTotal"></i> Dívida (USD)</span>
+            <span><i class="legend-swatch equity"></i> Colateral (USD)</span>
+          </div>
+        </div>
       </section>
 
       <section class="panel">
@@ -255,5 +313,6 @@
       </section>
     </main>
     <script type="module" src="analytics.js"></script>
+    <script type="module" src="nav.js"></script>
   </body>
 </html>

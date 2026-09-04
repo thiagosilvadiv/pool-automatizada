@@ -10,6 +10,7 @@ import { logger, stringifyError } from "./logger.js";
 import { PoolManager, type PoolSummary } from "./pool-manager.js";
 import type { HistoryEvent } from "./runner.js";
 import { createKaminoMarketsStore, type KaminoMarketEntry, type KaminoMarketsState } from "./storage.js";
+import { isSnapshotBucket, SNAPSHOT_BUCKETS } from "./snapshots.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,6 +23,78 @@ const HISTORY_EDITABLE_FIELDS = new Set<keyof HistoryEvent>([
   "positionExitUsd",
   "positionPnlUsd"
 ]);
+
+type SnapshotRouteService = Pick<PoolManager, "getSnapshots" | "clearSnapshots" | "getSelectedPoolId" | "hasPool">;
+
+/** Aceita epoch ms ou ISO-8601; devolve null para qualquer outra coisa. */
+function parseTimeParam(value: unknown): number | null {
+  if (value == null || value === "") {
+    return null;
+  }
+  const num = Number(value);
+  if (Number.isFinite(num)) {
+    return num;
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function registerSnapshotRoutes(app: Express, poolManager: SnapshotRouteService): void {
+  const readSnapshots = async (poolId: string, req: Request, res: Response) => {
+    const bucketParam = req.query.bucket;
+    if (bucketParam != null && bucketParam !== "" && !isSnapshotBucket(bucketParam)) {
+      res.status(400).json({ ok: false, error: `bucket must be one of ${SNAPSHOT_BUCKETS.join(", ")}` });
+      return;
+    }
+    try {
+      const result = await poolManager.getSnapshots(poolId, {
+        from: parseTimeParam(req.query.from),
+        to: parseTimeParam(req.query.to),
+        bucket: isSnapshotBucket(bucketParam) ? bucketParam : "raw"
+      });
+      res.json({
+        poolId,
+        bucket: isSnapshotBucket(bucketParam) ? bucketParam : "raw",
+        updatedAt: result.updatedAt,
+        points: result.points
+      });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  app.get("/api/snapshots", async (req: Request, res: Response) => {
+    const poolId = poolManager.getSelectedPoolId();
+    if (!poolId) {
+      res.status(400).json({ ok: false, error: "No pool selected" });
+      return;
+    }
+    await readSnapshots(poolId, req, res);
+  });
+
+  app.get("/api/snapshots/:poolId", async (req: Request, res: Response) => {
+    const poolId = req.params.poolId;
+    if (!poolManager.hasPool(poolId)) {
+      res.status(404).json({ ok: false, error: "Pool not found" });
+      return;
+    }
+    await readSnapshots(poolId, req, res);
+  });
+
+  app.post("/api/snapshots/clear", async (_req: Request, res: Response) => {
+    const poolId = poolManager.getSelectedPoolId();
+    if (!poolId) {
+      res.status(400).json({ ok: false, error: "No pool selected" });
+      return;
+    }
+    try {
+      await poolManager.clearSnapshots(poolId);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+}
 
 function isEditableHistoryField(field: string): field is keyof HistoryEvent {
   return HISTORY_EDITABLE_FIELDS.has(field as keyof HistoryEvent);
@@ -115,7 +188,9 @@ export async function startServer(config: Config): Promise<void> {
       const files = await fs.readdir(dataDir);
       await Promise.all(
         files
-          .filter((f) => f.startsWith("history-") && f.endsWith(".json"))
+          .filter(
+            (f) => (f.startsWith("history-") || f.startsWith("snapshots-")) && f.endsWith(".json")
+          )
           .map((f) => fs.rm(path.join(dataDir, f)))
       );
     } catch {}
@@ -163,6 +238,26 @@ export async function startServer(config: Config): Promise<void> {
   const poolManager = new PoolManager(config, connection, wallet);
   await poolManager.init();
   poolManager.startAutoCloseEmptyAccounts();
+
+  // Docker manda SIGTERM no redeploy: sem isto as amostras que ainda estao em
+  // memoria (quando snapshotFlushDebounceMs > 0) se perderiam.
+  let shuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    logger.info({ signal }, "shutting down");
+    poolManager.stopSnapshotSampling();
+    try {
+      await poolManager.flushSnapshots();
+    } catch (err) {
+      logger.warn({ err }, "failed to flush snapshots on shutdown");
+    }
+    process.exit(0);
+  };
+  process.once("SIGTERM", () => void shutdown("SIGTERM"));
+  process.once("SIGINT", () => void shutdown("SIGINT"));
 
   const kaminoMarketsStore = await createKaminoMarketsStore();
   let kaminoMarketsState: KaminoMarketsState = (await kaminoMarketsStore.load()) ?? {
@@ -674,6 +769,8 @@ export async function startServer(config: Config): Promise<void> {
   app.get("/api/results", async (_req: Request, res: Response) => {
     res.json(await poolManager.listSummaries());
   });
+
+  registerSnapshotRoutes(app, poolManager);
 
   app.get("/api/history", (_req: Request, res: Response) => {
     res.json(poolManager.getSelectedHistory());

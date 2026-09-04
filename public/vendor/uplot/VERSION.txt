@@ -1,0 +1,8 @@
+uPlot 1.6.32
+Origem: https://registry.npmjs.org/uplot/-/uplot-1.6.32.tgz
+sha256 (tarball): 4b8a8191e425658e3ea8c8c1314b0fc679c861ee3a1af2b20c7b16ba50b5133d
+Licenca: MIT (ver LICENSE)
+
+Arquivos copiados de package/dist/ do tarball, sem modificacao.
+Vendorizado (e nao instalado via npm) porque o painel precisa funcionar offline:
+express.static serve apenas public/, entao node_modules/ nao seria alcancavel.

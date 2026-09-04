@@ -1,4 +1,4 @@
-﻿const statusBadge = document.getElementById("statusBadge");
+const statusBadge = document.getElementById("statusBadge");
 const runningEl = document.getElementById("running");
 const lastTickEl = document.getElementById("lastTick");
 const lastActionEl = document.getElementById("lastAction");
@@ -298,22 +298,22 @@ const actionLabels = {
   "manual-swap-to-sol": "converter tokens para SOL",
   "add-liquidity": "adicionar liquidez",
   "add-liquidity-failed": "falha ao adicionar liquidez",
-  "resume-position": "monitorando posicao existente",
+  "resume-position": "monitorando posição existente",
   "close-failed": "fechamento falhou",
-  "reload-position": "recarregar posicao",
-  "out-of-range-wait": "aguardando confirmacao fora da faixa",
+  "reload-position": "recarregar posição",
+  "out-of-range-wait": "aguardando confirmação fora da faixa",
   "cooldown-wait": "aguardando cooldown",
   "skip-low-sol": "SOL baixo",
-  "skip-low-sol-position": "posicao existente (SOL baixo)",
+  "skip-low-sol-position": "posição existente (SOL baixo)",
   "swap": "swap",
   "kamino-rebalanced": "re-range (Kamino)",
   "kamino-rebalance-failed": "falha Kamino",
   "kamino-deposit": "Kamino: depositar colateral",
-  "kamino-borrow": "Kamino: emprestimo",
+  "kamino-borrow": "Kamino: empréstimo",
   "kamino-reopen": "Kamino: reabrir pool",
-  "kamino-repay": "Kamino: pagar divida",
+  "kamino-repay": "Kamino: pagar dívida",
   "kamino-withdraw": "Kamino: retirar colateral",
-  "kamino-close": "Pago Emprestimo",
+  "kamino-close": "Pago Empréstimo",
   "kamino-wait-funds": "Kamino: aguardando saldo"
 };
 
@@ -479,7 +479,7 @@ function renderKaminoCollaterals(items, active) {
     const target = formatNumber(entry?.targetPriceUsdc, 6);
     const current = formatNumber(entry?.currentPriceUsdc, 6);
     const gapPct = entry?.gapToTargetPct != null ? `${formatNumber(entry.gapToTargetPct * 100, 2)}%` : "-";
-    const text = `Deposito ${depositUsd} / Atual ${currentUsd} / PnL ${pnlUsd} / Media ${avg} / Alvo ${target} / Preco ${current} / Falta ${gapPct}`;
+    const text = `Depósito ${depositUsd} / Atual ${currentUsd} / PnL ${pnlUsd} / Media ${avg} / Alvo ${target} / Preco ${current} / Falta ${gapPct}`;
     return `<div class="kv"><span>${escapeHtml(label)}</span><span>${escapeHtml(text)}</span></div>`;
   });
   kaminoCollateralsEl.innerHTML = rows.join("");
@@ -815,8 +815,8 @@ function formatMarketAddress(address) {
 
 function getKaminoMarketPlaceholderLabel(config) {
   const addr = config?.kaminoMarketAddress ?? "";
-  if (!addr) return "Padrao (KAMINO_MARKET)";
-  return `Padrao (${formatMarketAddress(addr)})`;
+  if (!addr) return "Padrão (KAMINO_MARKET)";
+  return `Padrão (${formatMarketAddress(addr)})`;
 }
 
 function renderKaminoMarketOptions() {
@@ -1189,27 +1189,27 @@ function openEditPoolModal(pool) {
   if (editPoolIdInput) editPoolIdInput.value = pool.id ?? "";
   if (editPoolRangeInput) {
     editPoolRangeInput.value = overrides.rangeWidthPct ?? "";
-    editPoolRangeInput.placeholder = `Padrao (${defaultRange})`;
+    editPoolRangeInput.placeholder = `Padrão (${defaultRange})`;
   }
   if (editPoolBudgetInput) {
     editPoolBudgetInput.value = overrides.budgetUsd ?? "";
-    editPoolBudgetInput.placeholder = `Padrao (${defaultBudget})`;
+    editPoolBudgetInput.placeholder = `Padrão (${defaultBudget})`;
   }
   if (editPoolAutoAddEnabledInput) {
     editPoolAutoAddEnabledInput.value = overrides.autoAddLiquidityEnabled === undefined ? "" : String(overrides.autoAddLiquidityEnabled);
-    setSelectPlaceholder(editPoolAutoAddEnabledInput, `Padrao (${defaultAutoAddEnabled ? "Sim" : "Nao"})`);
+    setSelectPlaceholder(editPoolAutoAddEnabledInput, `Padrão (${defaultAutoAddEnabled ? "Sim" : "Não"})`);
   }
   if (editPoolKaminoEnabledInput) {
     editPoolKaminoEnabledInput.value = overrides.kaminoRebalanceEnabled === undefined ? "" : String(overrides.kaminoRebalanceEnabled);
-    setSelectPlaceholder(editPoolKaminoEnabledInput, `Padrao (${defaultKaminoEnabled ? "Sim" : "Nao"})`);
+    setSelectPlaceholder(editPoolKaminoEnabledInput, `Padrão (${defaultKaminoEnabled ? "Sim" : "Não"})`);
   }
   if (editPoolKaminoDepositPctInput) {
     editPoolKaminoDepositPctInput.value = overrides.kaminoDepositPct ?? "";
-    editPoolKaminoDepositPctInput.placeholder = `Padrao (${formatNumber(defaultKaminoDepositPct, 2)})`;
+    editPoolKaminoDepositPctInput.placeholder = `Padrão (${formatNumber(defaultKaminoDepositPct, 2)})`;
   }
   if (editPoolKaminoBorrowAssetInput) {
     editPoolKaminoBorrowAssetInput.value = overrides.kaminoBorrowAsset ?? "";
-    setSelectPlaceholder(editPoolKaminoBorrowAssetInput, `Padrao (${defaultKaminoBorrowAsset.toUpperCase?.() ?? defaultKaminoBorrowAsset})`);
+    setSelectPlaceholder(editPoolKaminoBorrowAssetInput, `Padrão (${defaultKaminoBorrowAsset.toUpperCase?.() ?? defaultKaminoBorrowAsset})`);
   }
   if (editPoolKaminoMarketInput) {
     editPoolKaminoMarketInput.value = overrides.kaminoMarketAddress ?? "";
@@ -1217,52 +1217,52 @@ function openEditPoolModal(pool) {
   }
   if (editPoolKaminoMaxLtvInput) {
     editPoolKaminoMaxLtvInput.value = overrides.kaminoMaxLtv ?? "";
-    editPoolKaminoMaxLtvInput.placeholder = `Padrao (${formatNumber(defaultKaminoMaxLtv, 2)})`;
+    editPoolKaminoMaxLtvInput.placeholder = `Padrão (${formatNumber(defaultKaminoMaxLtv, 2)})`;
   }
   if (editPoolKaminoCloseRuleInput) {
     editPoolKaminoCloseRuleInput.value = overrides.kaminoCloseRule ?? "";
-    setSelectPlaceholder(editPoolKaminoCloseRuleInput, `Padrao (${defaultKaminoCloseRule})`);
+    setSelectPlaceholder(editPoolKaminoCloseRuleInput, `Padrão (${defaultKaminoCloseRule})`);
   }
   if (editPoolKaminoPriceBufferInput) {
     editPoolKaminoPriceBufferInput.value = overrides.kaminoPriceBufferPct ?? "";
-    editPoolKaminoPriceBufferInput.placeholder = `Padrao (${formatNumber(defaultKaminoPriceBuffer, 2)})`;
+    editPoolKaminoPriceBufferInput.placeholder = `Padrão (${formatNumber(defaultKaminoPriceBuffer, 2)})`;
   }
   if (editPoolKaminoCollateralModeInput) {
     updateExitTokenSelectHints(editPoolKaminoCollateralModeInput, tokenInfo);
     editPoolKaminoCollateralModeInput.value = overrides.kaminoCollateralMode ?? "";
     const defaultLabel = formatKaminoCollateralModeLabel(defaultKaminoCollateralMode, tokenInfo);
-    setSelectPlaceholder(editPoolKaminoCollateralModeInput, `Padrao (${defaultLabel})`);
+    setSelectPlaceholder(editPoolKaminoCollateralModeInput, `Padrão (${defaultLabel})`);
   }
   if (editPoolKaminoConvertInput) {
     editPoolKaminoConvertInput.value = overrides.kaminoConvertToCollateral === undefined
       ? ""
       : String(overrides.kaminoConvertToCollateral);
-    setSelectPlaceholder(editPoolKaminoConvertInput, `Padrao (${defaultKaminoConvert ? "Sim" : "Nao"})`);
+    setSelectPlaceholder(editPoolKaminoConvertInput, `Padrão (${defaultKaminoConvert ? "Sim" : "Não"})`);
   }
   if (editPoolKaminoAvgBasisInput) {
     editPoolKaminoAvgBasisInput.value = overrides.kaminoAvgPriceBasis ?? "";
-    const basisLabel = defaultKaminoAvgBasis === "debt" ? "Divida" : "Deposito";
-    setSelectPlaceholder(editPoolKaminoAvgBasisInput, `Padrao (${basisLabel})`);
+    const basisLabel = defaultKaminoAvgBasis === "debt" ? "Divida" : "Depósito";
+    setSelectPlaceholder(editPoolKaminoAvgBasisInput, `Padrão (${basisLabel})`);
   }
   if (editPoolKaminoAvgModeInput) {
     editPoolKaminoAvgModeInput.value = overrides.kaminoAvgMode ?? "";
     const modeLabel = defaultKaminoAvgMode === "reset" ? "ultimo deposito" : "Cumulativa";
-    setSelectPlaceholder(editPoolKaminoAvgModeInput, `Padrao (${modeLabel})`);
+    setSelectPlaceholder(editPoolKaminoAvgModeInput, `Padrão (${modeLabel})`);
   }
   if (editPoolKaminoAutoCloseInput) {
     editPoolKaminoAutoCloseInput.value = overrides.kaminoAutoCloseOnTokenChange === undefined
       ? ""
       : String(overrides.kaminoAutoCloseOnTokenChange);
-    setSelectPlaceholder(editPoolKaminoAutoCloseInput, `Padrao (${defaultKaminoAutoClose ? "Sim" : "Nao"})`);
+    setSelectPlaceholder(editPoolKaminoAutoCloseInput, `Padrão (${defaultKaminoAutoClose ? "Sim" : "Não"})`);
   }
   if (editPoolRangeAnchorInput) {
     editPoolRangeAnchorInput.value = overrides.rangeAnchor ?? "";
     const anchorLabel = formatRangeAnchorPlaceholder(defaultRangeAnchor);
-    setSelectPlaceholder(editPoolRangeAnchorInput, `Padrao (${anchorLabel})`);
+    setSelectPlaceholder(editPoolRangeAnchorInput, `Padrão (${anchorLabel})`);
   }
   if (editPoolExitBiasInput) {
     editPoolExitBiasInput.value = overrides.rangeExitBiasPct ?? "";
-    editPoolExitBiasInput.placeholder = `Padrao (${formatNumber(defaultExitBias, 2)})`;
+    editPoolExitBiasInput.placeholder = `Padrão (${formatNumber(defaultExitBias, 2)})`;
   }
   openModal(editPoolModal);
 }
@@ -1594,7 +1594,7 @@ function renderPools(data, config) {
     }
   }
   const rows = pools.map((pool) => {
-    const selected = pool.selected ? "Sim" : "Nao";
+    const selected = pool.selected ? "Sim" : "Não";
     const statusLabel = pool.running ? "Rodando" : "Parado";
     const lastActionLabel = actionLabels[pool.lastAction] ?? pool.lastAction ?? "-";
     const startStopAction = pool.running
@@ -1608,14 +1608,14 @@ function renderPools(data, config) {
     const defaultBudget = config?.budgetUsd ?? "-";
     const defaultRangeAnchor = config?.rangeAnchor ?? null;
     const defaultExitBias = config?.rangeExitBiasPct ?? "-";
-    const rangeLabel = rangeDisplay == null ? `Padrao (${defaultRange})` : Number(rangeDisplay).toFixed(2);
-    const budgetLabel = budgetDisplay == null ? `Padrao (${defaultBudget})` : Number(budgetDisplay).toFixed(2);
+    const rangeLabel = rangeDisplay == null ? `Padrão (${defaultRange})` : Number(rangeDisplay).toFixed(2);
+    const budgetLabel = budgetDisplay == null ? `Padrão (${defaultBudget})` : Number(budgetDisplay).toFixed(2);
     const anchorDefaultLabel = formatRangeAnchorPlaceholder(defaultRangeAnchor);
     const rangeAnchorLabel = rangeAnchorDisplay == null
-      ? `Padrao (${anchorDefaultLabel})`
+      ? `Padrão (${anchorDefaultLabel})`
       : formatRangeAnchor(rangeAnchorDisplay);
     const exitBiasLabel = exitBiasDisplay == null
-      ? `Padrao (${formatNumber(defaultExitBias, 2)})`
+      ? `Padrão (${formatNumber(defaultExitBias, 2)})`
       : formatNumber(exitBiasDisplay, 2);
     const createdAt = formatTimestamp(pool.createdAt);
     return `
@@ -1633,7 +1633,7 @@ function renderPools(data, config) {
         <td>${selected}</td>
         <td>
           <details class="action-menu">
-            <summary>Acoes</summary>
+            <summary>Ações</summary>
             <div class="menu">
               <button class="ghost" data-action="select" data-id="${pool.id}">Selecionar</button>
               <button class="ghost" data-action="edit" data-id="${pool.id}">Editar</button>
@@ -1675,7 +1675,7 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
     cachedKaminoLogs = kaminoLogs;
   }
 
-  runningEl.textContent = status.running ? "Sim" : "Nao";
+  runningEl.textContent = status.running ? "Sim" : "Não";
   lastTickEl.textContent = formatTimestamp(status.lastTickAt);
   lastActionEl.textContent = status.lastAction ?? "-";
   lastErrorEl.textContent = status.lastError ?? "-";
@@ -1727,7 +1727,7 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
   pollEl.textContent = config.pollIntervalMs ?? "-";
   confirmSecEl.textContent = config.outOfRangeConfirmSec ?? 0;
   cooldownSecEl.textContent = config.rebalanceCooldownSec ?? 0;
-  dryRunEl.textContent = config.dryRun ? "Sim" : "Nao";
+  dryRunEl.textContent = config.dryRun ? "Sim" : "Não";
 
   if (kaminoStatusEl) {
     kaminoStatusEl.textContent = status.kaminoActive ? "Ativo" : "Inativo";
@@ -1735,11 +1735,11 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
   }
   if (kaminoEnabledEl) {
     const enabled = status.kaminoEnabled ?? config.kaminoRebalanceEnabled;
-    kaminoEnabledEl.textContent = enabled ? "Sim" : "Nao";
+    kaminoEnabledEl.textContent = enabled ? "Sim" : "Não";
     applyStatusTone(kaminoEnabledEl, kaminoEnabledEl.textContent);
   }
   if (kaminoSimulatedEl) {
-    kaminoSimulatedEl.textContent = status.kaminoSimulated ? "Sim" : "Nao";
+    kaminoSimulatedEl.textContent = status.kaminoSimulated ? "Sim" : "Não";
   }
   if (kaminoLtvEl) {
     kaminoLtvEl.textContent = status.kaminoLtv != null
@@ -1793,58 +1793,58 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
   }
   if (poolRangeAnchorInput) {
     const anchorLabel = formatRangeAnchorPlaceholder(config.rangeAnchor ?? null);
-    setSelectPlaceholder(poolRangeAnchorInput, `Padrao (${anchorLabel})`);
+    setSelectPlaceholder(poolRangeAnchorInput, `Padrão (${anchorLabel})`);
   }
   if (poolAutoAddEnabledInput) {
-    setSelectPlaceholder(poolAutoAddEnabledInput, `Padrao (${config.autoAddLiquidityEnabled ? "Sim" : "Nao"})`);
+    setSelectPlaceholder(poolAutoAddEnabledInput, `Padrão (${config.autoAddLiquidityEnabled ? "Sim" : "Não"})`);
   }
   if (poolKaminoEnabledInput) {
-    setSelectPlaceholder(poolKaminoEnabledInput, `Padrao (${config.kaminoRebalanceEnabled ? "Sim" : "Nao"})`);
+    setSelectPlaceholder(poolKaminoEnabledInput, `Padrão (${config.kaminoRebalanceEnabled ? "Sim" : "Não"})`);
   }
   if (poolKaminoBorrowAssetInput) {
     const label = (config.kaminoBorrowAsset ?? "usdc").toUpperCase?.() ?? config.kaminoBorrowAsset;
-    setSelectPlaceholder(poolKaminoBorrowAssetInput, `Padrao (${label})`);
+    setSelectPlaceholder(poolKaminoBorrowAssetInput, `Padrão (${label})`);
   }
   updateKaminoMarketPlaceholder(config);
   if (!kaminoMarketsLoaded) {
     void ensureKaminoMarketsLoaded();
   }
   if (poolKaminoCloseRuleInput) {
-    setSelectPlaceholder(poolKaminoCloseRuleInput, `Padrao (${config.kaminoCloseRule ?? "avg-price"})`);
+    setSelectPlaceholder(poolKaminoCloseRuleInput, `Padrão (${config.kaminoCloseRule ?? "avg-price"})`);
   }
   if (poolKaminoCollateralModeInput) {
     const defaultMode = config.kaminoCollateralMode ?? "max-value";
     const defaultLabel = formatKaminoCollateralModeLabel(defaultMode, tokenInfo);
-    setSelectPlaceholder(poolKaminoCollateralModeInput, `Padrao (${defaultLabel})`);
+    setSelectPlaceholder(poolKaminoCollateralModeInput, `Padrão (${defaultLabel})`);
   }
   if (poolKaminoConvertInput) {
     setSelectPlaceholder(
       poolKaminoConvertInput,
-      `Padrao (${config.kaminoConvertToCollateral ? "Sim" : "Nao"})`
+      `Padrão (${config.kaminoConvertToCollateral ? "Sim" : "Não"})`
     );
   }
   if (poolKaminoAvgBasisInput) {
-    const basisLabel = (config.kaminoAvgPriceBasis ?? "deposit") === "debt" ? "Divida" : "Deposito";
-    setSelectPlaceholder(poolKaminoAvgBasisInput, `Padrao (${basisLabel})`);
+    const basisLabel = (config.kaminoAvgPriceBasis ?? "deposit") === "debt" ? "Divida" : "Depósito";
+    setSelectPlaceholder(poolKaminoAvgBasisInput, `Padrão (${basisLabel})`);
   }
   if (poolKaminoAvgModeInput) {
     const modeLabel = (config.kaminoAvgMode ?? "cumulative") === "reset" ? "ultimo deposito" : "Cumulativa";
-    setSelectPlaceholder(poolKaminoAvgModeInput, `Padrao (${modeLabel})`);
+    setSelectPlaceholder(poolKaminoAvgModeInput, `Padrão (${modeLabel})`);
   }
   if (poolKaminoAutoCloseInput) {
     setSelectPlaceholder(
       poolKaminoAutoCloseInput,
-      `Padrao (${config.kaminoAutoCloseOnTokenChange ? "Sim" : "Nao"})`
+      `Padrão (${config.kaminoAutoCloseOnTokenChange ? "Sim" : "Não"})`
     );
   }
   if (poolKaminoDepositPctInput) {
-    poolKaminoDepositPctInput.placeholder = `Padrao (${formatNumber(config.kaminoDepositPct, 2)})`;
+    poolKaminoDepositPctInput.placeholder = `Padrão (${formatNumber(config.kaminoDepositPct, 2)})`;
   }
   if (poolKaminoMaxLtvInput) {
-    poolKaminoMaxLtvInput.placeholder = `Padrao (${formatNumber(config.kaminoMaxLtv, 2)})`;
+    poolKaminoMaxLtvInput.placeholder = `Padrão (${formatNumber(config.kaminoMaxLtv, 2)})`;
   }
   if (poolKaminoPriceBufferInput) {
-    poolKaminoPriceBufferInput.placeholder = `Padrao (${formatNumber(config.kaminoPriceBufferPct, 2)})`;
+    poolKaminoPriceBufferInput.placeholder = `Padrão (${formatNumber(config.kaminoPriceBufferPct, 2)})`;
   }
   if (historyEditState) {
     historyEditPendingRender = true;

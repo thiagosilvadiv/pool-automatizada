@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="pt-br">
   <head>
     <meta charset="UTF-8" />
@@ -11,12 +11,7 @@
       <header>
         <h1>Orca Liquidity Bot</h1>
         <p class="subtitle">Painel local para iniciar, parar e monitorar o bot.</p>
-        <nav class="nav">
-          <a href="/analytics.html">Análises</a>
-          <!-- Gráficos removido -->
-          <a href="/allowlist.html">Tokens Permitidos</a>
-          <a href="/kamino-markets.html">Kamino Markets</a>
-        </nav>
+        <nav class="nav" id="appNav"></nav>
       </header>
 
       <section class="panel">
@@ -200,7 +195,7 @@
         <div class="dashboard-layout">
           <aside class="dashboard-sidebar">
             <div class="card compact">
-              <h3>Acoes</h3>
+              <h3>Ações</h3>
               <div class="actions-grid">
                 <button id="startBtn" class="primary">Iniciar</button>
                 <button id="stopBtn" class="ghost">Parar</button>
@@ -222,7 +217,7 @@
                 <div class="kv"><span>Range %</span><span id="rangePct">-</span></div>
                 <div class="kv"><span>Slippage bps</span><span id="slippage">-</span></div>
                 <div class="kv"><span>Polling ms</span><span id="poll">-</span></div>
-                <div class="kv"><span>Confirmacao fora da faixa (s)</span><span id="confirmSec">-</span></div>
+                <div class="kv"><span>Confirmação fora da faixa (s)</span><span id="confirmSec">-</span></div>
                 <div class="kv"><span>Cooldown re-range (s)</span><span id="cooldownSec">-</span></div>
                 <div class="kv"><span>Dry-run</span><span id="dryRun">-</span></div>
               </div>
@@ -596,5 +591,6 @@
       </div>
     </div>
     <script src="app.js"></script>
+    <script type="module" src="nav.js"></script>
   </body>
 </html>

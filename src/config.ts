@@ -28,6 +28,11 @@ export type Config = {
   autoSolCooldownSec: number;
   autoSolTargetBufferPct: number;
   kaminoScanIntervalSec: number;
+  snapshotEnabled: boolean;
+  snapshotIntervalSec: number;
+  snapshotMaxPoints: number;
+  snapshotDownsampleEnabled: boolean;
+  snapshotFlushDebounceMs: number;
   autoCloseEmptyAccountsEnabled: boolean;
   autoCloseEmptyAccountsIntervalSec: number;
   autoCloseEmptyAccountsOnLowSol: boolean;
@@ -580,6 +585,16 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     autoSolTargetBufferPct: parseEnvNumber(process.env.AUTO_SOL_TARGET_BUFFER_PCT)
       ?? (data.autoSolTargetBufferPct == null ? 0 : Number(data.autoSolTargetBufferPct)),
     kaminoScanIntervalSec: envKaminoScanIntervalSec ?? Number((data as any).kaminoScanIntervalSec ?? 300),
+    snapshotEnabled: parseEnvBool(process.env.SNAPSHOT_ENABLED)
+      ?? Boolean((data as any).snapshotEnabled ?? true),
+    snapshotIntervalSec: parseEnvNumber(process.env.SNAPSHOT_INTERVAL_SEC)
+      ?? Number((data as any).snapshotIntervalSec ?? 300),
+    snapshotMaxPoints: parseEnvNumber(process.env.SNAPSHOT_MAX_POINTS)
+      ?? Number((data as any).snapshotMaxPoints ?? 2880),
+    snapshotDownsampleEnabled: parseEnvBool(process.env.SNAPSHOT_DOWNSAMPLE_ENABLED)
+      ?? Boolean((data as any).snapshotDownsampleEnabled ?? true),
+    snapshotFlushDebounceMs: parseEnvNumber(process.env.SNAPSHOT_FLUSH_DEBOUNCE_MS)
+      ?? Number((data as any).snapshotFlushDebounceMs ?? 0),
     autoCloseEmptyAccountsEnabled: parseEnvBool(process.env.AUTO_CLOSE_EMPTY_ACCOUNTS_ENABLED)
       ?? Boolean(data.autoCloseEmptyAccountsEnabled ?? false),
     autoCloseEmptyAccountsIntervalSec: parseEnvNumber(process.env.AUTO_CLOSE_EMPTY_ACCOUNTS_INTERVAL_SEC)
@@ -782,6 +797,15 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.autoSolTargetBufferPct) || config.autoSolTargetBufferPct < 0 || config.autoSolTargetBufferPct > 1) {
     throw new Error("autoSolTargetBufferPct must be between 0 and 1");
+  }
+  if (!Number.isFinite(config.snapshotIntervalSec) || config.snapshotIntervalSec < 30) {
+    throw new Error("snapshotIntervalSec must be >= 30");
+  }
+  if (!Number.isFinite(config.snapshotMaxPoints) || config.snapshotMaxPoints < 0) {
+    throw new Error("snapshotMaxPoints must be >= 0");
+  }
+  if (!Number.isFinite(config.snapshotFlushDebounceMs) || config.snapshotFlushDebounceMs < 0) {
+    throw new Error("snapshotFlushDebounceMs must be >= 0");
   }
   if (!Number.isFinite(config.kaminoScanIntervalSec) || config.kaminoScanIntervalSec < 5) {
     throw new Error("kaminoScanIntervalSec must be >= 5");

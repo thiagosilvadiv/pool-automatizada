@@ -11,11 +11,7 @@
       <header>
         <h1>Tokens Permitidos</h1>
         <p class="subtitle">Defina quais mints podem ser usados nos swaps via Jupiter.</p>
-        <nav class="nav">
-          <a href="/">Painel</a>
-          <a href="/analytics.html">Analises</a>
-          <a href="/kamino-markets.html">Kamino Markets</a>
-        </nav>
+        <nav class="nav" id="appNav"></nav>
       </header>
 
       <section class="panel">
@@ -24,7 +20,7 @@
           <textarea
             id="allowlistInput"
             rows="12"
-            placeholder="Ex:\nEPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+            placeholder="Ex: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
           ></textarea>
           <div class="hint">
             Se a lista estiver vazia, todos os tokens continuam permitidos. A allowlist vale para swaps manuais,
@@ -40,5 +36,6 @@
       </section>
     </main>
     <script src="allowlist.js"></script>
+    <script type="module" src="nav.js"></script>
   </body>
 </html>

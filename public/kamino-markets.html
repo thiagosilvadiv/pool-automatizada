@@ -10,12 +10,8 @@
     <main class="container">
       <header>
         <h1>Kamino Markets</h1>
-        <p class="subtitle">Cadastre o market da Kamino (endereco + apelido) para usar por pool.</p>
-        <nav class="nav">
-          <a href="/">Painel</a>
-          <a href="/analytics.html">Analises</a>
-          <a href="/allowlist.html">Tokens Permitidos</a>
-        </nav>
+        <p class="subtitle">Cadastre o market da Kamino (endereço + apelido) para usar por pool.</p>
+        <nav class="nav" id="appNav"></nav>
       </header>
 
       <section class="panel">
@@ -45,8 +41,8 @@
           <thead>
             <tr>
               <th>Nome</th>
-              <th>Endereco</th>
-              <th>Acoes</th>
+              <th>Endereço</th>
+              <th>Ações</th>
             </tr>
           </thead>
           <tbody id="marketsBody">
@@ -57,5 +53,6 @@
       </section>
     </main>
     <script src="kamino-markets.js"></script>
+    <script type="module" src="nav.js"></script>
   </body>
 </html>
