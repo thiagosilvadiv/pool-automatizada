@@ -20,7 +20,14 @@ import { logger, stringifyError } from "./logger.js";
 import { calculateRange, isPriceOutOfRange, resolveDirectionalExitPreference, Range } from "./strategy.js";
 import { alignTickRangeToSpacing } from "./tick-range.js";
 import { WalletLike } from "./solana.js";
-import { getSolUsdPrice } from "./pyth.js";
+import {
+  getSolUsdPriceMulti,
+  getLastSolPriceSource,
+  SOL_MINT,
+  USDC_MINT,
+  type SolPriceOracleOptions,
+  type SolPriceSourceName
+} from "./price-oracle.js";
 import { getTrendSnapshot } from "./trend.js";
 import type { TrendDirection, TrendTarget, TrendTimeframe } from "./trend.js";
 import type { KaminoCollateralEntry, KaminoCycleState } from "./kamino-types.js";
@@ -206,6 +213,8 @@ export type BotStatus = {
   lastActionFeeLamports: number | null;
   lastPrice: number | null;
   solUsdPrice: number | null;
+  /** Qual fonte serviu o ultimo preco SOL/USD (pyth, jupiter, ...). */
+  solUsdSource: string | null;
   budgetUsd: number | null;
   budgetSol: number | null;
   targetRange: Range | null;
@@ -355,6 +364,7 @@ export class OrcaBot {
     lastActionFeeLamports: null,
     lastPrice: null,
     solUsdPrice: null,
+    solUsdSource: null,
     budgetUsd: null,
     budgetSol: null,
     targetRange: null,
@@ -3608,6 +3618,7 @@ export class OrcaBot {
   getStatus(): BotStatus {
     return {
       ...this.lastStatus,
+      solUsdSource: getLastSolPriceSource(),
       kaminoCollaterals: Array.isArray(this.lastStatus.kaminoCollaterals)
         ? this.lastStatus.kaminoCollaterals.map((item) => ({ ...item }))
         : []
@@ -8487,25 +8498,83 @@ export class OrcaBot {
     return Boolean(this.swapAllowlist && this.swapAllowlist.size > 0);
   }
 
-  private async tryGetSolUsdPrice(): Promise<number | null> {
-    if (!this.config.pythSolUsdFeedId) {
+  /**
+   * Le o preco SOL/USD de um Whirlpool SOL/USDC informado em solUsdcWhirlpool.
+   * Nao depende de nenhuma API externa — usa o RPC que o bot ja tem.
+   */
+  private async readSolUsdOnchain(): Promise<number | null> {
+    const address = this.config.solUsdcWhirlpool;
+    if (!address) {
       return null;
     }
+    const pool = await this.client.getPool(new PublicKey(address));
+    const poolData = pool.getData();
+    const mintA = new PublicKey(poolData.tokenMintA).toBase58();
+    const mintB = new PublicKey(poolData.tokenMintB).toBase58();
+    const solIsA = mintA === SOL_MINT;
+    const solIsB = mintB === SOL_MINT;
+    if (!solIsA && !solIsB) {
+      throw new Error(`solUsdcWhirlpool ${address} nao contem SOL`);
+    }
+    const stableSide = solIsA ? mintB : mintA;
+    if (stableSide !== USDC_MINT) {
+      // Sem isso, apontar para um pool SOL/QUALQUERCOISA devolveria um numero
+      // que nao e dolar, e ele dimensionaria o aporte.
+      throw new Error(`solUsdcWhirlpool ${address} nao e um par SOL/USDC`);
+    }
+    const [decimalsA, decimalsB] = await Promise.all([
+      this.getTokenDecimals(mintA),
+      this.getTokenDecimals(mintB)
+    ]);
+    const price = toNumber(
+      whirlpools.PriceMath.sqrtPriceX64ToPrice(poolData.sqrtPrice, decimalsA, decimalsB)
+    );
+    if (!Number.isFinite(price) || price <= 0) {
+      return null;
+    }
+    // sqrtPriceX64ToPrice devolve quanto de B vale 1 A.
+    return solIsA ? price : 1 / price;
+  }
+
+  private buildPriceOracleOptions(): SolPriceOracleOptions {
+    return {
+      sources: (this.config.solPriceSources ?? []) as SolPriceSourceName[],
+      pyth: {
+        feedId: this.config.pythSolUsdFeedId,
+        endpoint: this.config.pythHermesUrl,
+        apiKey: this.config.pythHermesApiKey,
+        staleMaxSec: this.config.priceStaleMaxSec ?? null,
+        fallbackMaxAgeSec: this.config.pythFallbackMaxAgeSec
+      },
+      jupiter: {
+        apiUrl: this.config.jupiterApiUrl,
+        apiKey: this.config.jupiterApiKey,
+        slippageBps: this.config.slippageBps ?? 50
+      },
+      geckoterminal: { networkId: this.config.trendNetworkId || "solana" },
+      onchainReader: this.config.solUsdcWhirlpool ? () => this.readSolUsdOnchain() : null,
+      sanity: {
+        minUsd: this.config.solPriceMinUsd,
+        maxUsd: this.config.solPriceMaxUsd,
+        maxDeviationPct: this.config.solPriceMaxDeviationPct
+      },
+      cooldownSec: this.config.priceSourceCooldownSec
+    };
+  }
+
+  getSolUsdSource(): string | null {
+    return getLastSolPriceSource();
+  }
+
+  private async tryGetSolUsdPrice(): Promise<number | null> {
     try {
-      const price = await getSolUsdPrice(
-        this.connection,
-        this.config.pythSolUsdFeedId,
-        this.config.priceStaleMaxSec ?? null,
-        30000,
-        {
-          endpoint: this.config.pythHermesUrl,
-          apiKey: this.config.pythHermesApiKey,
-          fallbackMaxAgeSec: this.config.pythFallbackMaxAgeSec
-        }
-      );
+      const price = await getSolUsdPriceMulti(this.buildPriceOracleOptions());
       return price.price;
     } catch (err) {
-      logger.warn({ err }, "failed to fetch SOL/USD from Pyth");
+      logger.warn({ err }, "failed to fetch SOL/USD from all price sources");
+      // Comportamento preservado: com budgetUsd definido nao da para dimensionar
+      // a posicao sem preco, entao o erro sobe. A diferenca e que agora so
+      // chegamos aqui se TODAS as fontes falharem.
       if (this.config.budgetUsd != null) {
         throw err;
       }

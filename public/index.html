@@ -206,6 +206,7 @@
                 <button id="topupBtn" class="ghost">Top-up SOL</button>
                 <button id="swapToSolBtn" class="ghost">Converter tokens para SOL</button>
                 <button id="closeEmptyAccountsBtn" class="ghost">Recolher SOL (contas vazias)</button>
+                <button id="testPriceBtn" class="ghost">Testar fontes de preço</button>
               </div>
             </div>
             <div class="card compact">
@@ -241,7 +242,9 @@
                 <div class="kv"><span>Faixa alvo</span><span id="targetRange">-</span></div>
                 <div class="kv"><span>Faixa posição</span><span id="positionRange">-</span></div>
                 <div class="kv"><span>Âncora efetiva</span><span id="effectiveExitSide">-</span></div>
+                <div class="kv"><span>Fonte do SOL/USD</span><span id="solUsdSource">-</span></div>
               </div>
+              <div id="priceSourcesResult" class="kamino-test-result hidden"></div>
             </div>
             <div class="card compact monitor-card log-card">
               <h3>Execution Log</h3>

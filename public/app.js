@@ -247,6 +247,9 @@ const closeStopBtn = document.getElementById("closeStopBtn");
 const addLiquidityBtn = document.getElementById("addLiquidityBtn");
 const topupBtn = document.getElementById("topupBtn");
 const closeEmptyAccountsBtn = document.getElementById("closeEmptyAccountsBtn");
+const testPriceBtn = document.getElementById("testPriceBtn");
+const priceSourcesResult = document.getElementById("priceSourcesResult");
+const solUsdSourceEl = document.getElementById("solUsdSource");
 const swapToSolBtn = document.getElementById("swapToSolBtn");
 const kaminoCloseTopBtn = document.getElementById("kaminoCloseTopBtn");
 const kaminoCloseBtn = document.getElementById("kaminoCloseBtn");
@@ -1788,6 +1791,9 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
   statusBadge.classList.toggle("running", status.running);
   statusBadge.classList.toggle("stopped", !status.running);
 
+  if (solUsdSourceEl) {
+    solUsdSourceEl.textContent = status.solUsdSource ?? "-";
+  }
   if (effectiveExitSideEl) {
     effectiveExitSideEl.textContent = formatAnchorFromExitSide(status.effectiveExitSide, tokenInfo);
   }
@@ -2078,6 +2084,39 @@ topupBtn.addEventListener("click", async () => {
   }
   updateUI();
 });
+
+if (testPriceBtn && priceSourcesResult) {
+  testPriceBtn.addEventListener("click", async () => {
+    testPriceBtn.disabled = true;
+    priceSourcesResult.classList.remove("hidden", "is-error");
+    priceSourcesResult.textContent = "Testando fontes de preço...";
+    try {
+      const res = await fetch("/api/price/sol-usd?debug=1");
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error ?? `HTTP ${res.status}`);
+      }
+      const lines = (data.sources ?? []).map((item) => {
+        const status = item.ok
+          ? `OK  ${formatNumber(item.price, 4)} USD`
+          : `FALHOU  ${item.error ?? "erro desconhecido"}`;
+        return `${item.source.padEnd(14)} ${status}  (${item.latencyMs}ms)`;
+      });
+      lines.unshift(
+        `Fontes configuradas: ${(data.configuredSources ?? []).join(", ") || "(nenhuma)"}`,
+        `Fonte em uso: ${data.activeSource ?? "(nenhuma respondeu)"}`,
+        ""
+      );
+      priceSourcesResult.textContent = lines.join("\n");
+      priceSourcesResult.classList.toggle("is-error", !data.ok);
+    } catch (err) {
+      priceSourcesResult.textContent = err instanceof Error ? err.message : String(err);
+      priceSourcesResult.classList.add("is-error");
+    } finally {
+      testPriceBtn.disabled = false;
+    }
+  });
+}
 
 if (closeEmptyAccountsBtn) {
   closeEmptyAccountsBtn.addEventListener("click", async () => {

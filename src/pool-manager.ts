@@ -31,7 +31,7 @@ import {
   type PoolSnapshot,
   type SnapshotBucket
 } from "./snapshots.js";
-import { getSolUsdPrice } from "./pyth.js";
+import { getSolUsdPriceMulti, type SolPriceSourceName } from "./price-oracle.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1148,17 +1148,28 @@ export class PoolManager {
       const feedId = this.baseConfig.pythSolUsdFeedId;
       if (feedId) {
         try {
-          const price = await getSolUsdPrice(
-            this.connection,
-            feedId,
-            this.baseConfig.priceStaleMaxSec ?? null,
-            30000,
-            {
+          const price = await getSolUsdPriceMulti({
+            sources: (this.baseConfig.solPriceSources ?? []) as SolPriceSourceName[],
+            pyth: {
+              feedId,
               endpoint: this.baseConfig.pythHermesUrl,
               apiKey: this.baseConfig.pythHermesApiKey,
+              staleMaxSec: this.baseConfig.priceStaleMaxSec ?? null,
               fallbackMaxAgeSec: this.baseConfig.pythFallbackMaxAgeSec
-            }
-          );
+            },
+            jupiter: {
+              apiUrl: this.baseConfig.jupiterApiUrl,
+              apiKey: this.baseConfig.jupiterApiKey,
+              slippageBps: this.baseConfig.slippageBps ?? 50
+            },
+            geckoterminal: { networkId: this.baseConfig.trendNetworkId || "solana" },
+            sanity: {
+              minUsd: this.baseConfig.solPriceMinUsd,
+              maxUsd: this.baseConfig.solPriceMaxUsd,
+              maxDeviationPct: this.baseConfig.solPriceMaxDeviationPct
+            },
+            cooldownSec: this.baseConfig.priceSourceCooldownSec
+          });
           solUsdPrice = price.price;
         } catch (err) {
           logger.warn({ err }, "falha ao ler SOL/USD para Kamino loans");

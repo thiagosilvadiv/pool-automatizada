@@ -11,6 +11,12 @@ import { PoolManager, type PoolSummary } from "./pool-manager.js";
 import type { HistoryEvent } from "./runner.js";
 import { createKaminoMarketsStore, type KaminoMarketEntry, type KaminoMarketsState } from "./storage.js";
 import { isSnapshotBucket, SNAPSHOT_BUCKETS } from "./snapshots.js";
+import {
+  ALL_SOL_PRICE_SOURCES,
+  probeAllSources,
+  type SolPriceOracleOptions,
+  type SolPriceSourceName
+} from "./price-oracle.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +29,61 @@ const HISTORY_EDITABLE_FIELDS = new Set<keyof HistoryEvent>([
   "positionExitUsd",
   "positionPnlUsd"
 ]);
+
+/**
+ * Diagnostico das fontes de preco SOL/USD.
+ *
+ * Existe porque o ambiente de desenvolvimento nao alcanca Hermes, GeckoTerminal
+ * nem Jupiter: e daqui que o operador descobre, no servidor dele, qual fonte
+ * responde e com que erro as outras falham.
+ */
+export function registerPriceRoutes(app: Express, config: Config): void {
+  const buildOptions = (): SolPriceOracleOptions => ({
+    sources: ALL_SOL_PRICE_SOURCES,
+    pyth: {
+      feedId: config.pythSolUsdFeedId,
+      endpoint: config.pythHermesUrl,
+      apiKey: config.pythHermesApiKey,
+      staleMaxSec: config.priceStaleMaxSec ?? null,
+      fallbackMaxAgeSec: 0
+    },
+    jupiter: {
+      apiUrl: config.jupiterApiUrl,
+      apiKey: config.jupiterApiKey,
+      slippageBps: config.slippageBps ?? 50
+    },
+    geckoterminal: { networkId: config.trendNetworkId || "solana" },
+    // A leitura on-chain depende do cliente da Orca, que vive no bot; aqui ela
+    // aparece como nao configurada em vez de mentir que funciona.
+    onchainReader: null,
+    sanity: {
+      minUsd: config.solPriceMinUsd,
+      maxUsd: config.solPriceMaxUsd,
+      maxDeviationPct: config.solPriceMaxDeviationPct
+    }
+  });
+
+  app.get("/api/price/sol-usd", async (req: Request, res: Response) => {
+    const debug = req.query.debug === "1" || req.query.debug === "true";
+    try {
+      const probes = await probeAllSources(buildOptions());
+      const configured = (config.solPriceSources ?? []) as SolPriceSourceName[];
+      const working = probes.filter((p) => p.ok);
+      res.json({
+        ok: working.length > 0,
+        configuredSources: configured,
+        // Fonte que o bot usaria: a primeira configurada que respondeu.
+        activeSource: configured.find((name) => working.some((p) => p.source === name)) ?? null,
+        price: working[0]?.price ?? null,
+        sources: debug
+          ? probes
+          : probes.map(({ source, ok, latencyMs }) => ({ source, ok, latencyMs }))
+      });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+}
 
 type SnapshotRouteService = Pick<PoolManager, "getSnapshots" | "clearSnapshots" | "getSelectedPoolId" | "hasPool">;
 
@@ -771,6 +832,7 @@ export async function startServer(config: Config): Promise<void> {
   });
 
   registerSnapshotRoutes(app, poolManager);
+  registerPriceRoutes(app, config);
 
   app.get("/api/history", (_req: Request, res: Response) => {
     res.json(poolManager.getSelectedHistory());

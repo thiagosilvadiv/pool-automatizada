@@ -85,6 +85,12 @@ export type Config = {
   pythHermesUrl: string;
   pythHermesApiKey: string | null;
   pythFallbackMaxAgeSec: number;
+  solPriceSources: string[];
+  solUsdcWhirlpool: string | null;
+  solPriceMinUsd: number;
+  solPriceMaxUsd: number;
+  solPriceMaxDeviationPct: number;
+  priceSourceCooldownSec: number;
   trendEnabled: boolean;
   evolutionApiUrl: string | null;
   evolutionApiKey: string | null;
@@ -702,6 +708,23 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     pythHermesApiKey: process.env.PYTH_HERMES_API_KEY ?? (data as any).pythHermesApiKey ?? null,
     pythFallbackMaxAgeSec: parseEnvNumber(process.env.PYTH_FALLBACK_MAX_AGE_SEC)
       ?? Number((data as any).pythFallbackMaxAgeSec ?? 0),
+    solPriceSources: parseEnvList(process.env.SOL_PRICE_SOURCES)
+      ?? (Array.isArray((data as any).solPriceSources)
+        ? (data as any).solPriceSources.map((item: unknown) => String(item))
+        : (typeof (data as any).solPriceSources === "string"
+          ? parseEnvList((data as any).solPriceSources)
+          : null))
+      ?? ["pyth", "jupiter", "geckoterminal"],
+    solUsdcWhirlpool: parseEnvString(process.env.SOL_USDC_WHIRLPOOL)
+      ?? (data as any).solUsdcWhirlpool ?? null,
+    solPriceMinUsd: parseEnvNumber(process.env.SOL_PRICE_MIN_USD)
+      ?? Number((data as any).solPriceMinUsd ?? 1),
+    solPriceMaxUsd: parseEnvNumber(process.env.SOL_PRICE_MAX_USD)
+      ?? Number((data as any).solPriceMaxUsd ?? 10000),
+    solPriceMaxDeviationPct: parseEnvNumber(process.env.SOL_PRICE_MAX_DEVIATION_PCT)
+      ?? Number((data as any).solPriceMaxDeviationPct ?? 25),
+    priceSourceCooldownSec: parseEnvNumber(process.env.PRICE_SOURCE_COOLDOWN_SEC)
+      ?? Number((data as any).priceSourceCooldownSec ?? 300),
     trendEnabled: parseEnvBool(process.env.TREND_ENABLED) ?? Boolean((data as any).trendEnabled ?? false),
     evolutionApiUrl: envEvolutionApiUrl ?? (data as any).evolutionApiUrl ?? null,
     evolutionApiKey: envEvolutionApiKey ?? (data as any).evolutionApiKey ?? null,
@@ -918,8 +941,39 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   if (config.budgetUsd !== null && (!Number.isFinite(Number(config.budgetUsd)) || Number(config.budgetUsd) <= 0)) {
     throw new Error("budgetUsd must be > 0 or null");
   }
-  if (config.budgetUsd !== null && !config.pythSolUsdFeedId) {
-    throw new Error("pythSolUsdFeedId is required when budgetUsd is set");
+  const knownPriceSources = ["pyth", "jupiter", "geckoterminal", "onchain"];
+  const unknownSource = config.solPriceSources.find((name) => !knownPriceSources.includes(name));
+  if (unknownSource) {
+    throw new Error(`solPriceSources contem fonte desconhecida: ${unknownSource}`);
+  }
+  // budgetUsd depende de saber quanto vale 1 SOL. Antes exigiamos o feed do
+  // Pyth; agora qualquer fonte configurada serve, senao uma instalacao valida
+  // (sem chave do Pyth) ficaria impedida de subir.
+  if (config.budgetUsd !== null) {
+    const usable = config.solPriceSources.some((name) => {
+      if (name === "pyth") return Boolean(config.pythSolUsdFeedId);
+      if (name === "jupiter") return Boolean(config.jupiterApiKey);
+      if (name === "onchain") return Boolean(config.solUsdcWhirlpool);
+      return name === "geckoterminal";
+    });
+    if (!usable) {
+      throw new Error(
+        "budgetUsd exige ao menos uma fonte de preco utilizavel em solPriceSources "
+        + "(pyth com pythSolUsdFeedId, jupiter com jupiterApiKey, onchain com solUsdcWhirlpool, ou geckoterminal)"
+      );
+    }
+  }
+  if (!Number.isFinite(config.solPriceMinUsd) || config.solPriceMinUsd <= 0) {
+    throw new Error("solPriceMinUsd must be > 0");
+  }
+  if (!Number.isFinite(config.solPriceMaxUsd) || config.solPriceMaxUsd <= config.solPriceMinUsd) {
+    throw new Error("solPriceMaxUsd must be > solPriceMinUsd");
+  }
+  if (!Number.isFinite(config.solPriceMaxDeviationPct) || config.solPriceMaxDeviationPct <= 0) {
+    throw new Error("solPriceMaxDeviationPct must be > 0");
+  }
+  if (!Number.isFinite(config.priceSourceCooldownSec) || config.priceSourceCooldownSec < 0) {
+    throw new Error("priceSourceCooldownSec must be >= 0");
   }
   if (!config.pythHermesUrl || !/^https?:\/\//.test(config.pythHermesUrl)) {
     throw new Error("pythHermesUrl must be an http(s) URL");
