@@ -8496,7 +8496,12 @@ export class OrcaBot {
         this.connection,
         this.config.pythSolUsdFeedId,
         this.config.priceStaleMaxSec ?? null,
-        30000
+        30000,
+        {
+          endpoint: this.config.pythHermesUrl,
+          apiKey: this.config.pythHermesApiKey,
+          fallbackMaxAgeSec: this.config.pythFallbackMaxAgeSec
+        }
       );
       return price.price;
     } catch (err) {

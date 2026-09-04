@@ -1152,7 +1152,12 @@ export class PoolManager {
             this.connection,
             feedId,
             this.baseConfig.priceStaleMaxSec ?? null,
-            30000
+            30000,
+            {
+              endpoint: this.baseConfig.pythHermesUrl,
+              apiKey: this.baseConfig.pythHermesApiKey,
+              fallbackMaxAgeSec: this.baseConfig.pythFallbackMaxAgeSec
+            }
           );
           solUsdPrice = price.price;
         } catch (err) {

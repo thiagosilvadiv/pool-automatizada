@@ -82,6 +82,9 @@ export type Config = {
   budgetUsd: number | null;
   pythSolUsdFeedId: string | null;
   priceStaleMaxSec: number | null;
+  pythHermesUrl: string;
+  pythHermesApiKey: string | null;
+  pythFallbackMaxAgeSec: number;
   trendEnabled: boolean;
   evolutionApiUrl: string | null;
   evolutionApiKey: string | null;
@@ -695,6 +698,10 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     budgetUsd: parseEnvNumber(process.env.BUDGET_USD) ?? (data.budgetUsd == null ? null : Number(data.budgetUsd)),
     pythSolUsdFeedId: process.env.PYTH_SOL_USD_FEED_ID ?? data.pythSolUsdFeedId ?? null,
     priceStaleMaxSec: parseEnvNumber(process.env.PRICE_STALE_MAX_SEC) ?? (data.priceStaleMaxSec == null ? 120 : Number(data.priceStaleMaxSec)),
+    pythHermesUrl: (process.env.PYTH_HERMES_URL ?? (data as any).pythHermesUrl ?? "https://hermes.pyth.network").trim(),
+    pythHermesApiKey: process.env.PYTH_HERMES_API_KEY ?? (data as any).pythHermesApiKey ?? null,
+    pythFallbackMaxAgeSec: parseEnvNumber(process.env.PYTH_FALLBACK_MAX_AGE_SEC)
+      ?? Number((data as any).pythFallbackMaxAgeSec ?? 0),
     trendEnabled: parseEnvBool(process.env.TREND_ENABLED) ?? Boolean((data as any).trendEnabled ?? false),
     evolutionApiUrl: envEvolutionApiUrl ?? (data as any).evolutionApiUrl ?? null,
     evolutionApiKey: envEvolutionApiKey ?? (data as any).evolutionApiKey ?? null,
@@ -913,6 +920,12 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (config.budgetUsd !== null && !config.pythSolUsdFeedId) {
     throw new Error("pythSolUsdFeedId is required when budgetUsd is set");
+  }
+  if (!config.pythHermesUrl || !/^https?:\/\//.test(config.pythHermesUrl)) {
+    throw new Error("pythHermesUrl must be an http(s) URL");
+  }
+  if (!Number.isFinite(config.pythFallbackMaxAgeSec) || config.pythFallbackMaxAgeSec < 0) {
+    throw new Error("pythFallbackMaxAgeSec must be >= 0");
   }
   if (config.priceStaleMaxSec !== null && (!Number.isFinite(Number(config.priceStaleMaxSec)) || Number(config.priceStaleMaxSec) < 0)) {
     throw new Error("priceStaleMaxSec must be >= 0 or null");
