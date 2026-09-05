@@ -28,6 +28,11 @@ export type Config = {
   autoSolCooldownSec: number;
   autoSolTargetBufferPct: number;
   kaminoScanIntervalSec: number;
+  /**
+   * De quanto em quanto tempo pools paradas sao varridas on-chain para saber se
+   * ainda tem posicao aberta. 0 desliga a varredura.
+   */
+  idlePositionScanIntervalSec: number;
   snapshotEnabled: boolean;
   snapshotIntervalSec: number;
   snapshotMaxPoints: number;
@@ -594,6 +599,8 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
     autoSolTargetBufferPct: parseEnvNumber(process.env.AUTO_SOL_TARGET_BUFFER_PCT)
       ?? (data.autoSolTargetBufferPct == null ? 0 : Number(data.autoSolTargetBufferPct)),
     kaminoScanIntervalSec: envKaminoScanIntervalSec ?? Number((data as any).kaminoScanIntervalSec ?? 300),
+    idlePositionScanIntervalSec: parseEnvNumber(process.env.IDLE_POSITION_SCAN_INTERVAL_SEC)
+      ?? Number((data as any).idlePositionScanIntervalSec ?? 180),
     snapshotEnabled: parseEnvBool(process.env.SNAPSHOT_ENABLED)
       ?? Boolean((data as any).snapshotEnabled ?? true),
     snapshotIntervalSec: parseEnvNumber(process.env.SNAPSHOT_INTERVAL_SEC)
@@ -827,6 +834,12 @@ export function loadConfig(configPath?: string, options?: { allowMissingWhirlpoo
   }
   if (!Number.isFinite(config.autoSolTargetBufferPct) || config.autoSolTargetBufferPct < 0 || config.autoSolTargetBufferPct > 1) {
     throw new Error("autoSolTargetBufferPct must be between 0 and 1");
+  }
+  if (
+    !Number.isFinite(config.idlePositionScanIntervalSec)
+    || (config.idlePositionScanIntervalSec !== 0 && config.idlePositionScanIntervalSec < 60)
+  ) {
+    throw new Error("idlePositionScanIntervalSec must be 0 or >= 60");
   }
   if (!Number.isFinite(config.snapshotIntervalSec) || config.snapshotIntervalSec < 30) {
     throw new Error("snapshotIntervalSec must be >= 30");

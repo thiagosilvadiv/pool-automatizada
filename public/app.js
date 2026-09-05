@@ -1619,12 +1619,15 @@ function renderOpenPositions(poolsList, config) {
     const priceLabel = formatNumber(normalizeDisplayPrice(pool.lastPrice, info), 8);
     const mint = pool.positionMint ?? null;
     const dataAt = toFiniteNumber(pool.positionDataAt);
-    const isStored = pool.positionDataSource === "snapshot" && dataAt !== null;
-    const sourceRow = isStored
-      ? `<div class="kv"><span>Leitura salva de</span><span>${escapeHtml(formatTimestamp(new Date(dataAt).toISOString()))}</span></div>`
+    // Os numeros em USD podem vir de uma leitura salva mesmo quando a posicao
+    // foi confirmada on-chain agora; nesse caso a hora da leitura aparece para
+    // o valor nao passar por atual.
+    const sourceRow = dataAt !== null
+      ? `<div class="kv"><span>Valores da leitura de</span><span>${escapeHtml(formatTimestamp(new Date(dataAt).toISOString()))}</span></div>`
       : "";
-    const headerTone = isStored ? "status-warn" : runningTone;
-    const headerLabel = isStored ? "Leitura salva" : runningLabel;
+    const onlyStored = pool.positionDataSource === "snapshot";
+    const headerTone = onlyStored ? "status-warn" : runningTone;
+    const headerLabel = onlyStored ? "Leitura salva" : runningLabel;
 
     return `
       <div class="card compact">

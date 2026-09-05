@@ -47,7 +47,7 @@ const MIN_POSITION_SNAPSHOT_AGE_MS = 10 * 60_000;
 /** Ultima posicao conhecida de uma pool, lida da serie persistida. */
 type StoredPosition = { point: PoolSnapshot; openedAt: number | null };
 
-export type PositionDataSource = "live" | "snapshot";
+export type PositionDataSource = "live" | "onchain" | "snapshot";
 
 function isPositiveNumber(value: number | null | undefined): boolean {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -161,8 +161,9 @@ export type PoolSummary = {
   positionRange: Range | null;
   targetRange: Range | null;
   /**
-   * De onde vieram os dados da posicao: do runner vivo, da ultima amostra
-   * salva, ou do historico persistido. `null` quando nao ha posicao alguma.
+   * De onde veio a prova de que a posicao existe: de um tick do bot ("live"),
+   * da varredura on-chain de uma pool parada ("onchain"), ou da ultima amostra
+   * salva ("snapshot"). `null` quando nao ha posicao alguma.
    */
   positionDataSource: PositionDataSource | null;
   /** Epoch ms da leitura. `null` quando a leitura e ao vivo ou inexistente. */
@@ -235,6 +236,8 @@ export class PoolManager {
   private snapshotTimer: NodeJS.Timeout | null = null;
   private snapshotStores = new Map<string, SnapshotStore>();
   private snapshotInFlight = false;
+  private idleScanTimer: NodeJS.Timeout | null = null;
+  private idleScanInFlight = false;
   private lastSnapshotTick = new Map<string, string | null>();
   private lastPositionSnapshotCache = new Map<string, { at: number; value: StoredPosition | null }>();
   private kaminoScanInFlight = false;
@@ -260,6 +263,7 @@ export class PoolManager {
     this.startKaminoLoansScan();
     this.startAutoAddLiquidityChecks();
     this.startSnapshotSampling();
+    this.startIdlePositionScan();
   }
 
   getSwapAllowlist(): { mints: string[]; updatedAt: string | null } {
@@ -378,13 +382,22 @@ export class PoolManager {
       // proposito — um evento de meses atras nao prova que a posicao existe
       // hoje, e o painel prefere nao mostrar nada a mostrar posicao inventada.
       const live = hasLivePosition(status);
-      const stored = live ? null : await this.getLastPositionSnapshot(entry.id);
+      // A varredura on-chain descobre o mint e a faixa, mas nao calcula valor,
+      // entrada nem taxas — isso so sai de um tick. Entao a amostra salva ainda
+      // e consultada quando falta o valor, para completar o card.
+      const needsStored = !isPositiveNumber(status?.positionValueUsd);
+      const stored = needsStored ? await this.getLastPositionSnapshot(entry.id) : null;
       const snapshot = stored?.point ?? null;
-      const positionDataSource: PositionDataSource | null = live
+      // "live" exige valor calculado num tick. Um mint sem valor veio da
+      // varredura on-chain: a posicao e real, mas os numeros em USD nao sao
+      // dela — vem da amostra salva, e o card avisa a hora dessa leitura.
+      const positionDataSource: PositionDataSource | null = isPositiveNumber(status?.positionValueUsd)
         ? "live"
-        : snapshot
-          ? "snapshot"
-          : null;
+        : status?.positionMint
+          ? "onchain"
+          : snapshot
+            ? "snapshot"
+            : null;
       return {
         id: entry.id,
         name: entry.name,
@@ -1006,6 +1019,64 @@ export class PoolManager {
    * le apenas o ultimo status ja calculado pelo tick do runner. Uma amostra
    * custa uma leitura de memoria e um append no store.
    */
+  /**
+   * Pools paradas sao criadas com `skipWarmup`, entao nunca chegam a varrer a
+   * carteira e o bot ignora posicao que ja existe on-chain. Este loop faz essa
+   * varredura de tempos em tempos, so para quem nao esta rodando — quem roda ja
+   * descobre a posicao no proprio tick.
+   *
+   * Sequencial de proposito: cada varredura lista os token accounts da carteira
+   * e busca posicoes, e disparar isso para varias pools ao mesmo tempo rende
+   * rate limit no RPC.
+   */
+  private startIdlePositionScan(): void {
+    if (this.idleScanTimer) {
+      clearInterval(this.idleScanTimer);
+      this.idleScanTimer = null;
+    }
+    const intervalSec = Number(this.baseConfig.idlePositionScanIntervalSec ?? 180);
+    if (!Number.isFinite(intervalSec) || intervalSec <= 0) {
+      return;
+    }
+    const intervalMs = Math.max(60_000, intervalSec * 1000);
+    // Uma passada logo apos subir, para a UI nao ficar vazia ate o primeiro
+    // disparo do intervalo.
+    setTimeout(() => void this.scanIdlePositions(), 5_000).unref?.();
+    this.idleScanTimer = setInterval(() => {
+      void this.scanIdlePositions();
+    }, intervalMs);
+    this.idleScanTimer.unref?.();
+  }
+
+  stopIdlePositionScan(): void {
+    if (this.idleScanTimer) {
+      clearInterval(this.idleScanTimer);
+      this.idleScanTimer = null;
+    }
+  }
+
+  private async scanIdlePositions(): Promise<void> {
+    if (this.idleScanInFlight) {
+      return;
+    }
+    this.idleScanInFlight = true;
+    try {
+      for (const [poolId, record] of this.pools) {
+        const status = record.runner.getStatus();
+        if (status?.running) {
+          continue;
+        }
+        try {
+          await record.runner.refreshExistingPositionNow();
+        } catch (err) {
+          logger.warn({ err, poolId }, "idle position scan failed");
+        }
+      }
+    } finally {
+      this.idleScanInFlight = false;
+    }
+  }
+
   private startSnapshotSampling(): void {
     if (this.snapshotTimer) {
       clearInterval(this.snapshotTimer);

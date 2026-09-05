@@ -30,6 +30,25 @@ describe("config", () => {
     resetEnv();
   });
 
+  it("defaults idlePositionScanIntervalSec", () => {
+    expect(loadWith({}).idlePositionScanIntervalSec).toBe(180);
+  });
+
+  it("accepts 0 to disable the idle position scan", () => {
+    expect(loadWith({ idlePositionScanIntervalSec: 0 }).idlePositionScanIntervalSec).toBe(0);
+  });
+
+  it("rejects an idle position scan interval below 60s", () => {
+    // Cada varredura lista os token accounts da carteira; abaixo disso vira
+    // pressao desnecessaria no RPC.
+    expect(() => loadWith({ idlePositionScanIntervalSec: 30 })).toThrow();
+  });
+
+  it("applies IDLE_POSITION_SCAN_INTERVAL_SEC env override", () => {
+    process.env.IDLE_POSITION_SCAN_INTERVAL_SEC = "600";
+    expect(loadWith({}).idlePositionScanIntervalSec).toBe(600);
+  });
+
   it("accepts rangeExitBiasPct bounds", () => {
     expect(() => loadWith({ rangeExitBiasPct: 0 })).not.toThrow();
     expect(() => loadWith({ rangeExitBiasPct: 99.9 })).not.toThrow();
