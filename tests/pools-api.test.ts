@@ -43,6 +43,7 @@ class PoolRouteStub {
         positionFeesUsd: 1.25,
         positionRange: { lower: 140, upper: 160 },
         targetRange: { lower: 141, upper: 159 },
+        positionDataAt: null,
         tokenAMint: null,
         tokenBMint: null,
         isTokenASol: null,
@@ -139,5 +140,6 @@ describe("pools api route", () => {
     expect(pool.positionFeesUsd).toBe(1.25);
     expect(pool.positionRange).toEqual({ lower: 140, upper: 160 });
     expect(pool.targetRange).toEqual({ lower: 141, upper: 159 });
+    expect(pool.positionDataAt).toBeNull();
   });
 });

@@ -1550,7 +1550,13 @@ function shortenMint(mint) {
 function isPoolPositionOpen(pool) {
   if (pool?.positionMint) return true;
   const valueUsd = toFiniteNumber(pool?.positionValueUsd);
-  return valueUsd !== null && valueUsd > 0;
+  if (valueUsd !== null && valueUsd > 0) return true;
+  const entryUsd = toFiniteNumber(pool?.positionEntryUsd);
+  if (entryUsd !== null && entryUsd > 0) return true;
+  // Dado parcial (ex.: leitura salva sem valor) ainda descreve uma posicao.
+  const lower = toFiniteNumber(pool?.positionRange?.lower);
+  const upper = toFiniteNumber(pool?.positionRange?.upper);
+  return lower !== null && upper !== null;
 }
 
 function describeRangeStatus(pool) {
@@ -1579,7 +1585,14 @@ function renderOpenPositions(poolsList, config) {
   }
 
   if (!pools.length) {
-    openPositionsGrid.innerHTML = "<p class=\"hint\">Nenhuma posição aberta.</p>";
+    const all = Array.isArray(poolsList) ? poolsList : [];
+    let message = "Nenhuma posição aberta.";
+    if (!all.length) {
+      message = "Nenhuma pool cadastrada.";
+    } else if (!all.some((pool) => pool.running)) {
+      message = "Nenhuma pool rodando. O painel usa a leitura do bot; inicie a pool para ver a posição.";
+    }
+    openPositionsGrid.innerHTML = `<p class="hint">${escapeHtml(message)}</p>`;
     return;
   }
 
@@ -1598,12 +1611,19 @@ function renderOpenPositions(poolsList, config) {
     const rangeStatus = describeRangeStatus(pool);
     const priceLabel = formatNumber(normalizeDisplayPrice(pool.lastPrice, info), 8);
     const mint = pool.positionMint ?? null;
+    const dataAt = toFiniteNumber(pool.positionDataAt);
+    const isStored = dataAt !== null;
+    const sourceRow = isStored
+      ? `<div class="kv"><span>Leitura salva de</span><span>${escapeHtml(formatTimestamp(new Date(dataAt).toISOString()))}</span></div>`
+      : "";
+    const headerTone = isStored ? "status-warn" : runningTone;
+    const headerLabel = isStored ? "Leitura salva" : runningLabel;
 
     return `
       <div class="card compact">
         <h3>
           <span>${escapeHtml(pool.name ?? "Pool")}</span>
-          <span class="${runningTone}">${runningLabel}</span>
+          <span class="${headerTone}">${headerLabel}</span>
         </h3>
         <div class="kv-grid">
           <div class="kv"><span>Entrada (USD)</span><span>${formatNumber(entryUsd, 2)}</span></div>
@@ -1616,6 +1636,7 @@ function renderOpenPositions(poolsList, config) {
           <div class="kv"><span>Status da faixa</span><span class="${rangeStatus.tone}">${rangeStatus.label}</span></div>
           <div class="kv"><span>Aberta há</span><span>${formatElapsed(pool.positionOpenedAt)}</span></div>
           <div class="kv"><span>Mint posição</span><span title="${escapeHtml(mint ?? "")}">${escapeHtml(shortenMint(mint))}</span></div>
+          ${sourceRow}
         </div>
       </div>`;
   }).join("");

@@ -4,7 +4,9 @@ import {
   compactSnapshots,
   filterSnapshots,
   isSnapshotBucket,
+  lastOpenPositionSnapshot,
   normalizeSnapshots,
+  positionOpenedAtFromSnapshots,
   type PoolSnapshot
 } from "../src/snapshots.js";
 
@@ -165,5 +167,55 @@ describe("isSnapshotBucket", () => {
     expect(isSnapshotBucket("raw")).toBe(true);
     expect(isSnapshotBucket("7m")).toBe(false);
     expect(isSnapshotBucket(null)).toBe(false);
+  });
+});
+
+describe("lastOpenPositionSnapshot", () => {
+  it("returns the final point when it still describes an open position", () => {
+    const points = [point(MINUTE), point(2 * MINUTE, { posValueUsd: 42 })];
+    expect(lastOpenPositionSnapshot(points)?.posValueUsd).toBe(42);
+  });
+
+  it("accepts a point with entry but no current value", () => {
+    const points = [point(MINUTE, { posValueUsd: null, posEntryUsd: 30 })];
+    expect(lastOpenPositionSnapshot(points)?.posEntryUsd).toBe(30);
+  });
+
+  it("returns null when the series ends on a closed position", () => {
+    // sampleSnapshots grava uma amostra logo apos o fechamento: e esse ponto
+    // final, com valores zerados, que impede ressuscitar a posicao anterior.
+    const points = [
+      point(MINUTE, { posValueUsd: 100, posEntryUsd: 100 }),
+      point(2 * MINUTE, { posValueUsd: null, posEntryUsd: null, running: 0 })
+    ];
+    expect(lastOpenPositionSnapshot(points)).toBeNull();
+  });
+
+  it("returns null for an empty series", () => {
+    expect(lastOpenPositionSnapshot([])).toBeNull();
+  });
+});
+
+describe("positionOpenedAtFromSnapshots", () => {
+  it("finds where the current mint run starts", () => {
+    const points = [
+      point(MINUTE, { posMint: "mint-a" }),
+      point(2 * MINUTE, { posMint: "mint-a" }),
+      point(3 * MINUTE, { posMint: "mint-b" }),
+      point(4 * MINUTE, { posMint: "mint-b" })
+    ];
+    expect(positionOpenedAtFromSnapshots(points)).toBe(3 * MINUTE);
+  });
+
+  it("returns null when the run reaches the start of the series", () => {
+    // A posicao pode ter aberto antes do primeiro ponto guardado; dizer que
+    // comecou no inicio da serie mentiria a idade dela.
+    const points = [point(MINUTE, { posMint: "mint-a" }), point(2 * MINUTE, { posMint: "mint-a" })];
+    expect(positionOpenedAtFromSnapshots(points)).toBeNull();
+  });
+
+  it("returns null when the series has no mint", () => {
+    const points = [point(MINUTE, { posMint: null })];
+    expect(positionOpenedAtFromSnapshots(points)).toBeNull();
   });
 });

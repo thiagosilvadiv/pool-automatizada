@@ -29,6 +29,8 @@ import { getTrendSnapshot } from "./trend.js";
 import {
   bucketSnapshots,
   filterSnapshots,
+  lastOpenPositionSnapshot,
+  positionOpenedAtFromSnapshots,
   type PoolSnapshot,
   type SnapshotBucket
 } from "./snapshots.js";
@@ -37,6 +39,26 @@ import { getSolUsdPriceMulti, type SolPriceSourceName } from "./price-oracle.js"
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const LAST_POSITION_SNAPSHOT_TTL_MS = 15_000;
+
+/** Ultima posicao conhecida de uma pool, lida da serie persistida. */
+type StoredPosition = { point: PoolSnapshot; openedAt: number | null };
+
+function isPositiveNumber(value: number | null | undefined): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+/** O runner tem posicao viva em memoria? Se nao, vale a amostra persistida. */
+function hasLivePosition(status: RunnerStatus | undefined): boolean {
+  if (!status) return false;
+  return Boolean(status.positionMint) || isPositiveNumber(status.positionValueUsd);
+}
+
+function buildRange(lower: number | null | undefined, upper: number | null | undefined): Range | null {
+  if (typeof lower !== "number" || typeof upper !== "number") return null;
+  if (!Number.isFinite(lower) || !Number.isFinite(upper)) return null;
+  return { lower, upper };
+}
 
 /** Converte para numero finito ou null (status pode trazer NaN/undefined). */
 function finiteOrNullValue(value: unknown): number | null {
@@ -133,6 +155,11 @@ export type PoolSummary = {
   positionFeesUsd: number | null;
   positionRange: Range | null;
   targetRange: Range | null;
+  /**
+   * Epoch ms da amostra quando os dados da posicao vieram do snapshot salvo em
+   * vez do runner vivo. `null` significa leitura ao vivo.
+   */
+  positionDataAt: number | null;
   tokenAMint: string | null;
   tokenBMint: string | null;
   isTokenASol: boolean | null;
@@ -202,6 +229,7 @@ export class PoolManager {
   private snapshotStores = new Map<string, SnapshotStore>();
   private snapshotInFlight = false;
   private lastSnapshotTick = new Map<string, string | null>();
+  private lastPositionSnapshotCache = new Map<string, { at: number; value: StoredPosition | null }>();
   private kaminoScanInFlight = false;
   private kaminoScanCooldownUntil: number | null = null;
   private balanceCoordinator = new BalanceCoordinator();
@@ -335,6 +363,11 @@ export class PoolManager {
       const trendUpdatedAt: string | null = null;
       const trendTimeframe: "1m" | "5m" | "15m" | "30m" | "1h" | null = null;
       const trendStale = false;
+      // Pool parada, ou processo recem-reiniciado antes do primeiro tick: o
+      // runner zera os campos da posicao mesmo havendo liquidez alocada
+      // on-chain. Nesses casos caimos na ultima amostra persistida.
+      const stored = hasLivePosition(status) ? null : await this.getLastPositionSnapshot(entry.id);
+      const snapshot = stored?.point ?? null;
       return {
         id: entry.id,
         name: entry.name,
@@ -344,17 +377,19 @@ export class PoolManager {
         running: status?.running ?? false,
         lastAction: status?.lastAction ?? null,
         lastError: status?.lastError ?? null,
-        lastPrice: status?.lastPrice ?? null,
-        positionValueUsd: status?.positionValueUsd ?? null,
-        positionPnlUsd: status?.positionPnlUsd ?? null,
-        positionValueSol: status?.positionValue ?? null,
-        positionPnlSol: status?.positionPnl ?? null,
-        positionMint: status?.positionMint ?? null,
-        positionOpenedAt: status?.positionOpenedAt ?? null,
-        positionEntryUsd: status?.positionEntryUsd ?? null,
-        positionFeesUsd: status?.positionFeesUsd ?? null,
-        positionRange: status?.positionRange ?? null,
-        targetRange: status?.targetRange ?? null,
+        lastPrice: status?.lastPrice ?? snapshot?.price ?? null,
+        positionValueUsd: status?.positionValueUsd ?? snapshot?.posValueUsd ?? null,
+        positionPnlUsd: status?.positionPnlUsd ?? snapshot?.posPnlUsd ?? null,
+        positionValueSol: status?.positionValue ?? snapshot?.posValueSol ?? null,
+        positionPnlSol: status?.positionPnl ?? snapshot?.posPnlSol ?? null,
+        positionMint: status?.positionMint ?? snapshot?.posMint ?? null,
+        positionOpenedAt: status?.positionOpenedAt
+          ?? (stored?.openedAt != null ? new Date(stored.openedAt).toISOString() : null),
+        positionEntryUsd: status?.positionEntryUsd ?? snapshot?.posEntryUsd ?? null,
+        positionFeesUsd: status?.positionFeesUsd ?? snapshot?.posFeesUsd ?? null,
+        positionRange: status?.positionRange ?? buildRange(snapshot?.posLower, snapshot?.posUpper),
+        targetRange: status?.targetRange ?? buildRange(snapshot?.rangeLower, snapshot?.rangeUpper),
+        positionDataAt: snapshot ? snapshot.t : null,
         tokenAMint: status?.tokenAMint ?? null,
         tokenBMint: status?.tokenBMint ?? null,
         isTokenASol: status?.isTokenASol ?? null,
@@ -438,6 +473,7 @@ export class PoolManager {
     if (snapshotStore) {
       this.snapshotStores.delete(id);
       this.lastSnapshotTick.delete(id);
+      this.lastPositionSnapshotCache.delete(id);
       try {
         await snapshotStore.clear();
       } catch (err) {
@@ -997,6 +1033,40 @@ export class PoolManager {
     });
     this.snapshotStores.set(poolId, store);
     return store;
+  }
+
+  /**
+   * Ultima amostra persistida de uma pool, quando ela ainda descreve uma
+   * posicao aberta. Vale o ponto final da serie: uma posicao ja fechada termina
+   * com valores nulos (sampleSnapshots grava uma amostra logo apos a parada),
+   * entao esta guarda evita ressuscitar posicao que nao existe mais.
+   *
+   * Memoizado por alguns segundos porque /api/pools tem orcamento de 5s e o
+   * store em Redis rele a serie inteira a cada chamada.
+   */
+  private async getLastPositionSnapshot(poolId: string): Promise<StoredPosition | null> {
+    if (!this.baseConfig.snapshotEnabled) {
+      return null;
+    }
+    const now = Date.now();
+    const cached = this.lastPositionSnapshotCache.get(poolId);
+    if (cached && now - cached.at < LAST_POSITION_SNAPSHOT_TTL_MS) {
+      return cached.value;
+    }
+    let value: StoredPosition | null = null;
+    try {
+      const store = await this.getSnapshotStore(poolId);
+      const state = await store.load();
+      const points = state?.points ?? [];
+      const point = lastOpenPositionSnapshot(points);
+      if (point) {
+        value = { point, openedAt: positionOpenedAtFromSnapshots(points) };
+      }
+    } catch (err) {
+      logger.warn({ err, poolId }, "failed to read last position snapshot");
+    }
+    this.lastPositionSnapshotCache.set(poolId, { at: now, value });
+    return value;
   }
 
   private buildSnapshot(status: RunnerStatus): PoolSnapshot {

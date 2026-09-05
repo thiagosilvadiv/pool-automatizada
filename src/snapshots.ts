@@ -192,3 +192,51 @@ export function compactSnapshots(
   const result = [...older, ...recent];
   return result.length > maxPoints ? result.slice(result.length - maxPoints) : result;
 }
+
+/**
+ * Ultima amostra da serie, quando ela ainda descreve uma posicao aberta.
+ *
+ * Vale sempre o ponto final: `sampleSnapshots` grava uma amostra logo apos a
+ * pool parar, entao uma posicao ja fechada termina a serie com valores nulos.
+ * Sem essa guarda, uma pool parada ressuscitaria a ultima posicao que teve.
+ */
+export function lastOpenPositionSnapshot(points: PoolSnapshot[]): PoolSnapshot | null {
+  if (!Array.isArray(points) || points.length === 0) {
+    return null;
+  }
+  const last = points[points.length - 1];
+  if (!last) {
+    return null;
+  }
+  const hasValue = typeof last.posValueUsd === "number" && Number.isFinite(last.posValueUsd) && last.posValueUsd > 0;
+  const hasEntry = typeof last.posEntryUsd === "number" && Number.isFinite(last.posEntryUsd) && last.posEntryUsd > 0;
+  return hasValue || hasEntry ? last : null;
+}
+
+/**
+ * Desde quando a posicao atual esta aberta, em epoch ms, lendo a serie de tras
+ * para frente ate o `posMint` mudar. Serve para pools cujo runner nao esta vivo
+ * — quem esta rodando ja tem `positionOpenedAt` no proprio status.
+ *
+ * Devolve `null` quando a serie nao registra mint (amostras antigas) ou quando
+ * a posicao ja comecara antes do primeiro ponto guardado, porque nesse caso o
+ * inicio real e desconhecido e chutar o comeco da serie mentiria a idade.
+ */
+export function positionOpenedAtFromSnapshots(points: PoolSnapshot[]): number | null {
+  if (!Array.isArray(points) || points.length === 0) {
+    return null;
+  }
+  const mint = points[points.length - 1]?.posMint ?? null;
+  if (!mint) {
+    return null;
+  }
+  let index = points.length - 1;
+  while (index > 0 && points[index - 1]?.posMint === mint) {
+    index -= 1;
+  }
+  if (index === 0) {
+    return null;
+  }
+  const start = points[index];
+  return typeof start?.t === "number" && Number.isFinite(start.t) ? start.t : null;
+}
