@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BotStatus } from "../src/orca.js";
-import { BotRunner } from "../src/runner.js";
+import { BotRunner, openPositionFromHistory } from "../src/runner.js";
+import type { HistoryEvent } from "../src/runner.js";
 
 function createStatus(overrides: Partial<BotStatus> = {}): BotStatus {
   return {
@@ -566,5 +567,68 @@ describe("runner history hedge close", () => {
     const [closeEvent] = runner.getHistory();
     expect(closeEvent.positionPnlUsd).toBeCloseTo(1.4, 6);
     expect(closeEvent.kaminoLoanPnlUsd).toBeCloseTo(1.4, 6);
+  });
+});
+
+function event(overrides: Partial<HistoryEvent> = {}): HistoryEvent {
+  return {
+    id: "evt",
+    timestamp: "2026-09-01T00:00:00.000Z",
+    positionOpenedAt: null,
+    positionClosedAt: null,
+    action: "open-position",
+    positionMint: "mint-a",
+    ...overrides
+  } as HistoryEvent;
+}
+
+describe("openPositionFromHistory", () => {
+  it("returns the last event carrying a mint", () => {
+    const history = [event({ positionMint: "mint-a" }), event({ positionMint: "mint-b" })];
+    expect(openPositionFromHistory(history)?.positionMint).toBe("mint-b");
+  });
+
+  it("returns null when the position was closed", () => {
+    const history = [
+      event({ positionMint: "mint-a" }),
+      event({ positionMint: "mint-a", action: "close-position", positionClosedAt: "2026-09-02T00:00:00.000Z" })
+    ];
+    expect(openPositionFromHistory(history)).toBeNull();
+  });
+
+  it("treats kamino-close as a close even without positionClosedAt", () => {
+    const history = [event({ positionMint: "mint-a", action: "kamino-close" })];
+    expect(openPositionFromHistory(history)).toBeNull();
+  });
+
+  it("follows a rebalance to the new mint", () => {
+    // rebalanced fecha e reabre no mesmo ciclo; o evento de abertura seguinte
+    // ja carrega o mint novo, entao "ultimo evento com mint" acerta sozinho.
+    const history = [
+      event({ positionMint: "mint-a" }),
+      event({ positionMint: "mint-a", action: "rebalanced", positionClosedAt: "2026-09-02T00:00:00.000Z" }),
+      event({ positionMint: "mint-b", action: "open-position" })
+    ];
+    expect(openPositionFromHistory(history)?.positionMint).toBe("mint-b");
+  });
+
+  it("ignores trailing events that carry no mint", () => {
+    const history = [
+      event({ positionMint: "mint-a" }),
+      event({ positionMint: null, action: "swap" }),
+      event({ positionMint: null, action: "kamino-deposit" })
+    ];
+    expect(openPositionFromHistory(history)?.positionMint).toBe("mint-a");
+  });
+
+  it("keeps legacy events that lack entry and opened-at", () => {
+    // Evento antigo ainda prova que a posicao existe; a UI mostra "-" nos
+    // campos ausentes em vez de sumir com a pool.
+    const history = [event({ positionMint: "mint-a", positionOpenedAt: null, positionEntryUsd: undefined })];
+    expect(openPositionFromHistory(history)?.positionMint).toBe("mint-a");
+  });
+
+  it("returns null for an empty history", () => {
+    expect(openPositionFromHistory([])).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import { createCloseAccountInstruction, TOKEN_PROGRAM_ID, NATIVE_MINT } from "@s
 import { Config } from "./config.js";
 import { OrcaBot } from "./orca.js";
 import { BotRunner } from "./runner.js";
+import { openPositionFromHistory } from "./runner.js";
 import type { HistoryEvent, RunnerStatus } from "./runner.js";
 import type { Range } from "./strategy.js";
 import { logger, stringifyError } from "./logger.js";
@@ -43,6 +44,8 @@ const LAST_POSITION_SNAPSHOT_TTL_MS = 15_000;
 
 /** Ultima posicao conhecida de uma pool, lida da serie persistida. */
 type StoredPosition = { point: PoolSnapshot; openedAt: number | null };
+
+export type PositionDataSource = "live" | "snapshot" | "history";
 
 function isPositiveNumber(value: number | null | undefined): boolean {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -156,9 +159,11 @@ export type PoolSummary = {
   positionRange: Range | null;
   targetRange: Range | null;
   /**
-   * Epoch ms da amostra quando os dados da posicao vieram do snapshot salvo em
-   * vez do runner vivo. `null` significa leitura ao vivo.
+   * De onde vieram os dados da posicao: do runner vivo, da ultima amostra
+   * salva, ou do historico persistido. `null` quando nao ha posicao alguma.
    */
+  positionDataSource: PositionDataSource | null;
+  /** Epoch ms da leitura. `null` quando a leitura e ao vivo ou inexistente. */
   positionDataAt: number | null;
   tokenAMint: string | null;
   tokenBMint: string | null;
@@ -366,8 +371,23 @@ export class PoolManager {
       // Pool parada, ou processo recem-reiniciado antes do primeiro tick: o
       // runner zera os campos da posicao mesmo havendo liquidez alocada
       // on-chain. Nesses casos caimos na ultima amostra persistida.
-      const stored = hasLivePosition(status) ? null : await this.getLastPositionSnapshot(entry.id);
+      // Fontes em ordem de frescor: runner vivo, ultima amostra salva, e por
+      // fim o historico — que e o unico que existe para uma pool parada cuja
+      // serie de snapshots nunca chegou a ser gravada.
+      const live = hasLivePosition(status);
+      const stored = live ? null : await this.getLastPositionSnapshot(entry.id);
       const snapshot = stored?.point ?? null;
+      const historyEvent = live || snapshot
+        ? null
+        : openPositionFromHistory(record?.runner.getHistory() ?? []);
+      const historyAt = historyEvent ? Date.parse(historyEvent.timestamp) : NaN;
+      const positionDataSource: PositionDataSource | null = live
+        ? "live"
+        : snapshot
+          ? "snapshot"
+          : historyEvent
+            ? "history"
+            : null;
       return {
         id: entry.id,
         name: entry.name,
@@ -377,19 +397,28 @@ export class PoolManager {
         running: status?.running ?? false,
         lastAction: status?.lastAction ?? null,
         lastError: status?.lastError ?? null,
-        lastPrice: status?.lastPrice ?? snapshot?.price ?? null,
+        lastPrice: status?.lastPrice ?? snapshot?.price ?? historyEvent?.price ?? null,
         positionValueUsd: status?.positionValueUsd ?? snapshot?.posValueUsd ?? null,
         positionPnlUsd: status?.positionPnlUsd ?? snapshot?.posPnlUsd ?? null,
         positionValueSol: status?.positionValue ?? snapshot?.posValueSol ?? null,
         positionPnlSol: status?.positionPnl ?? snapshot?.posPnlSol ?? null,
-        positionMint: status?.positionMint ?? snapshot?.posMint ?? null,
+        positionMint: status?.positionMint ?? snapshot?.posMint ?? historyEvent?.positionMint ?? null,
         positionOpenedAt: status?.positionOpenedAt
-          ?? (stored?.openedAt != null ? new Date(stored.openedAt).toISOString() : null),
-        positionEntryUsd: status?.positionEntryUsd ?? snapshot?.posEntryUsd ?? null,
-        positionFeesUsd: status?.positionFeesUsd ?? snapshot?.posFeesUsd ?? null,
-        positionRange: status?.positionRange ?? buildRange(snapshot?.posLower, snapshot?.posUpper),
-        targetRange: status?.targetRange ?? buildRange(snapshot?.rangeLower, snapshot?.rangeUpper),
-        positionDataAt: snapshot ? snapshot.t : null,
+          ?? (stored?.openedAt != null ? new Date(stored.openedAt).toISOString() : null)
+          ?? historyEvent?.positionOpenedAt
+          ?? null,
+        positionEntryUsd: status?.positionEntryUsd ?? snapshot?.posEntryUsd ?? historyEvent?.positionEntryUsd ?? null,
+        positionFeesUsd: status?.positionFeesUsd ?? snapshot?.posFeesUsd ?? historyEvent?.positionFeesUsd ?? null,
+        positionRange: status?.positionRange
+          ?? buildRange(snapshot?.posLower, snapshot?.posUpper)
+          ?? historyEvent?.positionRange
+          ?? null,
+        targetRange: status?.targetRange
+          ?? buildRange(snapshot?.rangeLower, snapshot?.rangeUpper)
+          ?? historyEvent?.targetRange
+          ?? null,
+        positionDataSource,
+        positionDataAt: snapshot ? snapshot.t : (Number.isFinite(historyAt) ? historyAt : null),
         tokenAMint: status?.tokenAMint ?? null,
         tokenBMint: status?.tokenBMint ?? null,
         isTokenASol: status?.isTokenASol ?? null,

@@ -87,6 +87,38 @@ function resolveActionType(action: string | null): string | null {
   }
 }
 
+/** Acoes que carimbam positionClosedAt, ou seja, encerram a posicao. */
+const CLOSING_ACTIONS = new Set(["close-position", "kamino-close"]);
+
+/**
+ * A posicao aberta segundo o historico persistido, ou `null` se a ultima
+ * conhecida ja foi fechada.
+ *
+ * E a fonte que sobrevive a tudo: diferente do status (que exige um tick) e da
+ * serie de snapshots (que exige amostragem previa), o historico existe desde
+ * sempre e e carregado para memoria em `init()`.
+ *
+ * Vale o ultimo evento que carrega mint. Um `rebalanced` fecha e reabre no
+ * mesmo ciclo, emitindo depois o evento de abertura com o mint novo, entao essa
+ * regra ja acerta o rebalanceamento sem tratamento especial.
+ */
+export function openPositionFromHistory(history: HistoryEvent[]): HistoryEvent | null {
+  if (!Array.isArray(history)) {
+    return null;
+  }
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const item = history[i];
+    if (!item?.positionMint) {
+      continue;
+    }
+    if (item.positionClosedAt || (item.action != null && CLOSING_ACTIONS.has(item.action))) {
+      return null;
+    }
+    return item;
+  }
+  return null;
+}
+
 export type RunnerStatus = BotStatus & {
   running: boolean;
   lastTickAt: string | null;

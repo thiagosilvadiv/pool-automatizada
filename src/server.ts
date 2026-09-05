@@ -205,6 +205,7 @@ export function registerPoolsSummaryRoute(app: Express, poolManager: PoolSummary
           positionFeesUsd: null,
           positionRange: null,
           targetRange: null,
+          positionDataSource: null,
           positionDataAt: null,
           tokenAMint: null,
           tokenBMint: null,

@@ -1586,13 +1586,24 @@ function renderOpenPositions(poolsList, config) {
 
   if (!pools.length) {
     const all = Array.isArray(poolsList) ? poolsList : [];
-    let message = "Nenhuma posição aberta.";
+    // Sonda de versao: o backend novo sempre manda a chave, ainda que valendo
+    // null. A ausencia dela prova que o servidor no ar e antigo — sem isso,
+    // "backend desatualizado" e "sem posicao" produzem a mesma tela.
+    const serverSendsPositionData = all.some((pool) => pool && "positionDataSource" in pool);
+    let message;
     if (!all.length) {
       message = "Nenhuma pool cadastrada.";
+    } else if (!serverSendsPositionData) {
+      message = "O servidor ainda não envia os dados de posição. O backend está desatualizado: refaça o build/deploy.";
     } else if (!all.some((pool) => pool.running)) {
-      message = "Nenhuma pool rodando. O painel usa a leitura do bot; inicie a pool para ver a posição.";
+      message = "Nenhuma pool rodando. O painel usa a última leitura salva; se ela não existir, inicie a pool.";
+    } else {
+      message = "Nenhuma posição aberta.";
     }
-    openPositionsGrid.innerHTML = `<p class="hint">${escapeHtml(message)}</p>`;
+    const count = all.length
+      ? `<p class="hint">${all.length} pool(s) recebida(s) do servidor.</p>`
+      : "";
+    openPositionsGrid.innerHTML = `<p class="hint">${escapeHtml(message)}</p>${count}`;
     return;
   }
 
@@ -1612,12 +1623,16 @@ function renderOpenPositions(poolsList, config) {
     const priceLabel = formatNumber(normalizeDisplayPrice(pool.lastPrice, info), 8);
     const mint = pool.positionMint ?? null;
     const dataAt = toFiniteNumber(pool.positionDataAt);
-    const isStored = dataAt !== null;
-    const sourceRow = isStored
-      ? `<div class="kv"><span>Leitura salva de</span><span>${escapeHtml(formatTimestamp(new Date(dataAt).toISOString()))}</span></div>`
+    const source = pool.positionDataSource ?? (dataAt !== null ? "snapshot" : "live");
+    const isStored = source === "snapshot" || source === "history";
+    const sourceLabel = source === "history" ? "Do histórico" : "Leitura salva de";
+    const sourceRow = isStored && dataAt !== null
+      ? `<div class="kv"><span>${sourceLabel}</span><span>${escapeHtml(formatTimestamp(new Date(dataAt).toISOString()))}</span></div>`
       : "";
     const headerTone = isStored ? "status-warn" : runningTone;
-    const headerLabel = isStored ? "Leitura salva" : runningLabel;
+    const headerLabel = source === "history"
+      ? "Do histórico"
+      : (source === "snapshot" ? "Leitura salva" : runningLabel);
 
     return `
       <div class="card compact">
@@ -2024,6 +2039,9 @@ async function updateUI() {
   if (status && config && poolsForRender) {
     renderUiSnapshot(status, config, history, poolsForRender, kaminoLogs);
   } else if (poolsForRender) {
+    // O painel so depende da lista de pools; nao faz sentido ele congelar
+    // enquanto /api/status estiver fora.
+    renderOpenPositions(poolsForRender.pools ?? [], config ?? cachedConfig ?? null);
     renderPools(poolsForRender, config ?? cachedConfig ?? {});
   } else if (config) {
     renderPools([], config);
