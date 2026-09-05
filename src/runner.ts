@@ -90,6 +90,7 @@ function resolveActionType(action: string | null): string | null {
 export type RunnerStatus = BotStatus & {
   running: boolean;
   lastTickAt: string | null;
+  positionOpenedAt: string | null;
   hedgeActive: boolean;
   hedgeSymbol: string | null;
   hedgeNotionalUsd: number | null;
@@ -459,6 +460,9 @@ export class BotRunner {
       ...status,
       running: this.running,
       lastTickAt: this.lastTickAt,
+      positionOpenedAt: status.positionMint
+        ? this.openedAtByMint.get(status.positionMint) ?? null
+        : null,
       hedgeActive: Boolean(hedgeState?.active),
       hedgeSymbol: hedgeState?.symbol ?? null,
       hedgeNotionalUsd: hedgeState?.notionalUsd ?? null,

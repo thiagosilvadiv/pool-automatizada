@@ -37,6 +37,12 @@ class PoolRouteStub {
         positionPnlUsd: null,
         positionValueSol: null,
         positionPnlSol: null,
+        positionMint: "MintPos111111111111111111111111111111111111",
+        positionOpenedAt: "2026-03-30T12:00:00.000Z",
+        positionEntryUsd: 250,
+        positionFeesUsd: 1.25,
+        positionRange: { lower: 140, upper: 160 },
+        targetRange: { lower: 141, upper: 159 },
         tokenAMint: null,
         tokenBMint: null,
         isTokenASol: null,
@@ -118,5 +124,20 @@ describe("pools api route", () => {
     expect(data.autoResume.enabled).toBe(true);
     expect(data.autoResume.activePoolIds).toContain("pool-1");
     expect(data.autoResume.pendingPoolIds).toContain("pool-1");
+  });
+
+  it("exposes open position fields in /api/pools", async () => {
+    const server = await createServer();
+    const response = await fetch(`${server.baseUrl}/api/pools`);
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    const pool = data.pools[0];
+    expect(pool.positionMint).toBe("MintPos111111111111111111111111111111111111");
+    expect(pool.positionOpenedAt).toBe("2026-03-30T12:00:00.000Z");
+    expect(pool.positionEntryUsd).toBe(250);
+    expect(pool.positionFeesUsd).toBe(1.25);
+    expect(pool.positionRange).toEqual({ lower: 140, upper: 160 });
+    expect(pool.targetRange).toEqual({ lower: 141, upper: 159 });
   });
 });

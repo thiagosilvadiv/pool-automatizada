@@ -1416,3 +1416,27 @@ th[data-col="pnlTotalNet"] {
   .metric-toggle { font-size: var(--fs-xs); padding: 2px var(--space-2); }
   .modal-card { padding: var(--space-4); }
 }
+
+.open-positions-grid {
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+.open-positions-grid .kv span:last-child {
+  max-width: none;
+}
+
+.open-positions-grid .card h3 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text);
+  letter-spacing: 0;
+}
+
+.open-positions-grid .card h3 span:last-child {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}

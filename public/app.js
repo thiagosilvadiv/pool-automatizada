@@ -74,6 +74,8 @@ const poolKaminoAvgModeInput = document.getElementById("poolKaminoAvgMode");
 const poolKaminoAutoCloseInput = document.getElementById("poolKaminoAutoClose");
 const addPoolBtn = document.getElementById("addPoolBtn");
 const poolsBody = document.getElementById("poolsBody");
+const openPositionsGrid = document.getElementById("openPositionsGrid");
+const openPositionsCount = document.getElementById("openPositionsCount");
 const poolError = document.getElementById("poolError");
 const editPoolModal = document.getElementById("editPoolModal");
 const editPoolForm = document.getElementById("editPoolForm");
@@ -1524,6 +1526,101 @@ function closeKaminoLogModal() {
   }
 }
 
+function formatElapsed(isoString) {
+  if (!isoString) return "-";
+  const startedAt = new Date(isoString).getTime();
+  if (!Number.isFinite(startedAt)) return "-";
+  const diffMs = Date.now() - startedAt;
+  if (diffMs < 0) return "-";
+  const totalMinutes = Math.floor(diffMs / 60000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function shortenMint(mint) {
+  const value = String(mint ?? "");
+  if (value.length <= 14) return value || "-";
+  return `${value.slice(0, 6)}...${value.slice(-6)}`;
+}
+
+function isPoolPositionOpen(pool) {
+  if (pool?.positionMint) return true;
+  const valueUsd = toFiniteNumber(pool?.positionValueUsd);
+  return valueUsd !== null && valueUsd > 0;
+}
+
+function describeRangeStatus(pool) {
+  // Compara em espaco bruto (antes de normalizeDisplayPrice) para nao inverter
+  // a logica em pools com eixo de preco invertido.
+  const range = pool?.positionRange ?? null;
+  const price = toFiniteNumber(pool?.lastPrice);
+  const lower = toFiniteNumber(range?.lower);
+  const upper = toFiniteNumber(range?.upper);
+  if (price === null || lower === null || upper === null) {
+    return { label: "-", tone: "" };
+  }
+  const inRange = price >= Math.min(lower, upper) && price <= Math.max(lower, upper);
+  return inRange
+    ? { label: "Dentro da faixa", tone: "status-ok" }
+    : { label: "Fora da faixa", tone: "status-warn" };
+}
+
+function renderOpenPositions(poolsList, config) {
+  if (!openPositionsGrid) return;
+  const pools = Array.isArray(poolsList) ? poolsList.filter(isPoolPositionOpen) : [];
+  pools.sort((a, b) => (toFiniteNumber(b.positionValueUsd) ?? 0) - (toFiniteNumber(a.positionValueUsd) ?? 0));
+
+  if (openPositionsCount) {
+    openPositionsCount.textContent = pools.length ? `${pools.length} aberta(s)` : "Nenhuma";
+  }
+
+  if (!pools.length) {
+    openPositionsGrid.innerHTML = "<p class=\"hint\">Nenhuma posição aberta.</p>";
+    return;
+  }
+
+  openPositionsGrid.innerHTML = pools.map((pool) => {
+    const info = getTokenInfo(pool) ?? (pool.selected ? getTokenInfo(config) : null);
+    const entryUsd = toFiniteNumber(pool.positionEntryUsd);
+    const feesUsd = toFiniteNumber(pool.positionFeesUsd);
+    const valueUsd = toFiniteNumber(pool.positionValueUsd);
+    const pnlUsd = toFiniteNumber(pool.positionPnlUsd);
+    const pnlPct = pnlUsd !== null && entryUsd !== null && entryUsd > 0
+      ? (pnlUsd / entryUsd) * 100
+      : null;
+    const pnlTone = pnlUsd === null ? "" : (pnlUsd >= 0 ? "status-ok" : "status-bad");
+    const runningLabel = pool.running ? "Rodando" : "Parado";
+    const runningTone = pool.running ? "status-ok" : "status-bad";
+    const rangeStatus = describeRangeStatus(pool);
+    const priceLabel = formatNumber(normalizeDisplayPrice(pool.lastPrice, info), 8);
+    const mint = pool.positionMint ?? null;
+
+    return `
+      <div class="card compact">
+        <h3>
+          <span>${escapeHtml(pool.name ?? "Pool")}</span>
+          <span class="${runningTone}">${runningLabel}</span>
+        </h3>
+        <div class="kv-grid">
+          <div class="kv"><span>Entrada (USD)</span><span>${formatNumber(entryUsd, 2)}</span></div>
+          <div class="kv"><span>Taxas geradas (USD)</span><span>${formatNumber(feesUsd, 4)}</span></div>
+          <div class="kv"><span>Valor atual (USD)</span><span>${formatNumber(valueUsd, 2)}</span></div>
+          <div class="kv"><span>PnL (USD)</span><span class="${pnlTone}">${formatNumber(pnlUsd, 2)}</span></div>
+          <div class="kv"><span>PnL (%)</span><span class="${pnlTone}">${pnlPct === null ? "-" : `${formatNumber(pnlPct, 2)}%`}</span></div>
+          <div class="kv"><span>Preço atual</span><span>${priceLabel}</span></div>
+          <div class="kv"><span>Faixa da posição</span><span>${escapeHtml(formatRange(pool.positionRange, info))}</span></div>
+          <div class="kv"><span>Status da faixa</span><span class="${rangeStatus.tone}">${rangeStatus.label}</span></div>
+          <div class="kv"><span>Aberta há</span><span>${formatElapsed(pool.positionOpenedAt)}</span></div>
+          <div class="kv"><span>Mint posição</span><span title="${escapeHtml(mint ?? "")}">${escapeHtml(shortenMint(mint))}</span></div>
+        </div>
+      </div>`;
+  }).join("");
+}
+
 function renderPools(data, config) {
   closeActiveActionMenu();
   const hasError = Boolean(data && !Array.isArray(data) && data.error);
@@ -1688,6 +1785,7 @@ function renderUiSnapshot(status, config, history, pools, kaminoLogs) {
   updateExitTokenSelectHints(poolKaminoCollateralModeInput, tokenInfo);
   updateExitTokenSelectHints(editPoolKaminoCollateralModeInput, tokenInfo);
   const poolsList = normalizedPools?.pools ?? [];
+  renderOpenPositions(poolsList, config);
   const selectedPool = poolsList.find((item) => item.id === config.selectedPoolId) ?? null;
   const selectedOverrides = selectedPool?.overrides ?? {};
 

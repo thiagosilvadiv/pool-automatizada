@@ -7,6 +7,7 @@ import { Config } from "./config.js";
 import { OrcaBot } from "./orca.js";
 import { BotRunner } from "./runner.js";
 import type { HistoryEvent, RunnerStatus } from "./runner.js";
+import type { Range } from "./strategy.js";
 import { logger, stringifyError } from "./logger.js";
 import { BalanceCoordinator } from "./balance-coordinator.js";
 import {
@@ -126,6 +127,12 @@ export type PoolSummary = {
   positionPnlUsd: number | null;
   positionValueSol: number | null;
   positionPnlSol: number | null;
+  positionMint: string | null;
+  positionOpenedAt: string | null;
+  positionEntryUsd: number | null;
+  positionFeesUsd: number | null;
+  positionRange: Range | null;
+  targetRange: Range | null;
   tokenAMint: string | null;
   tokenBMint: string | null;
   isTokenASol: boolean | null;
@@ -342,6 +349,12 @@ export class PoolManager {
         positionPnlUsd: status?.positionPnlUsd ?? null,
         positionValueSol: status?.positionValue ?? null,
         positionPnlSol: status?.positionPnl ?? null,
+        positionMint: status?.positionMint ?? null,
+        positionOpenedAt: status?.positionOpenedAt ?? null,
+        positionEntryUsd: status?.positionEntryUsd ?? null,
+        positionFeesUsd: status?.positionFeesUsd ?? null,
+        positionRange: status?.positionRange ?? null,
+        targetRange: status?.targetRange ?? null,
         tokenAMint: status?.tokenAMint ?? null,
         tokenBMint: status?.tokenBMint ?? null,
         isTokenASol: status?.isTokenASol ?? null,
