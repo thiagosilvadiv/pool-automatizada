@@ -6,7 +6,6 @@ import { createCloseAccountInstruction, TOKEN_PROGRAM_ID, NATIVE_MINT } from "@s
 import { Config } from "./config.js";
 import { OrcaBot } from "./orca.js";
 import { BotRunner } from "./runner.js";
-import { openPositionFromHistory } from "./runner.js";
 import type { HistoryEvent, RunnerStatus } from "./runner.js";
 import type { Range } from "./strategy.js";
 import { logger, stringifyError } from "./logger.js";
@@ -41,11 +40,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const LAST_POSITION_SNAPSHOT_TTL_MS = 15_000;
+/** Quantos intervalos de amostragem uma leitura salva continua valendo. */
+const POSITION_SNAPSHOT_AGE_INTERVALS = 4;
+const MIN_POSITION_SNAPSHOT_AGE_MS = 10 * 60_000;
 
 /** Ultima posicao conhecida de uma pool, lida da serie persistida. */
 type StoredPosition = { point: PoolSnapshot; openedAt: number | null };
 
-export type PositionDataSource = "live" | "snapshot" | "history";
+export type PositionDataSource = "live" | "snapshot";
 
 function isPositiveNumber(value: number | null | undefined): boolean {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -371,23 +373,18 @@ export class PoolManager {
       // Pool parada, ou processo recem-reiniciado antes do primeiro tick: o
       // runner zera os campos da posicao mesmo havendo liquidez alocada
       // on-chain. Nesses casos caimos na ultima amostra persistida.
-      // Fontes em ordem de frescor: runner vivo, ultima amostra salva, e por
-      // fim o historico — que e o unico que existe para uma pool parada cuja
-      // serie de snapshots nunca chegou a ser gravada.
+      // Duas fontes, ambas verificaveis: o runner vivo e a ultima amostra
+      // salva, e esta so quando ainda e recente. Historico foi descartado de
+      // proposito — um evento de meses atras nao prova que a posicao existe
+      // hoje, e o painel prefere nao mostrar nada a mostrar posicao inventada.
       const live = hasLivePosition(status);
       const stored = live ? null : await this.getLastPositionSnapshot(entry.id);
       const snapshot = stored?.point ?? null;
-      const historyEvent = live || snapshot
-        ? null
-        : openPositionFromHistory(record?.runner.getHistory() ?? []);
-      const historyAt = historyEvent ? Date.parse(historyEvent.timestamp) : NaN;
       const positionDataSource: PositionDataSource | null = live
         ? "live"
         : snapshot
           ? "snapshot"
-          : historyEvent
-            ? "history"
-            : null;
+          : null;
       return {
         id: entry.id,
         name: entry.name,
@@ -397,28 +394,20 @@ export class PoolManager {
         running: status?.running ?? false,
         lastAction: status?.lastAction ?? null,
         lastError: status?.lastError ?? null,
-        lastPrice: status?.lastPrice ?? snapshot?.price ?? historyEvent?.price ?? null,
+        lastPrice: status?.lastPrice ?? snapshot?.price ?? null,
         positionValueUsd: status?.positionValueUsd ?? snapshot?.posValueUsd ?? null,
         positionPnlUsd: status?.positionPnlUsd ?? snapshot?.posPnlUsd ?? null,
         positionValueSol: status?.positionValue ?? snapshot?.posValueSol ?? null,
         positionPnlSol: status?.positionPnl ?? snapshot?.posPnlSol ?? null,
-        positionMint: status?.positionMint ?? snapshot?.posMint ?? historyEvent?.positionMint ?? null,
+        positionMint: status?.positionMint ?? snapshot?.posMint ?? null,
         positionOpenedAt: status?.positionOpenedAt
-          ?? (stored?.openedAt != null ? new Date(stored.openedAt).toISOString() : null)
-          ?? historyEvent?.positionOpenedAt
-          ?? null,
-        positionEntryUsd: status?.positionEntryUsd ?? snapshot?.posEntryUsd ?? historyEvent?.positionEntryUsd ?? null,
-        positionFeesUsd: status?.positionFeesUsd ?? snapshot?.posFeesUsd ?? historyEvent?.positionFeesUsd ?? null,
-        positionRange: status?.positionRange
-          ?? buildRange(snapshot?.posLower, snapshot?.posUpper)
-          ?? historyEvent?.positionRange
-          ?? null,
-        targetRange: status?.targetRange
-          ?? buildRange(snapshot?.rangeLower, snapshot?.rangeUpper)
-          ?? historyEvent?.targetRange
-          ?? null,
+          ?? (stored?.openedAt != null ? new Date(stored.openedAt).toISOString() : null),
+        positionEntryUsd: status?.positionEntryUsd ?? snapshot?.posEntryUsd ?? null,
+        positionFeesUsd: status?.positionFeesUsd ?? snapshot?.posFeesUsd ?? null,
+        positionRange: status?.positionRange ?? buildRange(snapshot?.posLower, snapshot?.posUpper),
+        targetRange: status?.targetRange ?? buildRange(snapshot?.rangeLower, snapshot?.rangeUpper),
         positionDataSource,
-        positionDataAt: snapshot ? snapshot.t : (Number.isFinite(historyAt) ? historyAt : null),
+        positionDataAt: snapshot ? snapshot.t : null,
         tokenAMint: status?.tokenAMint ?? null,
         tokenBMint: status?.tokenBMint ?? null,
         isTokenASol: status?.isTokenASol ?? null,
@@ -1078,6 +1067,7 @@ export class PoolManager {
       return null;
     }
     const now = Date.now();
+    const maxAgeMs = this.positionSnapshotMaxAgeMs();
     const cached = this.lastPositionSnapshotCache.get(poolId);
     if (cached && now - cached.at < LAST_POSITION_SNAPSHOT_TTL_MS) {
       return cached.value;
@@ -1087,7 +1077,7 @@ export class PoolManager {
       const store = await this.getSnapshotStore(poolId);
       const state = await store.load();
       const points = state?.points ?? [];
-      const point = lastOpenPositionSnapshot(points);
+      const point = lastOpenPositionSnapshot(points, { now, maxAgeMs });
       if (point) {
         value = { point, openedAt: positionOpenedAtFromSnapshots(points) };
       }
@@ -1096,6 +1086,17 @@ export class PoolManager {
     }
     this.lastPositionSnapshotCache.set(poolId, { at: now, value });
     return value;
+  }
+
+  /**
+   * Ate quando uma amostra ainda vale como retrato da posicao. Alguns
+   * intervalos de amostragem cobrem um tick perdido ou um restart curto, sem
+   * chegar perto de ressuscitar posicao de dias atras.
+   */
+  private positionSnapshotMaxAgeMs(): number {
+    const intervalSec = Number(this.baseConfig.snapshotIntervalSec ?? 300);
+    const intervalMs = Number.isFinite(intervalSec) && intervalSec > 0 ? intervalSec * 1000 : 300_000;
+    return Math.max(MIN_POSITION_SNAPSHOT_AGE_MS, intervalMs * POSITION_SNAPSHOT_AGE_INTERVALS);
   }
 
   private buildSnapshot(status: RunnerStatus): PoolSnapshot {

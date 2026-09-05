@@ -199,8 +199,14 @@ export function compactSnapshots(
  * Vale sempre o ponto final: `sampleSnapshots` grava uma amostra logo apos a
  * pool parar, entao uma posicao ja fechada termina a serie com valores nulos.
  * Sem essa guarda, uma pool parada ressuscitaria a ultima posicao que teve.
+ *
+ * Com `maxAgeMs`, tambem descarta amostra antiga demais para representar o
+ * estado atual.
  */
-export function lastOpenPositionSnapshot(points: PoolSnapshot[]): PoolSnapshot | null {
+export function lastOpenPositionSnapshot(
+  points: PoolSnapshot[],
+  options: { now?: number; maxAgeMs?: number } = {}
+): PoolSnapshot | null {
   if (!Array.isArray(points) || points.length === 0) {
     return null;
   }
@@ -210,7 +216,20 @@ export function lastOpenPositionSnapshot(points: PoolSnapshot[]): PoolSnapshot |
   }
   const hasValue = typeof last.posValueUsd === "number" && Number.isFinite(last.posValueUsd) && last.posValueUsd > 0;
   const hasEntry = typeof last.posEntryUsd === "number" && Number.isFinite(last.posEntryUsd) && last.posEntryUsd > 0;
-  return hasValue || hasEntry ? last : null;
+  if (!hasValue && !hasEntry) {
+    return null;
+  }
+  // Amostra velha nao e evidencia de posicao viva: enquanto o bot roda a serie
+  // ganha um ponto a cada intervalo, entao um ultimo ponto antigo significa que
+  // faz tempo que ninguem observa essa pool — e nao que a posicao segue aberta.
+  const maxAgeMs = options.maxAgeMs;
+  if (typeof maxAgeMs === "number" && Number.isFinite(maxAgeMs)) {
+    const now = options.now ?? Date.now();
+    if (now - last.t > maxAgeMs) {
+      return null;
+    }
+  }
+  return last;
 }
 
 /**

@@ -1552,11 +1552,7 @@ function isPoolPositionOpen(pool) {
   const valueUsd = toFiniteNumber(pool?.positionValueUsd);
   if (valueUsd !== null && valueUsd > 0) return true;
   const entryUsd = toFiniteNumber(pool?.positionEntryUsd);
-  if (entryUsd !== null && entryUsd > 0) return true;
-  // Dado parcial (ex.: leitura salva sem valor) ainda descreve uma posicao.
-  const lower = toFiniteNumber(pool?.positionRange?.lower);
-  const upper = toFiniteNumber(pool?.positionRange?.upper);
-  return lower !== null && upper !== null;
+  return entryUsd !== null && entryUsd > 0;
 }
 
 function describeRangeStatus(pool) {
@@ -1596,7 +1592,7 @@ function renderOpenPositions(poolsList, config) {
     } else if (!serverSendsPositionData) {
       message = "O servidor ainda não envia os dados de posição. O backend está desatualizado: refaça o build/deploy.";
     } else if (!all.some((pool) => pool.running)) {
-      message = "Nenhuma pool rodando. O painel usa a última leitura salva; se ela não existir, inicie a pool.";
+      message = "Nenhuma pool rodando. O painel só mostra posição confirmada pelo bot, então inicie a pool para ver a posição.";
     } else {
       message = "Nenhuma posição aberta.";
     }
@@ -1623,16 +1619,12 @@ function renderOpenPositions(poolsList, config) {
     const priceLabel = formatNumber(normalizeDisplayPrice(pool.lastPrice, info), 8);
     const mint = pool.positionMint ?? null;
     const dataAt = toFiniteNumber(pool.positionDataAt);
-    const source = pool.positionDataSource ?? (dataAt !== null ? "snapshot" : "live");
-    const isStored = source === "snapshot" || source === "history";
-    const sourceLabel = source === "history" ? "Do histórico" : "Leitura salva de";
-    const sourceRow = isStored && dataAt !== null
-      ? `<div class="kv"><span>${sourceLabel}</span><span>${escapeHtml(formatTimestamp(new Date(dataAt).toISOString()))}</span></div>`
+    const isStored = pool.positionDataSource === "snapshot" && dataAt !== null;
+    const sourceRow = isStored
+      ? `<div class="kv"><span>Leitura salva de</span><span>${escapeHtml(formatTimestamp(new Date(dataAt).toISOString()))}</span></div>`
       : "";
     const headerTone = isStored ? "status-warn" : runningTone;
-    const headerLabel = source === "history"
-      ? "Do histórico"
-      : (source === "snapshot" ? "Leitura salva" : runningLabel);
+    const headerLabel = isStored ? "Leitura salva" : runningLabel;
 
     return `
       <div class="card compact">

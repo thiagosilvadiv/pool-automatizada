@@ -194,6 +194,25 @@ describe("lastOpenPositionSnapshot", () => {
   it("returns null for an empty series", () => {
     expect(lastOpenPositionSnapshot([])).toBeNull();
   });
+
+  it("discards a sample older than maxAgeMs", () => {
+    // Uma serie parada em marco nao prova que a posicao existe hoje — foi
+    // exatamente isso que fez o painel inventar posicoes "abertas ha 168d".
+    const points = [point(MINUTE, { posValueUsd: 100 })];
+    const now = MINUTE + 200 * 24 * 60 * MINUTE;
+    expect(lastOpenPositionSnapshot(points, { now, maxAgeMs: 20 * MINUTE })).toBeNull();
+  });
+
+  it("keeps a sample within maxAgeMs", () => {
+    const points = [point(MINUTE, { posValueUsd: 100 })];
+    expect(lastOpenPositionSnapshot(points, { now: MINUTE + 5 * MINUTE, maxAgeMs: 20 * MINUTE })?.posValueUsd)
+      .toBe(100);
+  });
+
+  it("ignores age when maxAgeMs is not given", () => {
+    const points = [point(MINUTE, { posValueUsd: 100 })];
+    expect(lastOpenPositionSnapshot(points)?.posValueUsd).toBe(100);
+  });
 });
 
 describe("positionOpenedAtFromSnapshots", () => {
