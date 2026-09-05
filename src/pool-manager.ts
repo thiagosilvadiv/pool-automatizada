@@ -1,6 +1,7 @@
 import path from "path";
 import { fileURLToPath } from "url";
 import { PublicKey, Transaction } from "@solana/web3.js";
+import * as whirlpoolsSdk from "@orca-so/whirlpools-sdk";
 import { createCloseAccountInstruction, TOKEN_PROGRAM_ID, NATIVE_MINT } from "@solana/spl-token";
 
 import { Config } from "./config.js";
@@ -40,6 +41,39 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const LAST_POSITION_SNAPSHOT_TTL_MS = 15_000;
+const WALLET_POSITION_BATCH = 100;
+/** Ciclos pulados depois de um 429, para nao competir com o tick das pools. */
+const IDLE_SCAN_SKIP_AFTER_RATE_LIMIT = 3;
+
+/**
+ * Mints de NFT de posicao dentro das token accounts da carteira: saldo nao nulo
+ * e zero decimais. O filtro decide o que vale uma leitura de conta, entao errar
+ * para menos perde posicao e errar para mais gasta RPC a toa.
+ */
+export function collectPositionMintCandidates(accounts: unknown): string[] {
+  const value = (accounts as any)?.value;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const mints: string[] = [];
+  for (const acct of value) {
+    const info: any = acct?.account?.data?.parsed?.info;
+    const amount = String(info?.tokenAmount?.amount ?? "0");
+    const decimals = Number(info?.tokenAmount?.decimals ?? -1);
+    if (amount === "0" || decimals !== 0 || !info?.mint) {
+      continue;
+    }
+    mints.push(String(info.mint));
+  }
+  return mints;
+}
+
+/** Posicao encontrada na carteira, ainda sem preco (ticks crus). */
+type WalletPosition = {
+  positionMint: string;
+  tickLowerIndex: number;
+  tickUpperIndex: number;
+};
 /** Quantos intervalos de amostragem uma leitura salva continua valendo. */
 const POSITION_SNAPSHOT_AGE_INTERVALS = 4;
 const MIN_POSITION_SNAPSHOT_AGE_MS = 10 * 60_000;
@@ -238,6 +272,9 @@ export class PoolManager {
   private snapshotInFlight = false;
   private idleScanTimer: NodeJS.Timeout | null = null;
   private idleScanInFlight = false;
+  private idleScanSkipCycles = 0;
+  private walletPositions = new Map<string, WalletPosition>();
+  private walletPositionsAt: number | null = null;
   private lastSnapshotTick = new Map<string, string | null>();
   private lastPositionSnapshotCache = new Map<string, { at: number; value: StoredPosition | null }>();
   private kaminoScanInFlight = false;
@@ -388,12 +425,15 @@ export class PoolManager {
       const needsStored = !isPositiveNumber(status?.positionValueUsd);
       const stored = needsStored ? await this.getLastPositionSnapshot(entry.id) : null;
       const snapshot = stored?.point ?? null;
+      // Pool parada nunca varre a carteira sozinha; o mapa da varredura unica
+      // diz se esta whirlpool tem posicao aberta agora.
+      const onChain = status?.positionMint ? null : this.walletPositions.get(entry.whirlpoolAddress) ?? null;
       // "live" exige valor calculado num tick. Um mint sem valor veio da
       // varredura on-chain: a posicao e real, mas os numeros em USD nao sao
       // dela — vem da amostra salva, e o card avisa a hora dessa leitura.
       const positionDataSource: PositionDataSource | null = isPositiveNumber(status?.positionValueUsd)
         ? "live"
-        : status?.positionMint
+        : (status?.positionMint || onChain)
           ? "onchain"
           : snapshot
             ? "snapshot"
@@ -412,7 +452,7 @@ export class PoolManager {
         positionPnlUsd: status?.positionPnlUsd ?? snapshot?.posPnlUsd ?? null,
         positionValueSol: status?.positionValue ?? snapshot?.posValueSol ?? null,
         positionPnlSol: status?.positionPnl ?? snapshot?.posPnlSol ?? null,
-        positionMint: status?.positionMint ?? snapshot?.posMint ?? null,
+        positionMint: status?.positionMint ?? onChain?.positionMint ?? snapshot?.posMint ?? null,
         positionOpenedAt: status?.positionOpenedAt
           ?? (stored?.openedAt != null ? new Date(stored.openedAt).toISOString() : null),
         positionEntryUsd: status?.positionEntryUsd ?? snapshot?.posEntryUsd ?? null,
@@ -1021,13 +1061,13 @@ export class PoolManager {
    */
   /**
    * Pools paradas sao criadas com `skipWarmup`, entao nunca chegam a varrer a
-   * carteira e o bot ignora posicao que ja existe on-chain. Este loop faz essa
-   * varredura de tempos em tempos, so para quem nao esta rodando — quem roda ja
-   * descobre a posicao no proprio tick.
+   * carteira e o bot ignora posicao que ja existe on-chain.
    *
-   * Sequencial de proposito: cada varredura lista os token accounts da carteira
-   * e busca posicoes, e disparar isso para varias pools ao mesmo tempo rende
-   * rate limit no RPC.
+   * A varredura e uma so para todas as pools, e nao uma por pool: os NFTs de
+   * posicao estao todos na mesma carteira, e cada conta de posicao ja diz a
+   * qual whirlpool pertence. Uma versao anterior chamava o warmup pool a pool,
+   * o que multiplicava listagens da carteira, rendia 429 e — pior — roubava
+   * orcamento de RPC do tick das pools que estavam rodando.
    */
   private startIdlePositionScan(): void {
     if (this.idleScanTimer) {
@@ -1039,11 +1079,9 @@ export class PoolManager {
       return;
     }
     const intervalMs = Math.max(60_000, intervalSec * 1000);
-    // Uma passada logo apos subir, para a UI nao ficar vazia ate o primeiro
-    // disparo do intervalo.
-    setTimeout(() => void this.scanIdlePositions(), 5_000).unref?.();
+    setTimeout(() => void this.scanWalletPositions(), 10_000).unref?.();
     this.idleScanTimer = setInterval(() => {
-      void this.scanIdlePositions();
+      void this.scanWalletPositions();
     }, intervalMs);
     this.idleScanTimer.unref?.();
   }
@@ -1055,22 +1093,88 @@ export class PoolManager {
     }
   }
 
-  private async scanIdlePositions(): Promise<void> {
+  /**
+   * Mapa whirlpool -> posicao aberta da carteira. Custa uma listagem de token
+   * accounts mais uma leitura em lote das contas de posicao, independente de
+   * quantas pools existam.
+   */
+  private async scanWalletPositions(): Promise<void> {
     if (this.idleScanInFlight) {
+      return;
+    }
+    // O tick das pools ativas tem prioridade sobre esta varredura: depois de um
+    // 429 ela pula ciclos em vez de insistir e piorar a fila do RPC.
+    if (this.idleScanSkipCycles > 0) {
+      this.idleScanSkipCycles -= 1;
       return;
     }
     this.idleScanInFlight = true;
     try {
-      for (const [poolId, record] of this.pools) {
-        const status = record.runner.getStatus();
-        if (status?.running) {
+      const found = new Map<string, WalletPosition>();
+      const programId = whirlpoolsSdk.ORCA_WHIRLPOOL_PROGRAM_ID ?? (whirlpoolsSdk as any).WHIRLPOOL_PROGRAM_ID;
+      const accounts = await this.connection.getParsedTokenAccountsByOwner(
+        this.wallet.publicKey,
+        { programId: TOKEN_PROGRAM_ID }
+      );
+
+      const candidates: PublicKey[] = [];
+      const mintByPda = new Map<string, string>();
+      for (const mint of collectPositionMintCandidates(accounts)) {
+        try {
+          const pda = whirlpoolsSdk.PDAUtil.getPosition(programId, new PublicKey(mint));
+          const address: PublicKey = (pda as any).publicKey ?? pda;
+          candidates.push(address);
+          mintByPda.set(address.toBase58(), mint);
+        } catch {
           continue;
         }
-        try {
-          await record.runner.refreshExistingPositionNow();
-        } catch (err) {
-          logger.warn({ err, poolId }, "idle position scan failed");
-        }
+      }
+
+      for (let i = 0; i < candidates.length; i += WALLET_POSITION_BATCH) {
+        const chunk = candidates.slice(i, i + WALLET_POSITION_BATCH);
+        const infos = await this.connection.getMultipleAccountsInfo(chunk);
+        infos.forEach((accountInfo: any, index: number) => {
+          if (!accountInfo) {
+            return;
+          }
+          const address = chunk[index];
+          let data: any = null;
+          try {
+            data = whirlpoolsSdk.ParsablePosition.parse(address, accountInfo as any);
+          } catch {
+            return;
+          }
+          if (!data?.whirlpool) {
+            return;
+          }
+          // Posicao sem liquidez e conta orfa esperando fechamento, nao posicao.
+          if (data.liquidity && typeof data.liquidity.isZero === "function" && data.liquidity.isZero()) {
+            return;
+          }
+          const mint = mintByPda.get(address.toBase58()) ?? null;
+          if (!mint) {
+            return;
+          }
+          found.set(new PublicKey(data.whirlpool).toBase58(), {
+            positionMint: mint,
+            tickLowerIndex: Number(data.tickLowerIndex),
+            tickUpperIndex: Number(data.tickUpperIndex)
+          });
+        });
+      }
+
+      this.walletPositions = found;
+      this.walletPositionsAt = Date.now();
+      this.idleScanSkipCycles = 0;
+    } catch (err) {
+      if (isRateLimitError(err)) {
+        this.idleScanSkipCycles = IDLE_SCAN_SKIP_AFTER_RATE_LIMIT;
+        logger.warn(
+          { skipCycles: this.idleScanSkipCycles },
+          "wallet position scan hit rate limit; backing off"
+        );
+      } else {
+        logger.warn({ err }, "wallet position scan failed");
       }
     } finally {
       this.idleScanInFlight = false;

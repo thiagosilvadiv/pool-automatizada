@@ -859,19 +859,6 @@ export class OrcaBot {
     return this.getStatus();
   }
 
-  /**
-   * Descobre a posicao que a carteira ja tem nesta whirlpool, sem rodar um tick.
-   *
-   * E o mesmo par que `create()` executa quando nao ha `skipWarmup`; pools que
-   * nunca foram iniciadas sao criadas com skipWarmup, entao sem isto o bot nao
-   * sabe que existe posicao aberta on-chain.
-   */
-  async refreshExistingPositionNow(): Promise<BotStatus> {
-    await this.refreshPoolState();
-    await this.loadExistingPosition();
-    return this.getStatus();
-  }
-
   async tick(): Promise<BotStatus> {
     this.lastStatus.running = true;
     this.lastStatus.eventPositionMint = null;

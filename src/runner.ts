@@ -323,23 +323,6 @@ export class BotRunner {
     }
   }
 
-  /** Varredura on-chain para pool parada; nao roda se o bot estiver ocupado. */
-  async refreshExistingPositionNow(): Promise<RunnerStatus> {
-    if (this.inFlight) {
-      return this.getStatus();
-    }
-    this.inFlight = true;
-    try {
-      await this.bot.refreshExistingPositionNow();
-      return this.getStatus();
-    } catch (err) {
-      logger.warn({ err }, "refresh existing position failed");
-      return this.getStatus();
-    } finally {
-      this.inFlight = false;
-    }
-  }
-
   async rebalancePositionNow(): Promise<RunnerStatus> {
     if (this.inFlight) {
       this.pendingManualRebalance = true;
