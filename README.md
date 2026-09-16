@@ -25,6 +25,8 @@ usado para evitar a realização de perdas em um rebalanceamento.
 - [Como funciona a pool](#como-funciona-a-pool)
 - [Range assimétrico por valor](#range-assimétrico-por-valor)
 - [O ciclo Kamino](#o-ciclo-kamino)
+- [Histórico contínuo (snapshots)](#histórico-contínuo-snapshots)
+- [Preço SOL/USD com múltiplas fontes](#preço-solusd-com-múltiplas-fontes)
 - [Interface web](#interface-web)
 - [Instalação](#instalação)
 - [Configuração](#configuração)
@@ -83,7 +85,8 @@ Módulos envolvidos:
 | `src/orca.ts` | Toda a interação com o Whirlpool: abrir, fechar, swap, ciclo Kamino |
 | `src/strategy.ts` | Cálculo da faixa e da preferência de saída |
 | `src/balance-coordinator.ts` | Reserva de saldo por pool para elas não competirem pela carteira |
-| `src/pyth.ts` | Preço SOL/USD via Pyth Hermes |
+| `src/pyth.ts` / `src/price-oracle.ts` | Preço SOL/USD via Pyth Hermes, com fontes alternativas |
+| `src/snapshots.ts` | Série temporal por pool, que alimenta os gráficos |
 | `src/trend.ts` | Sinal de tendência via GeckoTerminal (opcional) |
 | `src/hedge.ts` / `src/bybit.ts` | Hedge da posição em perpétuo na Bybit (opcional) |
 | `src/storage.ts` / `src/redis.ts` | Persistência de pools e histórico (arquivo ou Redis) |
@@ -150,14 +153,57 @@ on-chain do market.
 > levar à **liquidação** pelo Kamino — que realiza uma perda maior do que a que se queria evitar.
 > O `kaminoMaxLtv` conservador reduz essa chance, mas não a elimina.
 
+## Histórico contínuo (snapshots)
+
+Além dos eventos (abertura, fechamento, rebalanceamento), o bot grava uma **amostra periódica**
+do estado de cada pool em execução: valor da posição, PnL, taxas acumuladas, preço, faixa e LTV do
+Kamino (`src/snapshots.ts`). É isso que alimenta os gráficos de evolução no tempo da página de
+Análises — eventos isolados não desenham uma curva contínua.
+
+As amostras vêm do estado que o runner já tem em memória, então não geram chamada on-chain
+adicional. Ficam em `data/snapshots-<poolId>.json` ou no Redis, quando `REDIS_URL` estiver
+definido. Endpoint: `GET /api/snapshots/<poolId>?from=&to=&bucket=`, com `bucket` em `raw`, `5m`,
+`15m`, `1h` ou `1d`.
+
+| Variável | Padrão | O que faz |
+|---|---|---|
+| `SNAPSHOT_ENABLED` | `true` | Liga a amostragem |
+| `SNAPSHOT_INTERVAL_SEC` | `300` | Intervalo entre amostras (mínimo 30) |
+| `SNAPSHOT_MAX_POINTS` | `2880` | Pontos por pool (~10 dias a cada 5 min) |
+| `SNAPSHOT_DOWNSAMPLE_ENABLED` | `true` | Ao estourar o limite, rareia o trecho antigo em vez de descartar |
+| `SNAPSHOT_FLUSH_DEBOUNCE_MS` | `0` | Agrupa gravações em disco |
+| `IDLE_POSITION_SCAN_INTERVAL_SEC` | `180` | Varredura on-chain da carteira para o painel de posições abertas enxergar posição de pool parada (`0` desliga) |
+
+> **Atenção:** em deploy com container, `data/` precisa ser um **volume persistente**. Sem isso as
+> amostras somem a cada redeploy e os gráficos aparecem vazios.
+
+## Preço SOL/USD com múltiplas fontes
+
+O preço não depende de um provedor só: `src/price-oracle.ts` consulta as fontes em ordem de
+preferência e descarta leitura fora da faixa de sanidade, para que uma API fora do ar (ou um preço
+absurdo) não pare o bot nem dimensione uma posição errada. Uma fonte que falha 3 vezes seguidas
+fica de molho por um tempo.
+
+| Variável | Padrão | O que faz |
+|---|---|---|
+| `SOL_PRICE_SOURCES` | `pyth,jupiter,geckoterminal` | Fontes em ordem de preferência (`geckoterminal` e `onchain` não exigem chave) |
+| `SOL_USDC_WHIRLPOOL` | — | Endereço de um Whirlpool SOL/USDC; habilita a fonte `onchain` |
+| `SOL_PRICE_MIN_USD` / `SOL_PRICE_MAX_USD` | `1` / `10000` | Faixa de sanidade |
+| `SOL_PRICE_MAX_DEVIATION_PCT` | `25` | Desvio máximo aceito entre leituras |
+| `PRICE_SOURCE_COOLDOWN_SEC` | `300` | Quarentena da fonte após 3 falhas |
+| `PYTH_HERMES_URL` | `https://hermes.pyth.network` | Endpoint da Pyth (o público pode responder 401 sem chave) |
+| `PYTH_HERMES_API_KEY` | — | Chave da Hermes, se você tiver uma |
+| `PYTH_FALLBACK_MAX_AGE_SEC` | `0` | Reaproveita o último preço bom por N segundos se a Hermes falhar |
+
 ## Interface web
 
 `npm run start:ui` sobe um painel em `http://localhost:3000` (`src/server.ts`, arquivos em
 `public/`):
 
-- **`index.html`** — status das pools, faixa atual, saldos, start/stop, fechar, rebalancear,
-  adicionar liquidez, ações do Kamino e log do ciclo.
-- **`analytics.html`** — histórico e métricas de PnL (`public/analytics-metrics.js`).
+- **`index.html`** — status das pools, painel de posições abertas, faixa atual, saldos,
+  start/stop, fechar, rebalancear, adicionar liquidez, ações do Kamino e log do ciclo.
+- **`analytics.html`** — histórico, métricas de PnL (`public/analytics-metrics.js`) e gráficos de
+  evolução no tempo, desenhados com uPlot (`public/charts.js`, `public/vendor/uplot/`).
 - **`kamino-markets.html`** — cadastro dos markets do Kamino usados pelo bot.
 - **`allowlist.html`** — lista de mints permitidos em swaps (lista vazia = tudo permitido).
 
@@ -249,7 +295,7 @@ ambiente individuais — veja `.env.example` e `config.example.json`. Validaçã
 ## Testes
 
 ```bash
-npm test          # vitest, 24 suítes
+npm test          # vitest, 30 suítes
 npm run build     # typecheck + build
 ```
 
