@@ -25,3 +25,17 @@ coverage/
 .DS_Store
 Thumbs.db
 
+
+# config local (pode conter chave de RPC)
+config.json
+config.*.json
+!config.example.json
+
+# segredos / keypairs
+*.key
+*.pem
+id.json
+keypair*.json
+
+# scratch
+tmp.txt

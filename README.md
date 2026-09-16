@@ -1,152 +1,286 @@
-﻿# Orca Liquidity Bot (MVP)
+# Pool Automatizada
 
-> Teste rápido de edição para validar desfazer/reverter.
+Bot de **liquidez concentrada** para [Orca Whirlpools](https://www.orca.so/) na Solana, com
+re-range automático, painel web de controle e um ciclo opcional de **empréstimo no Kamino Lend**
+usado para evitar a realização de perdas em um rebalanceamento.
 
-Bot de liquidez concentrada para Orca Whirlpools na Solana, com re-range automático quando o preço sai da faixa.
+> ⚠️ **AVISO DE RISCO — LEIA ANTES DE USAR**
+>
+> Este é um software **experimental**, em desenvolvimento contínuo, que movimenta fundos reais
+> na blockchain de forma automática. Ele pode abrir e fechar posições, fazer swaps, tomar
+> empréstimos e pagar dívidas **sem confirmação humana**.
+>
+> Você pode perder **todo o capital aplicado** — por impermanent loss, slippage, falha de RPC,
+> bug no código, mudança de API dos SDKs ou **liquidação da sua posição no Kamino**.
+>
+> Não há garantia de nenhum tipo. Não é conselho financeiro. Use por sua conta e risco,
+> preferencialmente com uma carteira dedicada e um valor que você aceita perder por inteiro.
+> Comece sempre com `dryRun: true`.
 
-## Requisitos
+---
 
-- Node.js 18+
-- RPC endpoint dedicado
-- Carteira com SOL para taxas
+## Índice
 
-## Setup
+- [Para que serve](#para-que-serve)
+- [Como funciona a pool](#como-funciona-a-pool)
+- [Range assimétrico por valor](#range-assimétrico-por-valor)
+- [O ciclo Kamino](#o-ciclo-kamino)
+- [Interface web](#interface-web)
+- [Instalação](#instalação)
+- [Configuração](#configuração)
+- [Segurança operacional](#segurança-operacional)
+- [Testes](#testes)
+- [Estado do projeto e limitações](#estado-do-projeto-e-limitações)
+- [Licença](#licença)
 
-1. Instale dependências:
+---
+
+## Para que serve
+
+Em uma pool de liquidez concentrada, você só ganha taxas enquanto o preço do par estiver **dentro
+da faixa** que você escolheu. Quando o preço sai da faixa, a posição para de render e fica 100%
+convertida no token do lado "perdedor". Manter isso manualmente exige acompanhar o preço o dia
+inteiro e refazer a posição toda vez.
+
+Este bot automatiza esse trabalho:
+
+1. **Mantém o capital sempre dentro da faixa produtiva** — detecta a saída da faixa, fecha a
+   posição, reequilibra os tokens e reabre em torno do preço atual.
+2. **Escolhe a faixa de forma assimétrica** para que o prejuízo na saída seja igual (ou menor)
+   que o lucro no lado oposto, no token que você escolheu como referência.
+3. **Evita realizar a perda quando o rebalanceamento sai negativo** — em vez de vender o token
+   desvalorizado, deposita ele como colateral no Kamino, toma emprestado um stable e continua
+   operando, desfazendo o empréstimo quando o preço volta ao seu preço médio.
+4. **Opera várias pools ao mesmo tempo**, coordenando o saldo da carteira entre elas.
+
+## Como funciona a pool
+
+O laço principal é `BotRunner.tickOnce()` em `src/runner.ts`, executado a cada `pollIntervalMs`
+(padrão 30s):
+
+```
+tick
+ ├─ lê preço on-chain do Whirlpool (src/orca.ts) + preço SOL/USD da Pyth (src/pyth.ts)
+ ├─ calcula a faixa alvo (src/strategy.ts → calculateRange)
+ ├─ posição dentro da faixa?
+ │    sim → registra estado, coleta taxas, segue
+ │    não → conta o tempo fora (outOfRangeConfirmSec)
+ │            └─ confirmado e fora do cooldown (rebalanceCooldownSec)?
+ │                 ├─ fecha a posição
+ │                 ├─ PnL do fechamento foi negativo e Kamino está ligado?
+ │                 │     sim → inicia o ciclo Kamino (ver abaixo)
+ │                 │     não → swap do excedente e reabre na nova faixa
+ │                 └─ grava o evento no histórico (src/storage.ts)
+ └─ opcional: auto-add de liquidez, hedge na Bybit, leitura de tendência
+```
+
+Módulos envolvidos:
+
+| Módulo | Responsabilidade |
+|---|---|
+| `src/runner.ts` | Laço de uma pool: tick, rebalance, histórico, ações manuais |
+| `src/pool-manager.ts` | Orquestra várias pools, seleção, start/stop, estado agregado |
+| `src/orca.ts` | Toda a interação com o Whirlpool: abrir, fechar, swap, ciclo Kamino |
+| `src/strategy.ts` | Cálculo da faixa e da preferência de saída |
+| `src/balance-coordinator.ts` | Reserva de saldo por pool para elas não competirem pela carteira |
+| `src/pyth.ts` | Preço SOL/USD via Pyth Hermes |
+| `src/trend.ts` | Sinal de tendência via GeckoTerminal (opcional) |
+| `src/hedge.ts` / `src/bybit.ts` | Hedge da posição em perpétuo na Bybit (opcional) |
+| `src/storage.ts` / `src/redis.ts` | Persistência de pools e histórico (arquivo ou Redis) |
+| `src/server.ts` | API HTTP e painel web |
+
+## Range assimétrico por valor
+
+Numa faixa simétrica (`±1%`), sair por baixo e sair por cima **não** dão o mesmo resultado
+medido em um dos tokens. O bot corrige isso: você escolhe o token de referência
+(`preferredExitToken`) e a direção preferida de saída (`preferredExitDirection`), o lado preferido
+é fixado por `rangeWidthPct` e o lado oposto é resolvido por bisseção até que a magnitude do PnL
+se iguale.
+
+O `rangeExitBiasPct` reduz **apenas o lado negativo**: com `RANGE_EXIT_BIAS_PCT=10`, a perda fica
+~10% menor que o ganho equivalente.
+
+A derivação completa está em [`docs/estrategia-range-assimetrico.txt`](docs/estrategia-range-assimetrico.txt);
+a implementação em `src/strategy.ts` e o alinhamento ao tick spacing da Orca em `src/tick-range.ts`.
+
+## O ciclo Kamino
+
+Esta é a parte central e a mais delicada do sistema. Ela existe para responder a uma pergunta:
+**o que fazer quando o rebalanceamento fecharia a posição no prejuízo?**
+
+Sem o ciclo, o bot venderia o token desvalorizado e realizaria a perda. Com o ciclo ligado
+(`kaminoRebalanceEnabled`), quando o PnL do fechamento (sem taxas) é negativo
+(`shouldUseKaminoAfterClose` em `src/kamino-close-policy.ts`), acontece o seguinte:
+
+1. **Depósito de colateral** — o token que ficou em mãos é depositado no Kamino em vez de
+   vendido. Qual token vai como colateral depende de `kaminoCollateralMode`:
+   `exit` (o token da saída), `max-value` (o de maior valor em USD), `tokenA`, `tokenB`
+   ou `both` (os dois).
+2. **Empréstimo** — o bot toma emprestado `kaminoBorrowAsset` (padrão USDC) respeitando
+   `kaminoMaxLtv` (padrão `0.4`, ou seja 40% do valor do colateral) — bem abaixo do limite de
+   liquidação, para dar folga a quedas de preço.
+3. **Volta para a pool** — o valor emprestado é reaplicado na pool, que continua gerando taxas
+   enquanto a perda **não foi realizada**.
+4. **Monitoramento** — `src/kamino-health.ts` acompanha o LTV e a saúde da obrigação a cada
+   `kaminoScanIntervalSec`.
+5. **Fechamento** — o ciclo só fecha quando o preço do colateral atinge o alvo, conforme
+   `kaminoCloseRule`:
+   - `avg-price`: alvo = preço-alvo calculado a partir do preço médio de entrada acumulado
+     (`kaminoAvgMode`, `kaminoAvgPriceBasis`);
+   - `breakeven`: alvo = o próprio preço médio do colateral;
+   - `manual`: só fecha por comando seu no painel.
+   Cada colateral é avaliado individualmente; se só parte atingiu o alvo, o bot faz fechamento
+   parcial. Há uma salvaguarda que **bloqueia** o fechamento se o alvo calculado ficar abaixo de
+   60% do preço atual nos primeiros 5 minutos do ciclo — sintoma de preço médio mal calculado.
+6. **Repagamento** — a dívida é paga em pedaços, com tamanho calculado por risco
+   (`computeRiskAwareRepayChunk` em `src/kamino-math.ts`), com repay direto ou usando o próprio
+   colateral (`repayWithCollateral`, `src/kamino-split-repay.ts`), com retentativas
+   (`kaminoRepayRetrySec`, `kaminoRepayMaxAttempts`).
+7. **Se faltar saldo para quitar** — o bot **não** força a operação: registra o estado e envia um
+   alerta por WhatsApp via Evolution API (`src/evolution-notify.ts`) dizendo exatamente quanto
+   falta e para qual carteira enviar. Assim que o saldo aparece, ele conclui sozinho. Se o repay
+   falhar por mais de 2 horas, o ciclo é marcado como **preso** e pede intervenção manual.
+
+Proteções adicionais: `kaminoGracePeriodSec` impede fechar o ciclo logo após reabrir a pool
+(evita loop de abre/fecha); `src/kamino-lock.ts` garante que só uma pool mexe no Kamino por vez;
+e ciclos existentes na blockchain sem histórico local são **reconstruídos** a partir do estado
+on-chain do market.
+
+> ⚠️ **Risco específico**: enquanto o empréstimo está aberto, uma queda forte do colateral pode
+> levar à **liquidação** pelo Kamino — que realiza uma perda maior do que a que se queria evitar.
+> O `kaminoMaxLtv` conservador reduz essa chance, mas não a elimina.
+
+## Interface web
+
+`npm run start:ui` sobe um painel em `http://localhost:3000` (`src/server.ts`, arquivos em
+`public/`):
+
+- **`index.html`** — status das pools, faixa atual, saldos, start/stop, fechar, rebalancear,
+  adicionar liquidez, ações do Kamino e log do ciclo.
+- **`analytics.html`** — histórico e métricas de PnL (`public/analytics-metrics.js`).
+- **`kamino-markets.html`** — cadastro dos markets do Kamino usados pelo bot.
+- **`allowlist.html`** — lista de mints permitidos em swaps (lista vazia = tudo permitido).
+
+A API expõe cerca de 40 rotas sob `/api/*` (pools, status, histórico, Kamino, swaps, config).
+
+## Instalação
+
+Requisitos: **Node.js 18+**, um **RPC dedicado** (RPC público não aguenta o ritmo do bot) e uma
+carteira Solana com SOL para taxas.
 
 ```bash
 npm install
+cp .env.example .env      # preencha os segredos
+cp config.example.json config.json
+npm run dev -- --config config.json --ui     # desenvolvimento
 ```
 
-2. Crie seu arquivo de configuração:
-
-```bash
-copy config.example.json config.json
-```
-
-3. Configure segredos:
-
-```bash
-copy .env.example .env
-```
-
-Preencha `WALLET_PRIVATE_KEY` (base58 ou JSON array) ou `WALLET_KEYPAIR_PATH`.
-
-## Rodar (dry-run)
-
-```bash
-npm run dev -- --config config.json
-```
-
-Para rodar em produção:
+Produção:
 
 ```bash
 npm run build
 npm run start -- --config config.json
 ```
 
-## Interface Web (opcional)
-
-Para usar a interface web local:
+Docker (o `Dockerfile` é um build multi-stage pronto para Easypanel):
 
 ```bash
-npm run dev -- --config config.json --ui
+docker build -t pool-automatizada .
+docker run -p 3000:3000 --env-file .env pool-automatizada
 ```
 
-Abra `http://localhost:3000` no navegador.
+## Configuração
 
-### Autenticação da UI (opcional)
+A configuração pode vir de um `config.json`, de `CONFIG_JSON`/`CONFIG_PATH`, ou de variáveis de
+ambiente individuais — veja `.env.example` e `config.example.json`. Validação e defaults ficam em
+`src/config.ts`.
 
-Defina `UI_USER` e `UI_PASS` para proteger a interface com HTTP Basic Auth.
-Quando ambos estiverem definidos, o navegador pedirá usuário e senha antes de carregar a UI.
+**Carteira** (escolha uma): `WALLET_PRIVATE_KEY` (base58 ou array JSON) **ou**
+`WALLET_KEYPAIR_PATH` (arquivo montado no container).
 
-Exemplo:
+**Principais parâmetros da pool**
+
+| Campo | O que faz |
+|---|---|
+| `rpcUrl` / `network` | Endpoint RPC e rede (`mainnet-beta`) |
+| `whirlpoolAddress` | Whirlpool alvo |
+| `rangeWidthPct` | Largura da faixa (`1` = ±1%) |
+| `rangeExitBiasPct` | Reduz só o PnL negativo, em % |
+| `preferredExitToken` / `preferredExitDirection` | Token de referência e lado preferido da saída |
+| `slippageBps` | Slippage máximo (`50` = 0,50%) |
+| `pollIntervalMs` | Intervalo do tick |
+| `outOfRangeConfirmSec` | Tempo fora da faixa antes de rebalancear |
+| `rebalanceCooldownSec` | Intervalo mínimo entre rebalanceamentos |
+| `budgetUsd` | Teto de capital alocado na posição |
+| `minSolBalance` | SOL reservado para taxas |
+| `dryRun` | Simula sem enviar transações |
+
+**Principais parâmetros do Kamino**
+
+| Campo | O que faz |
+|---|---|
+| `kaminoRebalanceEnabled` | Liga o ciclo de empréstimo |
+| `kaminoBorrowAsset` | Ativo tomado emprestado (padrão `usdc`) |
+| `kaminoMaxLtv` | LTV máximo (padrão `0.4`) |
+| `kaminoCollateralMode` | `exit`, `max-value`, `tokenA`, `tokenB`, `both` |
+| `kaminoCloseRule` | `avg-price`, `breakeven`, `manual` |
+| `kaminoAvgMode` / `kaminoAvgPriceBasis` | Como o preço médio é acumulado |
+| `kaminoScanIntervalSec` | Intervalo das leituras on-chain |
+| `kaminoGracePeriodSec` | Carência antes de permitir fechar o ciclo |
+| `kaminoRepayRetrySec` / `kaminoRepayMaxAttempts` | Política de retentativa do repay |
+
+**Integrações opcionais**: `REDIS_URL` (persistência entre reinícios), `PYTH_SOL_USD_FEED_ID`,
+`JUPITER_API_KEY`, `HEDGE_ENABLED` + `BYBIT_API_KEY`/`BYBIT_API_SECRET`, `trendEnabled`
+(GeckoTerminal), e as variáveis da Evolution API para alertas no WhatsApp.
+
+## Segurança operacional
+
+- **Sempre defina `UI_USER` e `UI_PASS`.** Sem essas duas variáveis o Basic Auth **fica
+  desligado** (`src/server.ts`) e qualquer pessoa que alcance a porta 3000 pode fechar posições,
+  mexer no empréstimo e disparar swaps na sua carteira.
+- **Não exponha a porta 3000 na internet aberta.** Use rede privada, VPN ou um proxy com TLS.
+- **Nunca commite `config.json` nem `.env`** — o `rpcUrl` normalmente carrega a chave do seu RPC.
+  Ambos já estão no `.gitignore`.
+- **Use uma carteira dedicada**, só com o capital da operação. A chave privada fica em memória no
+  processo e assina transações sem confirmação.
+- `data/` guarda histórico real das suas posições (incluindo o mint da posição, que é rastreável
+  na blockchain). Está no `.gitignore` — mantenha assim.
+
+## Testes
 
 ```bash
-UI_USER=admin UI_PASS=secret npm run dev -- --config config.json --ui
+npm test          # vitest, 24 suítes
+npm run build     # typecheck + build
 ```
 
-### Configuração via ENV (opcional)
+Os testes cobrem a matemática da estratégia, faixas, políticas do Kamino (fechamento, reabertura,
+repay parcial, capacidade, saúde), auto-add, seleção de chunks, analytics e a API de pools.
 
-Você pode rodar sem `config.json` usando variáveis de ambiente:
+## Estado do projeto e limitações
 
-- `CONFIG_JSON`: JSON completo do config
-- `CONFIG_PATH`: caminho para um arquivo de config dentro do container
-- ou variáveis individuais (ex.: `RPC_URL`, `WHIRLPOOL_ADDRESS`, `RANGE_WIDTH_PCT`, etc.)
+Projeto em evolução, escrito e ajustado em cima da operação real. O que você precisa saber antes
+de usar ou contribuir:
 
-Exemplo (com JSON):
+- **Isto sempre precisa de ajuste.** Não existe configuração universal: `rangeWidthPct`,
+  `rangeExitBiasPct`, `kaminoMaxLtv` e os intervalos precisam ser calibrados por par de tokens e
+  por regime de mercado. Uma configuração que funciona num mercado lateral pode ser péssima numa
+  tendência forte.
+- **`src/orca.ts` tem ~11 mil linhas** e concentra pool + Kamino + swaps. A extração dos módulos
+  `kamino-*.ts` (`math`, `health`, `close-policy`, `reopen-policy`, `split-repay`, `utils`) já
+  começou esse trabalho, e ele deve continuar.
+- **Hedge na Bybit e sinal de tendência (GeckoTerminal) são experimentais** e ficam desligados por
+  padrão.
+- **Os testes não cobrem o caminho de transação real** — eles validam a lógica de decisão, não o
+  envio on-chain. Valide mudanças com `dryRun: true` antes de operar com valor.
+- **Dependência de SDKs de terceiros** (Orca, Kamino, Jupiter): mudanças de API quebram fluxos;
+  ajustes costumam cair em `src/orca.ts` e `src/kamino-client.ts`.
+- **Sem controle de acesso por usuário** — o Basic Auth é único e global.
+- Parte dos comentários e mensagens está em português, parte em inglês; a padronização está
+  pendente.
 
-```bash
-CONFIG_JSON='{"network":"mainnet-beta","rpcUrl":"https://...","whirlpoolAddress":"...","rangeWidthPct":1,"slippageBps":50,"pollIntervalMs":30000}'
-npm run dev -- --ui
-```
+Sugestões e issues são bem-vindas. Se for reportar um comportamento estranho, inclua a
+configuração usada (**sem segredos**) e o trecho relevante do log do ciclo.
 
-### Persistência com Redis (opcional)
+## Licença
 
-Para não perder pools e histórico após reiniciar o container, defina `REDIS_URL`.
-O bot usa Redis para armazenar:
-
-- lista de pools cadastradas
-- pool selecionada
-- histórico por pool
-
-Exemplo:
-
-```bash
-REDIS_URL=redis://:SENHA@host:6379
-REDIS_PREFIX=orca-bot
-```
-
-## Observações importantes
-
-- O bot depende do SDK oficial da Orca (`@orca-so/whirlpools-sdk`). Caso a API do SDK tenha diferenças na sua versão, ajuste as funções em `src/orca.ts`.
-- O campo `whirlpoolAddress` deve apontar para o Whirlpool WETH/SOL correto.
-- Use `dryRun: true` para validar fluxo sem enviar transações.
-
-## Campos de configuração
-
-- `network`: rede Solana (`mainnet-beta` recomendado)
-- `rpcUrl`: endpoint RPC
-- `whirlpoolAddress`: endereço do Whirlpool
-- `rangeWidthPct`: largura da faixa (ex.: `1.0` = ±1%)
-- `rangeExitBiasPct`: reduz o PnL negativo em % no **token escolhido** (ex.: `10` = perda 10% menor)
-- `preferredExitToken`: token preferido para saída (`tokenA`, `tokenB` ou `null`)
-- `preferredExitDirection`: direção para priorizar a saída do token escolhido (`down` padrão legado, ou `up`)
-- `slippageBps`: slippage máximo em bps (ex.: `50` = 0,50%)
-- `pollIntervalMs`: intervalo de verificação
-- `outOfRangeConfirmSec`: tempo (segundos) que o preço deve ficar fora da faixa antes de re-range
-- `rebalanceCooldownSec`: tempo (segundos) mínimo entre rebalances
-- `dryRun`: não envia transações
-- `minSolBalance`: SOL mínimo para taxas
-- `maxTokenA`/`maxTokenB`: limites de aporte em unidades humanas (ou `null`)
-- `rebalanceSwapPct`: fração do excesso a swapar quando falta um dos tokens (1.0 = ajuste completo)
-- `positionMint`: se você já tem uma posição criada, pode informar o mint aqui para pular a varredura
-- `budgetUsd`: orçamento em USD para limitar o valor alocado na posição (ou `null`)
-- `KAMINO_SCAN_INTERVAL_SEC`: intervalo das leituras on-chain do Kamino (padrao: 300 segundos)
-- `KAMINO_USE_WALLET_BALANCE_ON_REOPEN`: inclui o saldo livre da wallet ao reabrir a pool; respeita `budgetUsd`, reservas de outras pools e o SOL minimo (padrao: `true`)
-- `pythSolUsdFeedId`: feed ID hex da Pyth (ex.: `0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d`)
-- `priceStaleMaxSec`: idade máxima (segundos) para o preço da Pyth
-- `trendEnabled`: ativa leitura de tendência via GeckoTerminal (true/false)
-- `trendTimeframe`: timeframe do indicador (`1m`, `5m`, `30m`, `1h`)
-- `trendTargetUp`: alvo quando tendência é alta (`sol`, `other`, `tokenA`, `tokenB`)
-- `trendTargetDown`: alvo quando tendência é baixa (`sol`, `other`, `tokenA`, `tokenB`)
-- `trendFallback`: o que fazer se tendência estiver ausente/velha (`manual`, `neutral`, `last`)
-- `trendStaleSec`: idade máxima (segundos) para considerar o sinal válido
-- `trendNetworkId`: id da rede no GeckoTerminal (ex.: `solana`)
-- `BYBIT_API_KEY` / `BYBIT_API_SECRET`: credenciais da Bybit (necessário quando hedge estiver ativo)
-- `BYBIT_BASE_URL`: URL base da API Bybit (padrão `https://api.bybit.com`)
-- `BYBIT_RECV_WINDOW`: janela de recepção em ms (padrão 5000)
-- `HEDGE_ENABLED`: ativa proteção por pool (true/false)
-- `HEDGE_PCT`: porcentagem de proteção sobre o valor da posição (0-100)
-- `HEDGE_MARGIN_PCT`: porcentagem extra para adicionar como margem na Bybit (0-100)
-- `HEDGE_SYMBOL`: símbolo Bybit do hedge (ex.: `SOLUSDT`)
-- `HEDGE_LEVERAGE`: alavancagem da proteção (>=1)
-
-Exemplo de faixa assimétrica por valor:
-
-- `RANGE_WIDTH_PCT=1` e `RANGE_EXIT_BIAS_PCT=10` ? o PnL negativo (no token escolhido) fica ~10% menor que o positivo.
-- `preferredExitDirection=down` (legado): `preferredExitToken=tokenA` usa lado inferior; `preferredExitToken=tokenB` usa lado superior.
-- `preferredExitDirection=up`: inverte o lado para acumular o token escolhido na alta.
-
-
-
+[MIT](LICENSE).
